@@ -32,9 +32,12 @@ script's.
 
 from __future__ import annotations
 
+import queue
 import re
 import shlex
 import subprocess
+import threading
+import time
 from collections.abc import Callable, Sequence
 
 from .pins import (
@@ -52,8 +55,10 @@ __all__ = [
     "ENV_INSTALL_TIMEOUT_S",
     "ENV_STEP_MARKER_PREFIX",
     "EnvSupplyError",
+    "INSTALL_TIMEOUT_EXIT",
     "UV_NOT_FOUND_EXIT",
     "build_env_install_script",
+    "default_install_runner",
     "env_step_line",
     "manual_env_commands",
     "parse_env_step",
@@ -205,21 +210,25 @@ def manual_env_commands(
     """The by-hand equivalent of the install, for the error card.
 
     Mirrors the remote plane's disclosure: plain commands a person can
-    paste, mirrors inlined where the script would inject them, uv
-    assumed present (its absence is the thing being disclosed around).
+    paste **and run as pasted** — the mirrors ride as ``VAR=value``
+    prefixes exactly where the script injects them (review m5), not as
+    comments someone has to reconstruct, and uv is assumed present (its
+    absence is the thing being disclosed around).
     """
     packages = " ".join(KERNEL_BASE_PACKAGES + CORE_STACK_PACKAGES)
     pip = f"{env_dir}/bin/python"
+    mirror_prefix = (
+        f"UV_PYTHON_INSTALL_MIRROR={shlex.quote(uv_python_mirror)} "
+        if uv_python_mirror
+        else ""
+    )
+    index_prefix = (
+        f"UV_INDEX_URL={shlex.quote(uv_index_url)} " if uv_index_url else ""
+    )
     commands = [
-        f"uv python install {python_version}"
-        + (
-            f"   # with UV_PYTHON_INSTALL_MIRROR={uv_python_mirror}"
-            if uv_python_mirror
-            else ""
-        ),
+        f"{mirror_prefix}uv python install {python_version}",
         f"uv venv {env_dir} --python {python_version}",
-        f"uv pip install --python {pip} {packages}"
-        + (f"   # with UV_INDEX_URL={uv_index_url}" if uv_index_url else ""),
+        f"{index_prefix}uv pip install --python {pip} {packages}",
         f"{pip} -c 'import ipykernel'",
     ]
     return tuple(commands)
@@ -234,6 +243,11 @@ each output line to *on_line* as it arrives (from a worker thread), and
 answers the exit code. Injectable so tests and the App-side driver
 alike never need a real shell."""
 
+INSTALL_TIMEOUT_EXIT = 124
+"""The exit code answered when the install exceeds its deadline —
+GNU ``timeout(1)``'s convention, so an operator reading "exit 124"
+already knows what it means."""
+
 
 def default_install_runner(
     argv: Sequence[str],
@@ -245,8 +259,14 @@ def default_install_runner(
 
     stdout and stderr share one pipe on purpose: uv's useful progress
     goes to stderr, and a caller streaming phases wants both in order.
-    The timeout kills the process (uv installs are resumable — the
-    script's idempotence is what makes a timeout safe).
+
+    **The deadline bounds the whole run, silence included** (review
+    m4): a reader thread owns the blocking reads and the main side
+    ``queue.get``\ s with the remaining budget, so a network stall that
+    prints nothing still expires — the process is killed, a disclosure
+    line names the timeout, and 124 is answered. uv installs are
+    resumable, which is what makes killing on timeout safe: the
+    script's idempotence heals the partial run on retry.
     """
     process = subprocess.Popen(
         list(argv),
@@ -254,16 +274,50 @@ def default_install_runner(
         stderr=subprocess.STDOUT,
         text=True,
     )
+    lines: queue.SimpleQueue[str | None] = queue.SimpleQueue()
+
+    def _read() -> None:
+        stream = process.stdout
+        if stream is None:  # PIPE was asked for; unreachable defensively
+            lines.put(None)
+            return
+        for line in stream:
+            lines.put(line)
+        lines.put(None)  # EOF marker
+
+    reader = threading.Thread(target=_read, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + max(0.0, timeout)
+
+    def _expire() -> int:
+        process.kill()
+        process.wait(timeout=10)
+        if on_line is not None:
+            on_line(
+                "omicsclaw: install exceeded its "
+                f"{int(max(0.0, timeout))}s deadline and was killed; the"
+                " install is resumable — re-run it"
+            )
+        return INSTALL_TIMEOUT_EXIT
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _expire()
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
+            return _expire()
+        if line is None:
+            break
+        if on_line is not None:
+            on_line(line.rstrip("\n"))
     try:
-        assert process.stdout is not None  # PIPE was asked for above
-        for line in process.stdout:
-            if on_line is not None:
-                on_line(line.rstrip("\n"))
-        return process.wait(timeout=max(0.0, timeout))
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=10)
+        return process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        # EOF but the process lingers (a grandchild holds the pipe open
+        # past its writer): the same expiry, honestly reported
+        return _expire()
 
 
 def run_install_script(

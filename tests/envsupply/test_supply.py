@@ -156,6 +156,59 @@ def test_manual_commands_mirror_the_script_steps():
     assert DEFAULT_UV_INDEX_URL in joined  # the mirrors travel with them
 
 
+def test_manual_commands_are_runnable_as_pasted():
+    # review m5: the mirrors ride as VAR=value prefixes on the exact
+    # commands the script would run — pasting the card hits the same
+    # mirrors, not the official CDN behind a comment
+    python_line, venv_line, pip_line, verify = manual_env_commands(
+        DEFAULT_ENV_DIR
+    )
+    assert python_line.startswith(
+        "UV_PYTHON_INSTALL_MIRROR="
+    ) and "uv python install" in python_line
+    assert venv_line.startswith("uv venv")
+    assert pip_line.startswith("UV_INDEX_URL=") and "uv pip install" in pip_line
+    assert "# with UV_INDEX_URL" not in pip_line
+    assert verify.endswith("-c 'import ipykernel'")
+    bare = manual_env_commands(
+        DEFAULT_ENV_DIR, uv_index_url=None, uv_python_mirror=None
+    )
+    assert bare[0].startswith("uv python install")
+    assert bare[2].startswith("uv pip install")
+
+
+def test_a_stalled_install_expires_at_its_deadline():
+    # review m4: silence must cost the same as output — a network stall
+    # that prints nothing still dies at the deadline, disclosing itself
+    from omicsclaw.envsupply.script import (
+        INSTALL_TIMEOUT_EXIT,
+        default_install_runner,
+    )
+
+    seen: list[str] = []
+    code = default_install_runner(
+        ["sh", "-c", "echo one; sleep 30"],
+        on_line=seen.append,
+        timeout=0.5,
+    )
+    assert code == INSTALL_TIMEOUT_EXIT
+    assert "one" in seen
+    assert any("deadline" in line for line in seen)
+
+
+def test_a_fast_install_streams_and_answers_zero():
+    from omicsclaw.envsupply.script import default_install_runner
+
+    seen: list[str] = []
+    code = default_install_runner(
+        ["sh", "-c", "echo step-a; echo step-b"],
+        on_line=seen.append,
+        timeout=10.0,
+    )
+    assert code == 0
+    assert seen == ["step-a", "step-b"]
+
+
 # ---- the probe ------------------------------------------------------------------
 
 

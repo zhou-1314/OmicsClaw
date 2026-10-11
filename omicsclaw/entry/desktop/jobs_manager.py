@@ -64,6 +64,7 @@ from typing import Any, Final
 
 from omicsclaw.envsupply import parse_env_step
 from omicsclaw.memory.artifacts import ArtifactStore
+from omicsclaw.schema.env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
 from omicsclaw.memory.database import Database
 from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
 from omicsclaw.skills.frontmatter import parse_frontmatter
@@ -1176,9 +1177,7 @@ class EnvInstallRunner:
         env = inputs.get("env", "main") if isinstance(inputs, dict) else "main"
         if env is None:
             env = "main"
-        if not isinstance(env, str) or not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9_.-]*", env
-        ):
+        if not isinstance(env, str) or not ENV_NAME_PATTERN.fullmatch(env):
             raise JobError("invalid_env")
         packages = inputs.get("packages", []) if isinstance(inputs, dict) else []
         if packages is None:
@@ -1188,7 +1187,10 @@ class EnvInstallRunner:
         ):
             raise JobError("invalid_packages")
         for item in packages:
-            if item and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", item.strip()):
+            # the same closed alphabet the chat face's tool holds: one
+            # implementation of the rule, shared through the schema
+            # package so the two validators cannot drift (review n7)
+            if item and not PACKAGE_NAME_PATTERN.fullmatch(item.strip()):
                 raise JobError("invalid_packages")
 
     async def __call__(self, record: JobRecord, ctx: JobExecutionContext) -> Any:

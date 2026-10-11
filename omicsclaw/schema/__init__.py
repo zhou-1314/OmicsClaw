@@ -19,6 +19,7 @@ of these types belongs to the model adapter layer. A vendor field name
 appearing in this package is a bug.
 """
 
+from .env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
 from .message import (
     Message,
     Role,
@@ -30,6 +31,8 @@ from .message import (
 from .stream import StreamChunk, StreamChunkType
 
 __all__ = [
+    "ENV_NAME_PATTERN",
+    "PACKAGE_NAME_PATTERN",
     "Message",
     "Role",
     "StreamChunk",

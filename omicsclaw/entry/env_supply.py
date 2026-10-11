@@ -67,7 +67,14 @@ class EnvSupplyBinding:
         probe_runner: Any = None,
         install_runner: Any = None,
     ) -> None:
-        self._env_root = str(env_root).rstrip("/") or DEFAULT_ENV_ROOT
+        root = str(env_root).rstrip("/") or DEFAULT_ENV_ROOT
+        # Expanded once, here: a "~"-relative root (the default) must
+        # reach the filesystem as the real home for every probe, verify
+        # and install. Only list_environments used to expand it, which
+        # turned a healthy default-config install into "cannot import
+        # ipykernel" (review B1). The install script's own "$HOME"
+        # splice is independent of this and unchanged.
+        self._env_root = str(Path(root).expanduser())
         self._index_url = index_url
         self._python_mirror = python_mirror
         self._install_timeout_s = float(install_timeout_s)
@@ -81,13 +88,16 @@ class EnvSupplyBinding:
         return self._env_root + "/" + env
 
     async def list_environments(self) -> list[dict[str, Any]]:
-        """The named environments that exist under the root.
+        """The named environments under the root, each probed.
 
-        A light listing by design — directory presence plus the
-        interpreter file, no subprocess per env: the heavy question
-        ("is it *ready*") is what ``probe`` is for, and ``list`` must
-        stay cheap enough to call speculatively."""
-        root = Path(self._env_root).expanduser()
+        Directory presence decides *listing*; one probe per listed env
+        decides *readiness* — the same ``exists``/``ready``/``missing``
+        shape :meth:`probe_environment` answers, so the tool's rendering
+        and the model's reading see one vocabulary (review n6). Probes
+        run sequentially under ``to_thread``: a ``list`` is an explicit
+        action, not a hot path, and an unprobed "ready" would be the
+        lie the probe layer exists to prevent."""
+        root = Path(self._env_root)
         found: list[dict[str, Any]] = []
         if not root.is_dir():
             return found
@@ -95,14 +105,22 @@ class EnvSupplyBinding:
             if not entry.is_dir():
                 continue
             python = Path(interpreter_in_env(entry))
-            found.append(
-                {
-                    "name": entry.name,
-                    "env_dir": str(entry),
-                    "interpreter": str(python),
-                    "exists": python.exists(),
-                }
-            )
+            present = python.exists()
+            record: dict[str, Any] = {
+                "name": entry.name,
+                "env_dir": str(entry),
+                "interpreter": str(python),
+                "exists": present,
+                "ready": False,
+                "missing": [],
+            }
+            if present:
+                probe = await asyncio.to_thread(
+                    probe_interpreter, str(python), runner=self._probe_runner
+                )
+                record["ready"] = probe.ready
+                record["missing"] = list(probe.missing)
+            found.append(record)
         return found
 
     async def probe_environment(

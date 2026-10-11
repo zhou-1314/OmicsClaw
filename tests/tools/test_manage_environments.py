@@ -126,6 +126,44 @@ def test_list_passes_through_without_an_approval_card():
     assert "main" in answer and "~/.omicsclaw/envs/main" in answer
 
 
+def test_list_renders_the_probed_states():
+    # review n6: entries carry the probe's vocabulary; the rendering
+    # distinguishes ready / present-not-ready / no-interpreter and names
+    # the gap count
+    class _ProbedSupply(_RecordingSupply):
+        async def list_environments(self):
+            self.calls.append(("list", {}))
+            return [
+                {
+                    "name": "main",
+                    "interpreter": "~/.omicsclaw/envs/main/bin/python",
+                    "exists": True,
+                    "ready": True,
+                    "missing": [],
+                },
+                {
+                    "name": "spatial",
+                    "interpreter": "~/.omicsclaw/envs/spatial/bin/python",
+                    "exists": True,
+                    "ready": False,
+                    "missing": ["ipykernel", "squidpy"],
+                },
+                {
+                    "name": "half",
+                    "interpreter": "~/.omicsclaw/envs/half/bin/python",
+                    "exists": False,
+                    "ready": False,
+                    "missing": [],
+                },
+            ]
+
+    tool = ManageEnvironmentsTool(supply=_ProbedSupply())
+    answer = _run(tool, json.dumps({"action": "list"}), approval=_explode_if_asked)
+    assert "(ready)" in answer
+    assert "(present, not kernel-ready; missing 2 package(s))" in answer
+    assert "(no interpreter)" in answer
+
+
 def test_probe_names_the_environment_and_the_gaps():
     supply = _RecordingSupply()
     tool = ManageEnvironmentsTool(supply=supply)

@@ -41,6 +41,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from omicsclaw.schema import ToolDefinition
+from omicsclaw.schema.env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
 
 from ..base import ApprovalMode, RiskLevel, ToolPolicy
 from ..context import pause_tool_timeout, require_approval
@@ -127,8 +128,11 @@ changes the machine's Python surface and reaches the network, so the
 worst action sets the bar and only that action asks — the read actions
 above never reach the irreversible part and never trigger a card."""
 
-_ENV_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
-_PACKAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_ENV_NAME = ENV_NAME_PATTERN
+_PACKAGE_NAME = PACKAGE_NAME_PATTERN
+"""The closed alphabets shared with the jobs plane via
+:mod:`omicsclaw.schema.env_names` — one implementation of the rule, so
+the chat face and the jobs face cannot drift (review n7)."""
 _INTERPRETER_PATH = re.compile(r"^(?:/|[A-Za-z]:[\\/])[^<>:|?*\x00-\x1f]*$")
 """A local filesystem path, not a URL and not shell text: absolute, and
 free of the characters Windows reserves and sh treats specially. The
@@ -326,7 +330,12 @@ class ManageEnvironmentsTool:
 
 
 def _render_listing(found: Sequence[Mapping[str, Any]]) -> str:
-    """The list answer: one line per environment, newest knowledge first."""
+    """The list answer: one line per environment, probed states first.
+
+    The binding answers the probe's own vocabulary (``exists`` /
+    ``ready`` / ``missing``) per entry, so the rendering distinguishes
+    a kernel-ready env from a merely present one and names the gap
+    count (review n6)."""
     if not found:
         return (
             "no OmicsClaw environments under ~/.omicsclaw/envs yet;"
@@ -336,8 +345,15 @@ def _render_listing(found: Sequence[Mapping[str, Any]]) -> str:
     for entry in found:
         name = str(entry.get("name", "?"))
         interpreter = str(entry.get("interpreter", ""))
-        state = "ready" if entry.get("ready") else "present"
-        lines.append(f"- {name} ({state}): {interpreter}")
+        if entry.get("ready"):
+            state = "ready"
+        elif entry.get("exists"):
+            state = "present, not kernel-ready"
+        else:
+            state = "no interpreter"
+        missing = entry.get("missing") or []
+        gap = f"; missing {len(missing)} package(s)" if missing else ""
+        lines.append(f"- {name} ({state}{gap}): {interpreter}")
     lines.append(
         "action='probe' inspects one for missing packages;"
         " action='install' creates or completes one"
