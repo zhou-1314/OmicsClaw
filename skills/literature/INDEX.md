@@ -16,5 +16,5 @@ Scientific literature parsing for PDFs, URLs, DOIs, PubMed IDs, GEO accession ex
 
 ## Skills
 
-- `literature` — Load when extracting GEO accessions, dataset metadata, and downloadable references from a scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the dataset is already in hand; the paper names no dataset to fetch.
+- `literature` — Load when extracting GEO accessions, dataset metadata, and downloadable references from a scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the dataset is already in hand or the paper names no dataset to fetch.
   triggers: parse paper, literature, GEO accession, download dataset, PDF extract, PubMed, DOI
