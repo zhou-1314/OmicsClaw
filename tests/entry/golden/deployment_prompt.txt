@@ -25,9 +25,9 @@ For a task with several steps — a multi-stage analysis, work that has to be ex
 
 ## Available skills
 
-Load a skill's full instructions with the `use_skill` tool when you need them.
+Search the catalogue by keyword with the `search_skills` tool. Load a skill's full instructions with the `use_skill` tool when you need them.
 
-- fake-domains: Test fixture for the golden deployment in tests/entry. Load never; it has no script.
+- spatial (1 skills): fake-domains
 
 
 ## Environment

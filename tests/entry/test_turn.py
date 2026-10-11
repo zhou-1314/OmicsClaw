@@ -150,7 +150,7 @@ def test_the_composed_prompt_carries_all_three_tiers(tmp_path):
 
     assert "You are OmicsClaw." in system
     assert "Route to a skill, never guess." in system
-    assert "- spatial-de: Load when running DE." in system
+    assert "spatial (1 skills): spatial-de" in system
     assert "## Safety rules" in system
 
 
@@ -232,7 +232,7 @@ def test_the_engine_is_handed_the_composed_prompt(tmp_path):
     seen = provider.seen[0]
     assert seen[0].role is Role.SYSTEM
     assert "You are OmicsClaw." in seen[0].content
-    assert "- spatial-de: Load when running DE." in seen[0].content
+    assert "spatial (1 skills): spatial-de" in seen[0].content
     assert outcome.reply == "done"
     assert outcome.result.stop_reason is StopReason.CONVERGED
 
@@ -522,7 +522,7 @@ def test_streaming_a_turn_composes_the_same_prompt(tmp_path):
     events = asyncio.run(drive())
 
     assert any(e.type is EngineEventType.DONE for e in events)
-    assert "- spatial-de: Load when running DE." in provider.seen[0][0].content
+    assert "spatial (1 skills): spatial-de" in provider.seen[0][0].content
 
 
 def test_streaming_a_turn_leaves_out_a_call_nothing_answered(tmp_path, caplog):

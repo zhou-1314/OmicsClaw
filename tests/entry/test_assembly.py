@@ -502,7 +502,7 @@ def test_the_skills_index_reaches_the_system_prompt(tmp_path):
     system = build_prompt(default_sections(config)).render().system_prompt
 
     assert "## Available skills" in system
-    assert "- spatial-preprocess: Load when preprocessing." in system
+    assert "spatial (1 skills): spatial-preprocess" in system
     assert "`use_skill`" in system
 
 

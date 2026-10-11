@@ -92,13 +92,14 @@ class SkillsIndex(StrEnum):
     """How much of the skill catalogue the system prompt carries."""
 
     FULL = "full"
-    """One line per skill, descriptions included. About 8.5k tokens over
-    this repository's 96 skills, and stable enough to sit in a cached
+    """One line per skill, descriptions included. About 6.6k tokens over
+    this repository's 88 skills, and stable enough to sit in a cached
     prefix."""
 
     COMPACT = "compact"
-    """One line per domain, names only. About 600 tokens; the model
-    routes on names alone."""
+    """One line per domain, names only. About 500 tokens; the model
+    routes through the per-turn discovery block and the
+    ``search_skills`` tool."""
 
     OFF = "off"
     """No skills section, and ``use_skill`` is not mounted either. One
@@ -250,7 +251,7 @@ class AppConfig:
     an empty index rather than an error, so a workspace with no skills
     gets a prompt with no skills section."""
 
-    skills_index: SkillsIndex = SkillsIndex.FULL
+    skills_index: SkillsIndex = SkillsIndex.COMPACT
     """Which rendering of the catalogue goes into the system prompt, and
     whether ``use_skill`` is mounted at all. See :class:`SkillsIndex`."""
 
