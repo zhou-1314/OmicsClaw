@@ -70,6 +70,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from omicsclaw.envsupply.pins import (
+    CORE_STACK_PACKAGES,
+    KERNEL_BASE_PACKAGES,
+    PYTHON_VERSION,
+    UV_INSTALL_URL,
+)
 from omicsclaw.kernel.session import (
     CellResult,
     KernelCallbacks,
@@ -120,22 +126,11 @@ scratch candidates are for job-sized data."""
 DEFAULT_SESSIONS_DIR = "~/.omicsclaw/kernel-sessions"
 """One 700 directory per running kernel: connection file, pid, log."""
 
-KERNEL_BASE_PACKAGES: tuple[str, ...] = ("ipykernel", "jupyter_client")
-CORE_STACK_PACKAGES: tuple[str, ...] = (
-    "scanpy",
-    "anndata",
-    "pandas",
-    "matplotlib",
-    "leidenalg",
-)
-"""The plan's core layer, installed on first use. The heavy tails
-(squidpy, R/IRkernel) are deliberate non-goals this round: the same
-package list is the extension point, and an IRkernel remote kernel rides
-the language seam P4 already opened."""
-
-REMOTE_PYTHON_VERSION = "3.11"
-
-UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
+# The stack/version pins above are imported from envsupply (P5), not
+# forked: the remote and local planes provision the same kind of
+# environment, and two copies of a pin are one pin that has drifted.
+# REMOTE_PYTHON_VERSION keeps the remote-facing name its callers read.
+REMOTE_PYTHON_VERSION = PYTHON_VERSION
 
 ENV_PROBE_TIMEOUT_S = 60.0
 ENV_INSTALL_TIMEOUT_S = 1800.0
