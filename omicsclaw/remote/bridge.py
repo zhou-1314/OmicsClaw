@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from .plane import RemotePlaneBinding
+from .plane import RemotePlaneBinding, TargetSnapshot
 
 POLL_INTERVAL_S = 5.0
 LOG_CHUNK_CHARS = 4000
@@ -73,6 +73,15 @@ class RemoteJobsBridge:
     def plane(self) -> RemotePlaneBinding:
         """The plane this bridge submits through — the reconciler's way in."""
         return self._plane
+
+    async def resolve_target(
+        self,
+        alias: str,
+        *,
+        capabilities: tuple[str, ...] = ("remote_exec", "remote_submit"),
+    ) -> TargetSnapshot:
+        """Resolve and freeze one target before its job row is inserted."""
+        return await self._plane.resolve_target(alias, capabilities=capabilities)
 
     # ---- the runner contract ------------------------------------------------
 
@@ -122,7 +131,17 @@ class RemoteJobsBridge:
         :raises asyncio.CancelledError: the manager cancelled the job;
             the remote cancel has been sent first.
         """
-        alias = _alias_from_runtime(record.runtime)
+        # Dispatch is driven exclusively by the immutable creation snapshot.
+        # Legacy rows are populated by the one-time target migration before
+        # they can be resumed.
+        alias = record.target_alias
+        if not alias:
+            raise RemoteJobFailed("remote job has no target snapshot")
+        target_workdir = str(record.target_workdir or "").strip()
+        if not target_workdir:
+            raise RemoteJobFailed(
+                "remote job has no immutable target workdir snapshot"
+            )
         command = str(record.inputs.get("command") or "")
         outcome = await self._plane.submit(
             alias,
@@ -136,6 +155,7 @@ class RemoteJobsBridge:
             scheduler=str(record.inputs.get("scheduler") or "auto"),
             label=f"desktop job {record.id}",
             local_job_id=record.id,
+            target_workdir=target_workdir,
         )
         ctx.tool_started(
             "remote_submit", command, human_description=(

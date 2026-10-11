@@ -572,6 +572,7 @@ class RemoteKernelStarter(Protocol):
         limits: OutputLimits | None = None,
         on_figure: Callable[[Path, str], tuple[str, str]] | None = None,
         language: str = "python",
+        target_workdir: str = "",
     ) -> SessionKernel: ...
 
 

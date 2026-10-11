@@ -477,6 +477,10 @@ token 只从环境读，不设 flag（命令行上的密钥会出现在进程列
 | `POST /chat/title` | 为会话的第一条消息生成标题（管理路由） |
 | `GET /files/tree` | 工作区的文件树，只读 |
 | `GET /files/serve` | 工作区里的一个文件，只读，支持单段 `Range` |
+| GET /remote/hosts, POST /remote/hosts, DELETE /remote/hosts/{alias} | 远程计算目标资源卡片与生命周期；后端位置仍由 Runtimes 管理 |
+| GET /remote/hosts/aliases | 读取后端进程所在用户的 SSH config 别名建议（含相对 Include） |
+| GET /remote/hosts/{alias}/files/tree | 目标 scratch 下的只读文件树（最多 2000 项，超限返回 `truncated: true`），拒绝越界、符号链接与非普通条目 |
+| GET /remote/hosts/{alias}/files/serve | 目标 scratch 下的只读文件预览，支持单段 Range（206/416）与 8 MiB 上限；无绝对 scratch 时返回 `workdir_unavailable` |
 
 Desktop 聊天协议的主版本保持 v3（中断请求仍为 v1）。新增可选字段或能力声明无需升主版本；客户端忽略未使用的字段。删除字段、改变类型或语义、要求旧客户端发送新字段时，才需要协调主版本升级。算法、技能或后端包版本变化不代表 Desktop 协议变化。既有 v2 安装包仍会拒绝 v3，需要先更换客户端。
 
@@ -646,7 +650,9 @@ zhipu 行在没有任何设置时为预设的 `"https://open.bigmodel.cn/api/paa
 认证后的 `/health` 另有两个可选顶层对象：
 
 ```json
-{"capabilities": {"files_tree": true, "files_serve": true},
+{"capabilities": {"files_tree": true, "files_serve": true,
+                  "remote_execution_aliases": true, "remote_execution_files": true,
+                  "remote_execution_files_transport": "sftp-readonly"},
  "build": {"commit": "<40-character git commit>", "dirty": false}}
 ```
 

@@ -79,7 +79,8 @@ class FakeRemoteRuntime:
         self.kernels: list[FakeRemoteKernel] = []
 
     async def start(self, session_id, *, host, workspace, limits=None,
-                    on_figure=None, language="python", startup_timeout=None):
+                    on_figure=None, language="python", startup_timeout=None,
+                    target_workdir=""):
         self.starts.append((session_id, host))
         kernel = FakeRemoteKernel(session_id, host)
         self.kernels.append(kernel)
@@ -159,6 +160,28 @@ def test_a_remote_location_starts_one_kernel_and_reuses_it(workspace):
             assert second.stdout == "remote:lab1:2"
             # lazy: two cells, one kernel — the P4 contract, location-free
             assert runtime.starts == [("s1", "lab1")]
+        finally:
+            await manager.aclose()
+
+    asyncio.run(asyncio.wait_for(scenario(), 20))
+
+
+def test_a_remote_session_rejects_a_different_target_workdir(workspace):
+    async def scenario():
+        runtime = FakeRemoteRuntime()
+        manager = PersistentKernelManager(workspace, remote_runtime=runtime)
+        try:
+            await manager.execute(
+                "s1", "a = 1", location="remote:lab1",
+                target_workdir="/scratch/omicsclaw/first",
+            )
+            with pytest.raises(ValueError, match="differs from the session snapshot"):
+                await manager.execute(
+                    "s1", "print(a)", location="remote:lab1",
+                    target_workdir="/scratch/omicsclaw/second",
+                )
+            assert manager.state_for("s1", location="remote:lab1").target_workdir == "/scratch/omicsclaw/first"
+            assert len(runtime.kernels) == 1
         finally:
             await manager.aclose()
 

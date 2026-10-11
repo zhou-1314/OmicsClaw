@@ -250,6 +250,16 @@ def test_the_launch_command_detaches_and_lets_the_kernel_pick_the_ports():
     assert "kill -KILL $(cat kernel.pid)" in command
 
 
+def test_the_launch_command_uses_the_frozen_target_workdir_as_kernel_cwd():
+    command = build_kernel_launch_command(
+        "/opt/envs/k/bin/python",
+        "~/.omicsclaw/kernel-sessions/s-1",
+        "/scratch/frozen-job",
+    )
+    assert "mkdir -p -m 700" in command and "/scratch/frozen-job" in command
+    assert "cd '/scratch/frozen-job'" in command
+
+
 def test_parse_launch_output_reads_the_conn_and_the_pid():
     info, pid = parse_launch_output(_launch_output())
     assert pid == 4242

@@ -16,6 +16,7 @@ tests run against one live server rather than re-entering loops.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +26,7 @@ from omicsclaw.entry.desktop.jobs_manager import (
     JobsManager,
 )
 from omicsclaw.memory.database import Database
-from omicsclaw.remote.bridge import RemoteJobsBridge
+from omicsclaw.remote.bridge import RemoteJobFailed, RemoteJobsBridge
 from omicsclaw.remote.jobs import RemoteJobHandle
 from omicsclaw.remote.plane import RemotePlaneBinding
 from omicsclaw.remote.ssh import RemoteHostUnreachable
@@ -215,8 +216,62 @@ class TestRemoteRouting:
         assert host_alias == "hpc1"
         assert kind == "nohup"
 
+    def test_creation_freezes_one_target_snapshot_in_both_stores(self, spawner, tmp_path):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            record = await manager.create_job(
+                inputs={"command": "echo hi"}, runtime="remote:hpc1"
+            )
+            local = manager.get_job(record.id)
+            remote = await _until(
+                lambda: manager.plane.job_store().by_local_job(record.id)
+            )
+            assert local is not None and remote is not None
+            return (
+                (local.target_alias, local.target_workdir, local.capabilities),
+                (remote.target_alias, remote.target_workdir, remote.capabilities),
+            )
+
+        local_snapshot, remote_snapshot = run(main())
+        assert local_snapshot == remote_snapshot
+        assert local_snapshot[0] == "hpc1"
+        assert local_snapshot[1].startswith("/scratch/fake/omicsclaw/")
+        assert local_snapshot[2] == ("remote_exec", "remote_submit")
+
+    def test_code_run_remote_location_freezes_kernel_target_snapshot(self, spawner, tmp_path):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            record = await manager.create_job(
+                kind="code_run",
+                inputs={"code": "1", "location": "remote:hpc1"},
+            )
+            return record, await _terminal(manager, record.id)
+
+        record, finished = run(main())
+        assert record.runtime == "local"
+        assert record.target_alias == "hpc1"
+        assert record.target_workdir.startswith("/scratch/fake/omicsclaw/")
+        assert record.capabilities == ("remote_kernel",)
+        assert finished.status == "failed"
+        assert "remote kernel locations are not enabled" in finished.error
+
 
 class TestValidationAndRefusal:
+    def test_remote_resume_without_workdir_snapshot_is_refused(self, spawner, tmp_path):
+        async def main():
+            plane = _ScriptedPlane(spawner, workspace=tmp_path)
+            bridge = RemoteJobsBridge(plane)
+            record = SimpleNamespace(
+                id="legacy",
+                target_alias="hpc1",
+                target_workdir="",
+                inputs={"command": "echo hi"},
+            )
+            with pytest.raises(RemoteJobFailed, match="immutable target workdir"):
+                await bridge(record, SimpleNamespace())
+
+        run(main())
+
     def test_remote_without_a_bound_plane_is_refused_not_faked(self, tmp_path):
         async def main():
             bare = JobsManager(
@@ -290,9 +345,11 @@ class TestValidationAndRefusal:
             )
             manager.plane.state = "done"
             await _terminal(manager, record.id)
-            return seen.get("inputs")
+            return seen.get("inputs"), seen.get("target_workdir"), record.target_workdir
 
-        assert run(main()) == (("data/counts.csv", "counts.csv"),)
+        inputs, target_workdir, snapshot_workdir = run(main())
+        assert inputs == (("data/counts.csv", "counts.csv"),)
+        assert target_workdir == snapshot_workdir
 
     def test_local_jobs_still_run_the_local_runner(self, spawner, tmp_path):
         async def main():

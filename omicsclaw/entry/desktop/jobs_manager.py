@@ -167,6 +167,18 @@ class JobRecord:
     created_at: float = 0.0
     started_at: float | None = None
     finished_at: float | None = None
+    target_alias: str = ""
+    target_workdir: str = ""
+    capabilities: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.target_alias and self.runtime.startswith("remote:"):
+            object.__setattr__(self, "target_alias", self.runtime[len("remote:"):])
+        if not self.target_workdir and isinstance(self.inputs, Mapping):
+            candidate = self.inputs.get("target_workdir")
+            if isinstance(candidate, str):
+                object.__setattr__(self, "target_workdir", candidate)
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -176,6 +188,9 @@ class JobRecord:
             "skill": self.skill,
             "inputs": dict(self.inputs),
             "runtime": self.runtime,
+            "target_alias": self.target_alias or None,
+            "target_workdir": self.target_workdir or None,
+            "capabilities": list(self.capabilities),
             "status": self.status,
             "error": self.error,
             "created_at": self.created_at,
@@ -206,8 +221,9 @@ class JobStore:
         self._db.run(
             lambda conn: conn.execute(
                 "INSERT INTO jobs (id, session_id, kind, skill, inputs_json,"
-                " runtime, status, error, created_at, started_at, finished_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " runtime, target_alias, target_workdir, capabilities_json,"
+                " status, error, created_at, started_at, finished_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.session_id,
@@ -215,6 +231,9 @@ class JobStore:
                     record.skill,
                     json.dumps(dict(record.inputs), ensure_ascii=False, default=str),
                     record.runtime,
+                    record.target_alias,
+                    record.target_workdir,
+                    json.dumps(list(record.capabilities), ensure_ascii=False),
                     record.status,
                     record.error,
                     record.created_at,
@@ -225,6 +244,9 @@ class JobStore:
         )
 
     def update_job(self, job_id: str, **changes: Any) -> None:
+        immutable = {"target_alias", "target_workdir", "capabilities_json"}
+        if immutable.intersection(changes):
+            raise ValueError("target_snapshot_immutable")
         allowed = (
             "status", "error", "started_at", "finished_at",
             "session_id", "runtime",
@@ -244,6 +266,7 @@ class JobStore:
         rows = self._db.run(
             lambda conn: conn.execute(
                 "SELECT id, session_id, kind, skill, inputs_json, runtime,"
+                " target_alias, target_workdir, capabilities_json,"
                 " status, error, created_at, started_at, finished_at"
                 " FROM jobs WHERE id = ?",
                 (job_id,),
@@ -271,6 +294,7 @@ class JobStore:
         rows = self._db.run(
             lambda conn: conn.execute(
                 "SELECT id, session_id, kind, skill, inputs_json, runtime,"
+                " target_alias, target_workdir, capabilities_json,"
                 " status, error, created_at, started_at, finished_at FROM jobs "
                 + where + " ORDER BY created_at DESC, id DESC LIMIT ?",
                 tuple(params),
@@ -352,6 +376,16 @@ class JobStore:
         return int(rows[0]["seq"] or 0) if rows else 0
 
 
+def _decode_capabilities(value: Any) -> tuple[str, ...]:
+    try:
+        decoded = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(str(item) for item in decoded if isinstance(item, str) and item)
+
+
 def _row_to_record(row: Any) -> JobRecord:
     try:
         inputs = json.loads(row["inputs_json"]) if row["inputs_json"] else {}
@@ -369,6 +403,9 @@ def _row_to_record(row: Any) -> JobRecord:
         # means the same thing "local" does — that job ran in the
         # process that wrote it.
         runtime=str(row["runtime"] or "local"),
+        target_alias=str(row["target_alias"] or ""),
+        target_workdir=str(row["target_workdir"] or ""),
+        capabilities=_decode_capabilities(row["capabilities_json"]),
         status=str(row["status"] or "queued"),
         error=str(row["error"] or ""),
         created_at=float(row["created_at"] or 0.0),
@@ -988,7 +1025,22 @@ class CodeRunRunner:
         adata_path = record.inputs.get("adata_path")
         adata_path = adata_path.strip() if isinstance(adata_path, str) else None
         language = str(record.inputs.get("language", "python"))
-        location = str(record.inputs.get("location") or "local")
+        # The request's location is only used to create the immutable target
+        # snapshot. Resumed jobs must follow the stored alias even if the
+        # original input payload or host configuration has changed.
+        if record.target_alias and "remote_kernel" in record.capabilities:
+            location = "remote:" + record.target_alias
+        else:
+            # A pre-snapshot remote row must never be silently reinterpreted
+            # as local execution after a restart.  The input is inspected
+            # only to identify that legacy state; it never selects a target.
+            requested_location = record.inputs.get("location")
+            if isinstance(requested_location, str) and requested_location.startswith("remote:"):
+                raise JobFailure(
+                    "remote code job has no immutable target snapshot",
+                    phase="setup",
+                )
+            location = "local"
         if location != "local" and getattr(manager, "remote_runtime", None) is None:
             # The door-check the chat face gets from its schema flag: a
             # job that asked for a remote kernel on a deployment without
@@ -1035,6 +1087,7 @@ class CodeRunRunner:
                 ),
                 adata_in=adata_path or None,
                 job_id=record.id,
+                target_workdir=record.target_workdir,
             )
         finally:
             self._unprotect(
@@ -1430,6 +1483,39 @@ class JobsManager:
                 # where the wire's vocabulary lives is where they become
                 # JobErrors, at 422 like every other refused request.
                 raise JobError(str(exc)) from exc
+        # Resolve the target before inserting the row.  The resolver probes
+        # the selected host once and returns the exact scratch/work directory
+        # and capability set that both the local job row and the remote handle
+        # must carry for the rest of the job's life.
+        target_runtime = runtime
+        if target_runtime == "local" and kind == "code_run":
+            location = inputs.get("location")
+            if isinstance(location, str) and location.startswith("remote:"):
+                target_runtime = location
+        is_remote_target = target_runtime.startswith("remote:")
+        target_caps = (
+            ("remote_kernel",)
+            if kind == "code_run" and is_remote_target
+            else ("remote_exec", "remote_submit") if is_remote_target else ()
+        )
+        target_snapshot = None
+        if is_remote_target:
+            if self._remote_runtime is None:
+                # Keep the existing setup-phase error for deployments with
+                # C3 disabled; no row can be created without a target
+                # snapshot, so there is nothing to resume or execute.
+                if kind == "code_run":
+                    raise JobError("remote_runtime_unavailable", status_code=409)
+                raise JobError("remote_runtime_unavailable", status_code=409)
+            try:
+                target_snapshot = await self._remote_runtime.resolve_target(
+                    target_runtime[len("remote:"):], capabilities=target_caps
+                )
+            except JobError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - map probe failures to wire code
+                _log.debug("target resolution failed", exc_info=True)
+                raise JobError("target_resolution_failed", status_code=409) from exc
         if runtime != "local":
             # The query-time half of C2's re-estimation: before adding a
             # job to the in-flight set, ask the ones already in it what
@@ -1449,6 +1535,9 @@ class JobsManager:
             skill=str(skill or ""),
             inputs=inputs,
             runtime=runtime,
+            target_alias=target_snapshot.alias if target_snapshot is not None else "",
+            target_workdir=target_snapshot.workdir if target_snapshot is not None else "",
+            capabilities=target_snapshot.capabilities if target_snapshot is not None else (),
             status="queued",
             created_at=time.time(),
         )

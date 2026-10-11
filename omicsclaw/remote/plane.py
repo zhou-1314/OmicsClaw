@@ -42,9 +42,12 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 import secrets
 import tempfile
 import time
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +89,7 @@ from .ssh import (
     SystemSshSpawner,
     build_sftp_argv,
     build_sftp_batch,
+    build_sftp_read_batch,
     build_ssh_argv,
     encode_login_script,
     validate_host,
@@ -111,6 +115,21 @@ the host (or remote:// references) rather than an SFTP put."""
 MAX_INPUT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 """Ceiling on all of one submission's inputs together (2 GiB). Bounds
 the batch even when every file individually fits."""
+
+REMOTE_FILE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024
+"""Largest file the read-only target preview may bring through SSH."""
+
+REMOTE_TREE_MAX_ENTRIES = 2000
+"""Upper bound on one read-only target tree response."""
+
+
+@dataclass(frozen=True, slots=True)
+class TargetSnapshot:
+    """The immutable target facts captured before a job is persisted."""
+
+    alias: str
+    workdir: str
+    capabilities: tuple[str, ...]
 
 
 class RemoteExecutor:
@@ -235,6 +254,138 @@ class RemoteExecutor:
         )
         return outcome.output
 
+    async def list_tree(self, root: str, *, depth: int, boundary: str) -> tuple[list[dict[str, Any]], bool]:
+        """List regular files and directories through read-only SFTP."""
+        boundary_real = await self._sftp_realpath(boundary)
+        if not await self._sftp_is_directory(boundary):
+            raise RemotePathRefused(f"target boundary {boundary!r} is not a directory")
+        root_real = await self._sftp_realpath(root)
+        if not _inside_remote_dir(boundary_real, root_real):
+            raise RemotePathRefused(f"target path {root!r} escapes boundary {boundary!r}")
+        if not await self._sftp_is_directory(root):
+            raise RemotePathRefused(f"cannot list target path {root!r}")
+
+        entries: list[dict[str, Any]] = []
+        queue: list[tuple[str, int]] = [(root_real, 0)]
+        while queue and len(entries) <= REMOTE_TREE_MAX_ENTRIES:
+            current, level = queue.pop(0)
+            for item in await self._sftp_listing(current):
+                if item["type"] not in {"file", "directory"}:
+                    continue
+                path = remote_join(current, item["name"])
+                try:
+                    canonical = await self._sftp_realpath(path)
+                except RemotePathRefused:
+                    continue
+                if not _inside_remote_dir(boundary_real, canonical):
+                    continue
+                item = {**item, "path": path}
+                entries.append(item)
+                if item["type"] == "directory" and level + 1 < depth:
+                    queue.append((canonical, level + 1))
+                if len(entries) > REMOTE_TREE_MAX_ENTRIES:
+                    break
+        return entries[:REMOTE_TREE_MAX_ENTRIES], len(entries) > REMOTE_TREE_MAX_ENTRIES
+
+    async def stat_file(self, path: str, *, boundary: str) -> int:
+        """Return a regular file size after enforcing the SFTP boundary."""
+        boundary_real = await self._sftp_realpath(boundary)
+        if not await self._sftp_is_directory(boundary):
+            raise RemotePathRefused(f"target boundary {boundary!r} is not a directory")
+        candidate_real = await self._sftp_realpath(path)
+        if not _inside_remote_dir(boundary_real, candidate_real):
+            raise RemotePathRefused(f"cannot read target file {path!r}: outside boundary")
+        metadata = await self._sftp_lstat(path)
+        if metadata["type"] != "file":
+            raise RemotePathRefused(f"cannot read target file {path!r}")
+        return int(metadata["size"])
+
+    async def read_bytes(
+        self,
+        path: str,
+        *,
+        boundary: str,
+        start: int = 0,
+        max_bytes: int,
+    ) -> bytes:
+        """Read a bounded range using SFTP's read-only ``get`` command.
+
+        OpenSSH's command-line SFTP client exposes whole-file ``get`` only;
+        the bounded slice is therefore taken from a private local staging
+        file after the same boundary and size checks.
+        """
+        if start < 0 or max_bytes < 0 or max_bytes > REMOTE_FILE_PREVIEW_MAX_BYTES:
+            raise ValueError("target preview range exceeds the hard byte limit")
+        if max_bytes == 0:
+            return b""
+        total_size = await self.stat_file(path, boundary=boundary)
+        # OpenSSH's batch SFTP client only exposes whole-file ``get``.  Do
+        # not fetch a large remote file just to slice it locally: callers
+        # must receive the stable preview-too-large response instead.
+        if total_size > REMOTE_FILE_PREVIEW_MAX_BYTES:
+            raise ValueError("preview_too_large")
+        from .ssh import sftp_quote
+        with tempfile.NamedTemporaryFile(prefix="omicsclaw-preview-", delete=False) as sink:
+            local = sink.name
+        try:
+            await self._sftp(
+                build_sftp_read_batch([f"get -- {sftp_quote(path)} {sftp_quote(local)}"]),
+                PROBE_TIMEOUT_S,
+            )
+            with open(local, "rb") as source:
+                source.seek(start)
+                return source.read(max_bytes)
+        finally:
+            try:
+                Path(local).unlink()
+            except FileNotFoundError:
+                pass
+
+    async def _sftp_request(self, commands: list[str]) -> str:
+        outcome = await self._spawner.spawn(
+            build_sftp_argv(self.host),
+            timeout=PROBE_TIMEOUT_S,
+            stdin_text=build_sftp_read_batch(commands),
+        )
+        if outcome.exit_code != 0:
+            raise RemotePathRefused(
+                f"SFTP request on {self.host} failed: {outcome.output.strip()[-300:]}"
+            )
+        return outcome.output
+
+    async def _sftp_realpath(self, path: str) -> str:
+        from .ssh import sftp_quote
+        output = await self._sftp_request([f"realpath {sftp_quote(path)}"])
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if not lines:
+            raise RemotePathRefused(f"cannot resolve remote path {path!r}")
+        return lines[-1]
+
+    async def _sftp_listing(self, path: str) -> list[dict[str, Any]]:
+        from .ssh import sftp_quote
+        output = await self._sftp_request([f"ls -ln {sftp_quote(path)}"])
+        result = []
+        for line in output.splitlines():
+            parsed = _parse_sftp_listing_line(line)
+            if parsed is not None:
+                prefix = path.rstrip("/") + "/"
+                if parsed["name"].startswith(prefix):
+                    parsed["name"] = parsed["name"][len(prefix) :]
+                result.append(parsed)
+        return result
+
+    async def _sftp_lstat(self, path: str) -> dict[str, Any]:
+        from .ssh import sftp_quote
+        output = await self._sftp_request([f"ls -ldn {sftp_quote(path)}"])
+        for line in output.splitlines():
+            parsed = _parse_sftp_listing_line(line)
+            if parsed is not None:
+                return parsed
+        raise RemotePathRefused(f"cannot stat remote path {path!r}")
+
+    async def _sftp_is_directory(self, path: str) -> bool:
+        return (await self._sftp_lstat(path))["type"] == "directory"
+
     async def tail_log(self, workdir: str, offset: int, limit: int) -> str:
         outcome = await self.run(
             build_log_tail_command(workdir, offset, limit),
@@ -288,6 +439,48 @@ class RemoteExecutor:
             raise RemoteTransferError(
                 f"sftp on {self.host} exited {outcome.exit_code}: {tail}"
             )
+
+
+_SFTP_LONG_RE = re.compile(
+    r"^(?P<mode>[bcdlps-][rwxXsStT-]{9})\s+\d+\s+\S+\s+\S+\s+"
+    r"(?P<size>\d+)\s+(?P<month>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+"
+    r"(?P<clock>\d{2}:\d{2}|\d{4})\s+(?P<name>.*)$"
+)
+
+
+def _parse_sftp_listing_line(line: str) -> dict[str, Any] | None:
+    """Parse one OpenSSH ``sftp ls -ln`` record without invoking a shell."""
+    match = _SFTP_LONG_RE.match(line.strip())
+    if match is None:
+        return None
+    mode = match.group("mode")
+    name = match.group("name")
+    if " -> " in name and mode.startswith("l"):
+        name = name.split(" -> ", 1)[0]
+    mtime: float | None = None
+    try:
+        stamp = match.group("clock")
+        year = datetime.now().year if ":" in stamp else int(stamp)
+        if ":" in stamp:
+            value = datetime.strptime(
+                f"{year} {match.group('month')} {match.group('day')} {stamp}",
+                "%Y %b %d %H:%M",
+            )
+        else:
+            value = datetime.strptime(
+                f"{year} {match.group('month')} {match.group('day')}",
+                "%Y %b %d",
+            )
+        mtime = value.timestamp()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return {
+        "path": "",
+        "name": name,
+        "type": {"d": "directory", "-": "file"}.get(mode[0], "other"),
+        "size": int(match.group("size")),
+        "mtime": mtime,
+    }
 
 
 def remote_join(workdir: str, name: str) -> str:
@@ -381,15 +574,18 @@ class RemotePlaneBinding:
         timeout: float = DEFAULT_SUBMIT_TIMEOUT_S,
         label: str = "",
         local_job_id: str = "",
+        target_workdir: str = "",
     ) -> SubmitOutcome:
         validate_host(host)
         resolved_inputs = self._resolve_inputs(inputs)
         executor = RemoteExecutor(host, self._spawner)
-        probe = await self._probe_into_store(executor, host)
-        workdir = remote_join(
-            probe.scratch_root(),
-            "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
-        )
+        workdir = target_workdir.strip()
+        if not workdir:
+            probe = await self._probe_into_store(executor, host)
+            workdir = remote_join(
+                probe.scratch_root(),
+                "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
+            )
         uploads = [
             (local, remote_join(workdir, dst)) for local, dst in resolved_inputs
         ]
@@ -410,9 +606,12 @@ class RemotePlaneBinding:
             workdir=handle.workdir,
             job_id=handle.job_id,
             pgid=handle.pgid,
-            submitted_at=handle.submitted_at,
-            local_job_id=local_job_id,
-        )
+           submitted_at=handle.submitted_at,
+           local_job_id=local_job_id,
+            target_alias=host,
+            target_workdir=workdir,
+            capabilities=("remote_exec", "remote_submit"),
+       )
         row_id = self._jobs.record(handle, status=PENDING)
         return SubmitOutcome(
             job_ref=str(row_id),
@@ -423,6 +622,27 @@ class RemotePlaneBinding:
             host=handle.host,
             submitted_at=handle.submitted_at,
         )
+
+    async def resolve_target(
+        self,
+        alias: str,
+        *,
+        capabilities: tuple[str, ...] = ("remote_exec", "remote_submit"),
+    ) -> TargetSnapshot:
+        """Resolve a target once, including the workdir used by its job.
+
+        Callers persist the returned facts and pass the workdir back to
+        :meth:`submit`; dispatch therefore never re-reads mutable target
+        configuration after a job has been created.
+        """
+        validate_host(alias)
+        executor = RemoteExecutor(alias, self._spawner)
+        probe = await self._probe_into_store(executor, alias)
+        workdir = remote_join(
+            probe.scratch_root(),
+            "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
+        )
+        return TargetSnapshot(alias, workdir, tuple(capabilities))
 
     async def status(self, job_ref: str) -> StatusReport:
         row = self._jobs.get(job_ref)
@@ -545,6 +765,64 @@ class RemotePlaneBinding:
     def host_store(self) -> RemoteHostStore:
         """The host knowledge base — the REST face's read/delete entry point."""
         return self._hosts
+
+    def target_root(self, alias: str, workdir: str = "") -> str:
+        """Resolve a target's browsable root under its probed scratch."""
+        validate_host(alias)
+        card = self.host_card(alias)
+        if card is None:
+            raise KeyError(alias)
+        if card.parse_error:
+            raise RemotePathRefused("remote_files_unsupported: host probe is incomplete")
+        scratch = card.scratch_root or ""
+        if not scratch or scratch in {"~", ".", "./"}:
+            raise RemotePathRefused("workdir_unavailable: probe did not return an absolute scratch root")
+        root = workdir.strip() or scratch
+        if not _inside_remote_dir(scratch, root):
+            raise RemotePathRefused(
+                f"target workdir {root!r} escapes the target scratch root {scratch!r}"
+            )
+        return posixpath.normpath(root)
+
+    async def list_target_files(
+        self, alias: str, *, workdir: str = "", path: str = "", depth: int = 2
+    ) -> tuple[str, list[dict[str, Any]], bool]:
+        root = self.target_root(alias, workdir)
+        candidate = remote_join(root, path)
+        if not _inside_remote_dir(root, candidate):
+            raise RemotePathRefused(
+                f"target path {path!r} escapes the target workdir {root!r}"
+            )
+        entries, has_more = await self.executor_for(alias).list_tree(candidate, boundary=root, depth=depth)
+        return root, entries, has_more
+
+    async def read_target_file(
+        self, alias: str, *, workdir: str = "", path: str = "", start: int = 0, count: int | None = None
+    ) -> tuple[str, bytes, int]:
+        root = self.target_root(alias, workdir)
+        candidate = remote_join(root, path)
+        if not _inside_remote_dir(root, candidate) or candidate == root:
+            raise RemotePathRefused(
+                f"target file path {path!r} is outside the target workdir {root!r}"
+            )
+        executor = self.executor_for(alias)
+        total = await executor.stat_file(candidate, boundary=root)
+        if start < 0 or start > total:
+            raise ValueError("invalid target file range")
+        if count is None:
+            count = total - start
+        if count < 0 or count > REMOTE_FILE_PREVIEW_MAX_BYTES:
+            raise ValueError("target preview range exceeds the hard byte limit")
+        content = await executor.read_bytes(candidate, boundary=root, start=start, max_bytes=count)
+        return root, content, total
+
+    async def stat_target_file(self, alias: str, *, workdir: str = "", path: str = "") -> tuple[str, int]:
+        """Stat one target file without reading any bytes (serve preflight)."""
+        root = self.target_root(alias, workdir)
+        candidate = remote_join(root, path)
+        if not _inside_remote_dir(root, candidate) or candidate == root:
+            raise RemotePathRefused(f"target file path {path!r} is outside the target workdir {root!r}")
+        return root, await self.executor_for(alias).stat_file(candidate, boundary=root)
 
     def list_host_cards(self) -> list[HostCard]:
         """Every stored host as a card, alias-ordered. Reads only.
@@ -753,6 +1031,7 @@ __all__ = [
     "PROBE_TIMEOUT_S",
     "RemoteExecutor",
     "RemotePlaneBinding",
+    "TargetSnapshot",
     "UPLOAD_TIMEOUT_S",
     "remote_join",
 ]

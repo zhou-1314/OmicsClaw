@@ -104,6 +104,16 @@ class RemoteJobHandle:
     pgid: int | None = None
     submitted_at: float = 0.0
     local_job_id: str = ""
+    target_alias: str = ""
+    target_workdir: str = ""
+    capabilities: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.target_alias:
+            object.__setattr__(self, "target_alias", self.host)
+        if not self.target_workdir:
+            object.__setattr__(self, "target_workdir", self.workdir)
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
 
     def to_json(self) -> str:
         return json.dumps(
@@ -115,6 +125,9 @@ class RemoteJobHandle:
                 "pgid": self.pgid,
                 "submitted_at": self.submitted_at,
                 "local_job_id": self.local_job_id,
+                "target_alias": self.target_alias,
+                "target_workdir": self.target_workdir,
+                "capabilities": list(self.capabilities),
             },
             ensure_ascii=False,
         )
@@ -130,6 +143,9 @@ class RemoteJobHandle:
             pgid=decoded.get("pgid"),
             submitted_at=float(decoded.get("submitted_at") or 0.0),
             local_job_id=str(decoded.get("local_job_id") or ""),
+            target_alias=str(decoded.get("target_alias") or ""),
+            target_workdir=str(decoded.get("target_workdir") or ""),
+            capabilities=tuple(str(item) for item in decoded.get("capabilities", ()) if item),
         )
 
     def identity(self) -> str:

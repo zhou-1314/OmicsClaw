@@ -8,10 +8,12 @@ persist the handle, and re-estimate on demand.
 
 from __future__ import annotations
 
+import shlex
+
 import pytest
 
 from omicsclaw.memory.database import Database
-from omicsclaw.remote.plane import OUTPUTS_FILE, RemotePlaneBinding
+from omicsclaw.remote.plane import OUTPUTS_FILE, REMOTE_FILE_PREVIEW_MAX_BYTES, RemoteExecutor, RemotePlaneBinding
 from omicsclaw.remote.ssh import (
     RemoteHostUnreachable,
     RemotePathRefused,
@@ -20,6 +22,58 @@ from omicsclaw.remote.ssh import (
 from omicsclaw.tools.builtin.remote import ExecOutcome
 
 from tests.remote._fakes import PROBE_OK, FakeSpawner, run
+
+
+class ReadOnlySftpSpawner:
+    """Small SFTP-only fake used to ensure file reads never use SSH shell."""
+
+    def __init__(self, *, size=5):
+        self.calls = []
+        self.size = size
+
+    async def spawn(self, argv, *, timeout, stdin_text=None):
+        self.calls.append((argv, stdin_text or ""))
+        batch = stdin_text or ""
+        if "realpath" in batch:
+            path = batch.split('"', 1)[1].rsplit('"', 1)[0]
+            return ExecOutcome(output=path, exit_code=0)
+        if "ls -ldn" in batch:
+            mode = "-rw-r--r--" if "note.txt" in batch else "drwxr-xr-x"
+            size = str(self.size) if "note.txt" in batch else "0"
+            return ExecOutcome(output=f"{mode} 2 1000 1000 {size} Jan 01 2026 /work\n", exit_code=0)
+        if "ls -ln" in batch:
+            return ExecOutcome(
+                output="-rw-r--r-- 1 1000 1000 5 Jan 01 2026 note.txt\n",
+                exit_code=0,
+            )
+        if "get --" in batch:
+            local = shlex.split(batch.splitlines()[0])[-1]
+            with open(local, "wb") as handle:
+                handle.write(b"hello")
+            return ExecOutcome(output="", exit_code=0)
+        return ExecOutcome(output="", exit_code=0)
+
+
+def test_remote_file_metadata_uses_read_only_sftp():
+    spawner = ReadOnlySftpSpawner()
+    executor = RemoteExecutor("hpc1", spawner)
+    assert run(executor.stat_file("/work/note.txt", boundary="/work")) == 5
+    assert all(argv[0] == "sftp" for argv, _ in spawner.calls)
+
+
+def test_remote_file_range_uses_sftp_get_and_local_slice():
+    spawner = ReadOnlySftpSpawner()
+    executor = RemoteExecutor("hpc1", spawner)
+    assert run(executor.read_bytes("/work/note.txt", boundary="/work", start=1, max_bytes=3)) == b"ell"
+    assert all(argv[0] == "sftp" for argv, _ in spawner.calls)
+
+
+def test_remote_file_range_rejects_large_files_before_sftp_get():
+    spawner = ReadOnlySftpSpawner(size=REMOTE_FILE_PREVIEW_MAX_BYTES + 1)
+    executor = RemoteExecutor("hpc1", spawner)
+    with pytest.raises(ValueError, match="preview_too_large"):
+        run(executor.read_bytes("/work/note.txt", boundary="/work", start=0, max_bytes=3))
+    assert not any("get --" in batch for _, batch in spawner.calls)
 
 
 @pytest.fixture()

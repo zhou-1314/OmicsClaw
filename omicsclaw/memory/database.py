@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     skill       TEXT NOT NULL DEFAULT '',
     inputs_json TEXT NOT NULL DEFAULT '{}',
     runtime     TEXT NOT NULL DEFAULT 'local',
+    target_alias TEXT NOT NULL DEFAULT '',
+    target_workdir TEXT NOT NULL DEFAULT '',
+    capabilities_json TEXT NOT NULL DEFAULT '[]',
     status      TEXT NOT NULL DEFAULT 'queued',
     error       TEXT NOT NULL DEFAULT '',
     created_at  REAL NOT NULL,
@@ -79,6 +82,24 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_session
     ON jobs (session_id, created_at);
 
+CREATE TABLE IF NOT EXISTS target_migration_state (
+    scope TEXT PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    started_at REAL,
+    completed_at REAL,
+    error_code TEXT NOT NULL DEFAULT '',
+    unresolved_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS target_migration_unresolved (
+    scope TEXT NOT NULL,
+    record_key TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    PRIMARY KEY (scope, record_key)
+);
 
 CREATE TABLE IF NOT EXISTS job_events (
     job_id       TEXT NOT NULL,
@@ -137,7 +158,10 @@ CREATE TABLE IF NOT EXISTS remote_jobs (
     submitted_at REAL NOT NULL,
     last_seen    REAL,
     status       TEXT NOT NULL DEFAULT 'pending',
-    local_job_id TEXT NOT NULL DEFAULT ''
+    local_job_id TEXT NOT NULL DEFAULT '',
+    target_alias TEXT NOT NULL DEFAULT '',
+    target_workdir TEXT NOT NULL DEFAULT '',
+    capabilities_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_jobs_local
@@ -310,29 +334,39 @@ class Database:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Bring a database written by an older schema up to this one.
-
-    The additive-column case ``CREATE TABLE IF NOT EXISTS`` cannot cover:
-    a file that already has ``jobs`` keeps its old shape, so a column
-    this schema now declares is added by ``ALTER TABLE`` with the same
-    default the script would have given it. Checking ``PRAGMA
-    table_info`` first keeps the common path (fresh file, column
-    present) a no-op, and the whole function is idempotent — two
-    processes racing to open the same old file each see the column
-    missing and each add it, and SQLite serialises the second ``ALTER``
-    into the duplicate-column error it swallows here.
-    """
+    """Apply additive columns to databases created by older releases."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
-    if "runtime" in columns:
-        return
-    try:
-        conn.execute(
-            "ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'"
-        )
-        conn.commit()
-    except sqlite3.OperationalError as exc:
-        if "duplicate column name" not in str(exc).lower():
-            raise
+    if "runtime" not in columns:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+    for table, additions in {
+        "jobs": {
+            "target_alias": "TEXT NOT NULL DEFAULT ''",
+            "target_workdir": "TEXT NOT NULL DEFAULT ''",
+            "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
+        },
+        "remote_jobs": {
+            "target_alias": "TEXT NOT NULL DEFAULT ''",
+            "target_workdir": "TEXT NOT NULL DEFAULT ''",
+            "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
+        },
+    }.items():
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(" + table + ")")}
+        for name, declaration in additions.items():
+            if name in columns:
+                continue
+            try:
+                conn.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + declaration)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+    # Row backfills belong to migrate_remote_targets; dry-run reports
+    # candidates without mutating user data.
+    conn.commit()
+
 
 
 def _create_private(path: str) -> bool:

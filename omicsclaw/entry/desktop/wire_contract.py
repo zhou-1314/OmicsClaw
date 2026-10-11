@@ -18,7 +18,8 @@ by these numbers: ``GET /skills``, ``GET /skills/{domain}/{name}``,
 ``POST /chat/title`` (whose request body carries its own
 ``schema_version``), the read-only file routes ``GET /files/tree`` and
 ``GET /files/serve``, and the remote-execution host routes
-``GET``/``POST /remote/hosts`` and ``DELETE /remote/hosts/{alias}``
+``GET``/``POST /remote/hosts`` and ``DELETE /remote/hosts/{alias}``, plus
+Backend-owned alias suggestions and read-only target file routes.
 (C1's REST face over the host knowledge base — additive, and answered
 ``503 remote_execution_disabled`` where no remote plane is bound, so a
 client gates on ``capabilities.remote_execution``).
@@ -108,14 +109,18 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/artifacts/{artifact_id}",
     "/remote/hosts",
     "/remote/hosts/{alias}",
+    "/remote/hosts/aliases",
+    "/remote/hosts/{alias}/files/tree",
+    "/remote/hosts/{alias}/files/serve",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``
 and ``/providers`` answer ``GET`` and ``PUT``; ``/env/doctor``,
 ``/skills``, ``/skills/{domain}/{name}``, ``/mcp/servers``,
 ``/files/tree`` and ``/files/serve`` answer ``GET``; ``/health`` answers
-``GET`` and ``HEAD``; ``/remote/hosts/{alias}`` answers ``DELETE``; the
-rest answer ``POST``."""
+``GET`` and ``HEAD``; ``/remote/hosts/{alias}`` answers ``DELETE``;
+``/remote/hosts/aliases`` and the two ``/remote/hosts/{alias}/files/*``
+routes answer ``GET``; the rest answer ``POST``."""
 
 
 def desktop_chat_contract(

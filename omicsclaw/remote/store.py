@@ -82,6 +82,9 @@ class RemoteJobRow:
     last_seen: float | None
     status: str
     local_job_id: str = ""
+    target_alias: str = ""
+    target_workdir: str = ""
+    capabilities: tuple[str, ...] = ()
 
     def handle(self) -> RemoteJobHandle:
         return RemoteJobHandle(
@@ -92,6 +95,9 @@ class RemoteJobRow:
             pgid=self.pgid,
             submitted_at=self.submitted_at,
             local_job_id=self.local_job_id,
+            target_alias=self.target_alias or self.host_alias,
+            target_workdir=self.target_workdir or self.workdir,
+            capabilities=self.capabilities,
         )
 
 
@@ -203,8 +209,9 @@ class RemoteJobStore:
         cursor = self._db.run(
             lambda conn: conn.execute(
                 "INSERT INTO remote_jobs (host_alias, kind, job_id, pgid,"
-                " workdir, submitted_at, last_seen, status, local_job_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " workdir, submitted_at, last_seen, status, local_job_id,"
+                " target_alias, target_workdir, capabilities_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     handle.host,
                     handle.kind,
@@ -215,6 +222,9 @@ class RemoteJobStore:
                     time.time(),
                     status,
                     handle.local_job_id,
+                    handle.target_alias or handle.host,
+                    handle.target_workdir or handle.workdir,
+                    json.dumps(list(handle.capabilities), ensure_ascii=False),
                 ),
             )
         )
@@ -227,7 +237,8 @@ class RemoteJobStore:
         rows = self._db.run(
             lambda conn: conn.execute(
                 "SELECT id, host_alias, kind, job_id, pgid, workdir,"
-                " submitted_at, last_seen, status, local_job_id"
+                " submitted_at, last_seen, status, local_job_id,"
+                " target_alias, target_workdir, capabilities_json"
                 " FROM remote_jobs WHERE id = ?",
                 (int(key),),
             ).fetchall()
@@ -238,7 +249,8 @@ class RemoteJobStore:
         rows = self._db.run(
             lambda conn: conn.execute(
                 "SELECT id, host_alias, kind, job_id, pgid, workdir,"
-                " submitted_at, last_seen, status, local_job_id"
+                " submitted_at, last_seen, status, local_job_id,"
+                " target_alias, target_workdir, capabilities_json"
                 " FROM remote_jobs WHERE local_job_id = ? ORDER BY id DESC"
                 " LIMIT 1",
                 (local_job_id,),
@@ -251,7 +263,8 @@ class RemoteJobStore:
         rows = self._db.run(
             lambda conn: conn.execute(
                 "SELECT id, host_alias, kind, job_id, pgid, workdir,"
-                " submitted_at, last_seen, status, local_job_id"
+                " submitted_at, last_seen, status, local_job_id,"
+                " target_alias, target_workdir, capabilities_json"
                 " FROM remote_jobs WHERE status IN (?, ?)"
                 " ORDER BY submitted_at",
                 IN_FLIGHT_STATES,
@@ -283,6 +296,9 @@ class RemoteJobStore:
             last_seen=row["last_seen"],
             status=row["status"],
             local_job_id=row["local_job_id"] or "",
+            target_alias=row["target_alias"] or row["host_alias"],
+            target_workdir=row["target_workdir"] or row["workdir"],
+            capabilities=tuple(json.loads(row["capabilities_json"] or "[]")),
         )
 
 

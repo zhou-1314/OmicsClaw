@@ -128,9 +128,12 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/jobs/{job_id}/approval/{call_id}",
         "/artifacts",
         "/artifacts/{artifact_id}",
-        "/remote/hosts",
-        "/remote/hosts/{alias}",
-    )
+       "/remote/hosts",
+       "/remote/hosts/{alias}",
+        "/remote/hosts/aliases",
+        "/remote/hosts/{alias}/files/tree",
+        "/remote/hosts/{alias}/files/serve",
+   )
 
 
 # ---- ``/health`` against the client's own validator ---------------------

@@ -178,6 +178,13 @@ class SessionState:
     executing: bool = False
     current_job: str = ""
     last_error: str = ""
+    target_workdir: str = ""
+    """The immutable remote target work directory bound to this state.
+
+    A remote session may be resumed after the kernel dies, but it must keep
+    the work directory captured by the job snapshot.  An empty value means
+    this state predates the snapshot seam and has not been bound yet.
+    """
     resetting: bool = False
     """Set while a cancel is killing this kernel (tier 3): the execute
     in flight must report its death instead of retrying the cell, or a
@@ -188,6 +195,7 @@ class SessionState:
             "session_id": self.session_id,
             "language": self.language,
             "location": self.location,
+            "target_workdir": self.target_workdir or None,
             "alive": bool(self.kernel is not None and self.kernel.is_alive()),
             "executing": self.executing,
             "protected": sorted(self.protected),
@@ -300,6 +308,7 @@ class PersistentKernelManager:
         adata_in: str | None = None,
         adata_binding: str = "adata",
         job_id: str = "",
+        target_workdir: str = "",
     ) -> CellResult:
         """Run *code* on *session_id*'s kernel, starting one if needed.
 
@@ -342,6 +351,25 @@ class PersistentKernelManager:
         self._ensure_reaper()
         state = self.state_for(session_id, language=language, location=location)
         async with state.lock:
+            if location != "local":
+                candidate_workdir = str(target_workdir or "").strip()
+                if state.target_workdir:
+                    if not candidate_workdir:
+                        raise ValueError(
+                            "remote kernel target snapshot is missing its workdir"
+                        )
+                    if candidate_workdir != state.target_workdir:
+                        raise ValueError(
+                            "remote kernel target workdir differs from the "
+                            "session snapshot"
+                        )
+                elif state.kernel is not None and candidate_workdir:
+                    raise ValueError(
+                        "remote kernel target workdir cannot change after "
+                        "the session kernel has started"
+                    )
+                elif candidate_workdir:
+                    state.target_workdir = candidate_workdir
             state.executing = True
             state.protected.add("executing")
             state.current_job = str(job_id)
@@ -367,7 +395,9 @@ class PersistentKernelManager:
                             reason="the previous kernel died before this cell",
                         )
                     if state.kernel is None:
-                        await self._start_locked(state)
+                        await self._start_locked(
+                            state, target_workdir=state.target_workdir
+                        )
                     if state.obituary_pending:
                         notice = state.obituary
                         state.obituary_pending = False
@@ -476,7 +506,7 @@ class PersistentKernelManager:
             _log.info("session %s marked for kernel restart: %s", state.session_id,
                       state.restart_needed)
 
-    async def _start_locked(self, state: SessionState) -> None:
+    async def _start_locked(self, state: SessionState, *, target_workdir: str = "") -> None:
         def _on_figure(path: Path, mime: str) -> tuple[str, str]:
             artifact_id = ""
             if self._on_figure is not None:
@@ -496,13 +526,17 @@ class PersistentKernelManager:
             # the environment, the launch, the tunnel, the attach — and
             # raises on a host that refuses; a refusal here is a failed
             # cell, never a quiet fallback to a local kernel.
+            start_kwargs = {
+                "host": state.location[len("remote:"):],
+                "workspace": self.workspace,
+                "limits": self.limits,
+                "on_figure": _on_figure,
+                "language": state.language,
+            }
+            if target_workdir:
+                start_kwargs["target_workdir"] = target_workdir
             kernel = await self.remote_runtime.start(
-                state.session_id,
-                host=state.location[len("remote:"):],
-                workspace=self.workspace,
-                limits=self.limits,
-                on_figure=_on_figure,
-                language=state.language,
+                state.session_id, **start_kwargs
             )
         else:
             kernel = SessionKernel(

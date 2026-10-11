@@ -966,9 +966,12 @@ def test_health_advertises_optional_capabilities_without_changing_v3(tmp_path):
         'files_serve': True,
         'artifacts': True,
         'kernel': True,
-        'kernel_r': r_available(),
-        'remote_execution': False,
-    }
+       'kernel_r': r_available(),
+       'remote_execution': False,
+        'remote_execution_aliases': False,
+        'remote_execution_files': False,
+        'remote_execution_files_transport': 'sftp-readonly',
+   }
     assert payload['contracts']['desktop_chat']['request_schema_version'] == 3
     assert payload['contracts']['desktop_chat']['sse_schema_version'] == 3
     assert 'commit' in payload['build']

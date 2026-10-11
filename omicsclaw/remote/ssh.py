@@ -241,6 +241,16 @@ def build_sftp_batch(
     return "\n".join(lines) + "\n"
 
 
+def build_sftp_read_batch(commands: list[str]) -> str:
+    """Build a read-only SFTP batch from already quoted commands.
+
+    The file browser uses SFTP's ``realpath``, ``ls`` and ``get`` commands.
+    Keeping this separate from :func:`build_sftp_batch` makes it impossible
+    for a read request to accidentally gain a ``put`` operation.
+    """
+    return "\n".join([*commands, "exit"]) + "\n"
+
+
 def encode_login_script(script: str) -> str:
     """Wrap *script* so a login shell on the far end runs it verbatim.
 
@@ -383,6 +393,7 @@ __all__ = [
     "SystemSshSpawner",
     "build_sftp_argv",
     "build_sftp_batch",
+    "build_sftp_read_batch",
     "build_ssh_argv",
     "encode_login_script",
     "run_ssh",

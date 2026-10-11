@@ -37,7 +37,7 @@ from .kernel import (
     RemoteKernelRuntime,
     RemoteSessionKernel,
 )
-from .plane import RemoteExecutor, RemotePlaneBinding
+from .plane import RemoteExecutor, RemotePlaneBinding, TargetSnapshot
 from .probe import HostProbe, parse_probe_output
 from .reconcile import refresh_in_flight
 from .ssh import (
@@ -62,6 +62,7 @@ __all__ = [
     "RemoteKernelEnvError",
     "RemoteKernelRuntime",
     "RemotePlaneBinding",
+    "TargetSnapshot",
     "RemoteSessionKernel",
     "SshSpawner",
     "SystemSshSpawner",

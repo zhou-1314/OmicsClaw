@@ -11,8 +11,10 @@ production one minus the socket.
 
 from __future__ import annotations
 
+import base64
 import json
 import pathlib
+import shlex
 
 import pytest
 
@@ -24,6 +26,8 @@ from omicsclaw.entry.session import attach_sessions  # noqa: E402
 from omicsclaw.memory.database import Database  # noqa: E402
 from omicsclaw.remote.plane import RemotePlaneBinding  # noqa: E402
 from omicsclaw.remote.ssh import RemoteHostUnreachable  # noqa: E402
+from omicsclaw.tools.builtin.remote import ExecOutcome  # noqa: E402
+from omicsclaw.entry.desktop.remote_hosts import list_ssh_aliases  # noqa: E402
 
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]  # noqa: E402
     Scripted,
@@ -33,6 +37,38 @@ from tests.remote._fakes import PROBE_OK, FakeSpawner  # noqa: E402
 
 KEY = "k" * 32
 TERMINAL = ("succeeded", "failed", "canceled", "interrupted")
+
+
+class FilesSftpSpawner(FakeSpawner):
+    """Transport fake for the native SFTP file routes."""
+
+    async def spawn(self, argv, *, timeout, stdin_text=None):
+        if argv and argv[0] == "sftp":
+            batch = stdin_text or ""
+            if "realpath" in batch:
+                return ExecOutcome(output=batch.split('"', 1)[1].rsplit('"', 1)[0], exit_code=0)
+            if "ls -ldn" in batch:
+                is_file = "a.txt" in batch
+                mode = "-rw-r--r--" if is_file else "drwxr-xr-x"
+                size = "5" if is_file else "0"
+                return ExecOutcome(output=f"{mode} 1 1000 1000 {size} Jan 01 2026 /scratch/fake/a.txt\n", exit_code=0)
+            if "ls -ln" in batch:
+                return ExecOutcome(output="-rw-r--r-- 1 1000 1000 5 Jan 01 2026 a.txt\n", exit_code=0)
+            if "get --" in batch:
+                local = shlex.split(batch.splitlines()[0])[-1]
+                pathlib.Path(local).write_bytes(b"hello")
+                return ExecOutcome(output="", exit_code=0)
+        return await super().spawn(argv, timeout=timeout, stdin_text=stdin_text)
+
+
+def test_ssh_aliases_expand_nested_relative_includes_and_cycles(tmp_path):
+    ssh = tmp_path / ".ssh"
+    nested = ssh / "conf.d"
+    nested.mkdir(parents=True)
+    (ssh / "config").write_text("Include conf.d/*.conf\nHost root\n", encoding="utf-8")
+    (nested / "one.conf").write_text("Host one\nInclude two.conf\n", encoding="utf-8")
+    (nested / "two.conf").write_text("Host two\nInclude ../config\n", encoding="utf-8")
+    assert list_ssh_aliases(tmp_path) == ["one", "two", "root"]
 
 
 def _plane(
@@ -258,3 +294,24 @@ def test_health_declares_the_capability_when_a_plane_is_bound(tmp_path):
     # additive only: the routes the wire contract promised are all there
     for path in ("/remote/hosts", "/remote/hosts/{alias}"):
         assert path in payload["served_paths"]
+
+
+def test_target_file_routes_enforce_range_and_path_boundary(tmp_path):
+    spawner = FilesSftpSpawner()
+    spawner.on("base64 -d", PROBE_OK)
+    spawner.on("wc -c", "5\n")
+    spawner.on("dd if=", base64.b64encode(b"ell").decode())
+    spawner.on("find -P", "f\t5\t1.0\t/scratch/fake/a.txt\n")
+    app = _app(tmp_path, _plane(tmp_path, spawner))
+    with testclient.TestClient(create_desktop_app(app)) as client:
+        assert client.post("/remote/hosts", json={"alias": "hpc1"}).status_code == 201
+        assert client.get("/remote/hosts/hpc1/files/tree").status_code == 200
+        response = client.get(
+            "/remote/hosts/hpc1/files/serve?path=a.txt",
+            headers={"Range": "bytes=1-3"},
+        )
+        assert response.status_code == 206
+        assert response.headers["content-range"] == "bytes 1-3/5"
+        assert response.headers["accept-ranges"] == "bytes"
+        assert client.get("/remote/hosts/hpc1/files/serve?path=../secret").status_code == 409
+        assert client.get("/remote/hosts/no-such/files/tree").status_code == 404

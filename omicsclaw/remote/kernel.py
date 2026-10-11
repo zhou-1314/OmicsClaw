@@ -441,7 +441,9 @@ async def ensure_remote_kernel_env(
 # ---- the launch: command construction and parsing ----------------------------
 
 
-def build_kernel_launch_command(python: str, session_dir: str) -> str:
+def build_kernel_launch_command(
+    python: str, session_dir: str, workdir: str = ""
+) -> str:
     """The one remote command that starts a kernel and answers its ports.
 
     Shape, in order: a 700 session directory under a 077 umask; the
@@ -465,11 +467,16 @@ def build_kernel_launch_command(python: str, session_dir: str) -> str:
         'exec "$2" -m ipykernel_launcher -f "$1/kernel.json" '
         "--HistoryManager.enabled=False"
     )
+    session = _remote_path(session_dir)
+    cwd = _remote_path(workdir) if workdir else session
+    mkdir = f"mkdir -p -m 700 {session}"
+    if workdir:
+        mkdir += f" {_remote_path(workdir)}"
     return (
-        f"mkdir -p -m 700 {_remote_path(session_dir)} && "
-        f"cd {_remote_path(session_dir)} && umask 077 && "
+        mkdir + " && "
+        f"cd {cwd} && umask 077 && "
         f"(setsid nohup sh -c {shell_quote(inner)} run "
-        f"{_remote_path(session_dir)} {_remote_path(python)} "
+        f"{session} {_remote_path(python)} "
         "> kernel.log 2>&1 < /dev/null &) && "
         "for i in $(seq 1 300); do [ -s kernel.json ] && break;"
         " sleep 0.2; done; "
@@ -736,6 +743,7 @@ class RemoteSessionKernel(SessionKernel):
         startup_timeout: float = 120.0,
         language: str = "python",
         sessions_dir: str = DEFAULT_SESSIONS_DIR,
+        target_workdir: str = "",
         tunnel_factory: Callable[[list[str]], Any] | None = None,
         attach: Callable[[str, float], tuple[Any, Any]] | None = None,
         port_open: Callable[[int], bool] | None = None,
@@ -754,6 +762,7 @@ class RemoteSessionKernel(SessionKernel):
         self.session_dir = ""
         self._driver = driver
         self._sessions_dir = sessions_dir.rstrip("/")
+        self._target_workdir = str(target_workdir or "").strip()
         self._tunnel_factory = tunnel_factory or _spawn_tunnel
         self._attach = attach or _attach_via_jupyter_client
         self._port_open = port_open or _tcp_port_open
@@ -777,7 +786,9 @@ class RemoteSessionKernel(SessionKernel):
             raise RuntimeError("kernel already started")
         session_dir = f"{self._sessions_dir}/{_session_slug(self.session_id)}"
         outcome = self._driver(
-            build_kernel_launch_command(self.python, session_dir),
+            build_kernel_launch_command(
+                self.python, session_dir, self._target_workdir
+            ),
             timeout=REMOTE_LAUNCH_TIMEOUT_S,
         )
         if outcome.exit_code != 0:
@@ -1235,6 +1246,7 @@ class RemoteKernelRuntime:
         on_figure: Callable[[Path, str], tuple[str, str]] | None = None,
         language: str = "python",
         startup_timeout: float | None = None,
+        target_workdir: str = "",
     ) -> RemoteSessionKernel:
         """Ensure the environment, launch the kernel, attach — the
         manager's one call. Raises whatever the environment or the
@@ -1258,6 +1270,7 @@ class RemoteKernelRuntime:
             startup_timeout=startup_timeout or self._startup_timeout_s,
             language=language,
             sessions_dir=self._sessions_dir,
+            target_workdir=target_workdir,
         )
         await asyncio.to_thread(kernel.start)
         return kernel

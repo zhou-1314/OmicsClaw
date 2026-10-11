@@ -402,6 +402,12 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
             # ``kernel_r`` is, and additive in the health payload the same
             # way: a client that does not know the key ignores it.
             "remote_execution": getattr(app, "remote", None) is not None,
+            "remote_execution_aliases": getattr(app, "remote", None) is not None,
+            "remote_execution_files": getattr(app, "remote", None) is not None,
+            # Read-only target files use the probe's POSIX shell transport;
+            # a host whose probe is incomplete answers remote_files_unsupported
+            # instead of silently assuming GNU utilities or SFTP semantics.
+            "remote_execution_files_transport": "sftp-readonly",
         },
         "build": dict(build_identity()),
         "provider": app.provider.name,
