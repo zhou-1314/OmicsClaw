@@ -263,6 +263,7 @@ import sys
 import tempfile
 
 from omicsclaw.skills import (
+    SkillDiscovery,
     SkillIndex,
     SkillNotFound,
     load_skills,
@@ -271,7 +272,7 @@ from omicsclaw.skills import (
     use_skill_tool,
 )
 from omicsclaw.tools import ToolRegistry
-from omicsclaw.schema import ToolCall
+from omicsclaw.schema import Message, Role, ToolCall, ToolDefinition
 
 
 def tree(root):
@@ -313,6 +314,14 @@ async def main():
             raise AssertionError("an unknown skill loaded")
 
         assert parse_frontmatter("no header").body == "no header"
+
+        discovery = SkillDiscovery(index)
+        block = await discovery.augment(
+            [Message(role=Role.USER,
+                     content="analyze the spatial slide against the singlecell reference")],
+            (ToolDefinition(name="use_skill", description="", input_schema={}),),
+        )
+        assert any("spatial-de" in m.content for m in block), block
 
         registry = ToolRegistry()
         registry.register(use_skill_tool(index))
@@ -366,11 +375,13 @@ def test_the_public_surface_is_deliberate():
     import omicsclaw.skills as skills
 
     assert skills.__all__ == [
+        "DEFAULT_SKILL_DISCOVERY_TOP_K",
         "Frontmatter",
         "SEARCH_SKILL_SCHEMA",
         "SEARCH_SKILL_TOOL_NAME",
         "SKILL_FILENAME",
         "Skill",
+        "SkillDiscovery",
         "SkillIndex",
         "SkillLoadError",
         "SkillNotFound",

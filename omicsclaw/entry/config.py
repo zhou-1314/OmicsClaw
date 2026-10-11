@@ -72,6 +72,7 @@ from omicsclaw.context import DEFAULT_MEMORY_NUDGE_TURNS, Pressure
 from omicsclaw.engine import EngineConfig
 from omicsclaw.permission import PermissionMode
 from omicsclaw.planning import DEFAULT_GATE_TURNS
+from omicsclaw.skills import DEFAULT_SKILL_DISCOVERY_TOP_K
 from omicsclaw.sandbox import SandboxConfig, host_user
 from omicsclaw.tools.builtin.bash import ENGINE_TIMEOUT_MARGIN
 
@@ -252,6 +253,26 @@ class AppConfig:
     skills_index: SkillsIndex = SkillsIndex.FULL
     """Which rendering of the catalogue goes into the system prompt, and
     whether ``use_skill`` is mounted at all. See :class:`SkillsIndex`."""
+
+    skills_discovery: bool = True
+    """Whether each turn appends a discovery block of the skills its
+    request probably wants.
+
+    One switch with one meaning, following ``planning``: it mounts or
+    unmounts the :class:`~omicsclaw.skills.discovery.SkillDiscovery`
+    augmentor and nothing else — the per-turn block is the only
+    behaviour it owns, so ``false`` restores the pre-discovery
+    deployment exactly, whatever :attr:`skills_index` is set to.
+    Has no effect with ``skills_index=off``: there is no index to
+    retrieve over and no tool to load a hit with."""
+
+    skills_discovery_top_k: int = DEFAULT_SKILL_DISCOVERY_TOP_K
+    """The ceiling on hits in one discovery block.
+
+    The block's own score cutoff may leave slots empty — filling them
+    with dubious matches is what the cutoff exists to prevent. ``0`` or
+    less disables the block, which is what a reader expects a zero
+    ceiling to mean rather than an error at request time."""
 
     planning: bool = True
     """Whether the agent keeps an execution plan (plan 0039).
@@ -923,6 +944,18 @@ _OPTIONS: tuple[_Option, ...] = (
         "--skills-index",
         ("OMICSCLAW_SKILLS_INDEX",),
         _as_skills_index,
+    ),
+    _Option(
+        "skills_discovery",
+        "--skills-discovery",
+        ("OMICSCLAW_SKILLS_DISCOVERY",),
+        _as_bool,
+    ),
+    _Option(
+        "skills_discovery_top_k",
+        "--skills-discovery-top-k",
+        ("OMICSCLAW_SKILLS_DISCOVERY_TOP_K",),
+        _as_int,
     ),
     _Option(
         "launch_id",

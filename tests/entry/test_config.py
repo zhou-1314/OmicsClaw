@@ -420,3 +420,21 @@ def test_the_deployment_reader_takes_both_sources_as_arguments():
     assert signature.parameters["env"].default is inspect.Parameter.empty
     with pytest.raises(TypeError):
         resolve_app_config()  # type: ignore[call-arg]
+
+
+def test_the_discovery_switches_are_readable_from_both_sources():
+    config = resolve_app_config(
+        argv=["--skills-discovery-top-k", "5"],
+        env={"OMICSCLAW_SKILLS_DISCOVERY": "false"},
+    )
+
+    assert config.skills_discovery is False
+    assert config.skills_discovery_top_k == 5
+
+
+def test_a_non_integer_discovery_ceiling_is_refused_by_name():
+    with pytest.raises(AppConfigError) as caught:
+        resolve_app_config(argv=[], env={"OMICSCLAW_SKILLS_DISCOVERY_TOP_K": "three"})
+
+    assert "OMICSCLAW_SKILLS_DISCOVERY_TOP_K" in str(caught.value)
+    assert "not an integer" in str(caught.value)

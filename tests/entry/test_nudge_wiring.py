@@ -33,6 +33,7 @@ from omicsclaw.schema import (
     ToolCall,
     ToolDefinition,
 )
+from omicsclaw.skills import SkillDiscovery
 from omicsclaw.subagent import TASK_TOOL_NAME
 
 WAIT_S = 20.0
@@ -467,3 +468,83 @@ def test_the_interval_is_readable_from_the_environment(tmp_path):
     )
 
     assert config.memory_nudge_turns == 0
+
+
+# ---- the skill discovery block --------------------------------------------
+
+
+def _skills_tree(tmp_path):
+    (tmp_path / "skills" / "spatial" / "spatial-de").mkdir(parents=True)
+    (tmp_path / "skills" / "spatial" / "spatial-de" / "SKILL.md").write_text(
+        "---\nname: spatial-de\ndescription: spatial differentially expressed genes\n---\n",
+        encoding="utf-8",
+    )
+
+
+def test_discovery_sits_between_the_reminder_and_the_plan(tmp_path, monkeypatch):
+    """Memory first, discovery after it, the plan last: the block the model
+    reads last is the plan, and the discovery block is advice, not state."""
+    _skills_tree(tmp_path)
+    provider = _ScriptedProvider()
+    app = _app_with(tmp_path, monkeypatch, provider)
+    injector = _Member("the plan")
+    monkeypatch.setattr(nudges, "build_injector", lambda app, *, session_id="": injector)
+
+    augmentor = build_augmentor(app, session_id="sess-1")
+
+    assert isinstance(augmentor, AugmentorChain)
+    first, second, third = augmentor._members
+    assert isinstance(first, MemoryNudge)
+    assert isinstance(second, SkillDiscovery)
+    assert third is injector
+
+
+def test_discovery_is_off_with_the_switch(tmp_path, monkeypatch):
+    _skills_tree(tmp_path)
+    app = _app_with(tmp_path, monkeypatch, _ScriptedProvider(), skills_discovery=False)
+
+    members = build_augmentor(app, session_id="s")._members
+
+    assert not any(isinstance(member, SkillDiscovery) for member in members)
+
+
+def test_discovery_is_off_without_an_index(tmp_path, monkeypatch):
+    """The default workspace has no skills directory; it gets no block."""
+    app = _app_with(tmp_path, monkeypatch, _ScriptedProvider())
+
+    members = build_augmentor(app, session_id="s")._members
+
+    assert not any(isinstance(member, SkillDiscovery) for member in members)
+
+
+def test_discovery_reads_its_ceiling_from_the_config(tmp_path, monkeypatch):
+    _skills_tree(tmp_path)
+    app = _app_with(tmp_path, monkeypatch, _ScriptedProvider(), skills_discovery_top_k=1)
+
+    (discovery,) = [
+        member
+        for member in build_augmentor(app, session_id="s")._members
+        if isinstance(member, SkillDiscovery)
+    ]
+
+    block = _run(
+        discovery.augment(
+            (
+                Message(
+                    role=Role.USER,
+                    content="find differentially expressed genes in the tissue",
+                ),
+            ),
+            (ToolDefinition("use_skill", "load a skill", {"type": "object"}),),
+        )
+    )
+
+    lines = [line for line in block[0].content.splitlines() if line.startswith("- ")]
+    assert len(lines) == 1
+
+
+def test_the_discovery_switches_default_on_and_three(tmp_path):
+    config = AppConfig(workspace=tmp_path)
+
+    assert config.skills_discovery is True
+    assert config.skills_discovery_top_k == 3

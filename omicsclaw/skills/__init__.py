@@ -41,6 +41,12 @@ a subprocess and inspecting what was actually imported.
 
 from __future__ import annotations
 
+from .discovery import (
+    DEFAULT_SKILL_DISCOVERY_TOP_K,
+    SKILL_DISCOVERY_MIN_SCORE,
+    SPAN_SKILL_DISCOVERY,
+    SkillDiscovery,
+)
 from .frontmatter import Frontmatter, parse_frontmatter
 from .index import SkillIndex, SkillNotFound, SkipReason, SkippedSkill
 from .loader import SKILL_FILENAME, SkillLoadError, load_skills
@@ -49,11 +55,13 @@ from .search_skill import SEARCH_SKILL_SCHEMA, SEARCH_SKILL_TOOL_NAME, search_sk
 from .use_skill import USE_SKILL_SCHEMA, USE_SKILL_TOOL_NAME, use_skill_tool
 
 __all__ = [
+    "DEFAULT_SKILL_DISCOVERY_TOP_K",
     "Frontmatter",
     "SEARCH_SKILL_SCHEMA",
     "SEARCH_SKILL_TOOL_NAME",
     "SKILL_FILENAME",
     "Skill",
+    "SkillDiscovery",
     "SkillIndex",
     "SkillLoadError",
     "SkillNotFound",

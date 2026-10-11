@@ -584,8 +584,8 @@ oc cli --session <id>           # continue a stored conversation
 ```
 
 `oc cli --help` lists the REPL's own flags. The deployment flags (provider,
-model, workspace, `--permission-mode`, `--skills-index`, `--memory`,
-`--subagents`, `--ask-user`) are read by `omicsclaw.entry.resolve_app_config`;
+model, workspace, `--permission-mode`, `--skills-index`, `--skills-discovery`,
+`--memory`, `--subagents`, `--ask-user`) are read by `omicsclaw.entry.resolve_app_config`;
 run it with an unknown one to see the list it refuses.
 
 The `ask_user` tool lets the agent stop and put one question to the person.
