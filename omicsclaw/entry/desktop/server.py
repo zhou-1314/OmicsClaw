@@ -68,7 +68,7 @@ from pathlib import Path
 from typing import Any, Final, Mapping
 
 from omicsclaw.entry.assembly import AgentApp
-from omicsclaw.entry.events import TurnEventType
+from omicsclaw.entry.events import TurnEvent, TurnEventType
 from omicsclaw.entry.ingress import SenderPolicy
 from omicsclaw.entry.session import (
     QueueFull,
@@ -108,6 +108,7 @@ from .title import generate_title
 from .turn_observation import KEEPALIVE_INTERVAL_S, DesktopChatSSEBody
 from .turn_submission import (
     DEFAULT_MAX_REQUEST_BYTES,
+    HANDOFF_SESSION_ID,
     DesktopIngressError,
     decode_chat_stream_request,
     parse_chat_stream_document,
@@ -284,6 +285,7 @@ async def open_chat_stream(
     interactions.remember_request(
         handle.session_id, request.source_request_id, handle.turn_id
     )
+    _maybe_fire_shadow_review(app, registry, handle.session_id)
     return ChatStream(
         turn_id=handle.turn_id,
         session_id=handle.session_id,
@@ -292,6 +294,39 @@ async def open_chat_stream(
             app, handle, after_seq, keepalive_s, interactions, epoch
         ),
     )
+
+
+def _maybe_fire_shadow_review(
+    app: AgentApp, registry: SessionRegistry, session_id: str
+) -> None:
+    """Evaluate the shadow-review checkpoint and fire it, if crossed.
+
+    Runs after the exchange exists, so the verdict's notice frame has a
+    live stream to land in; the review itself is a background task and
+    can never hold up the turn that just started.
+    """
+    reviewer = app.shadow_review
+    if reviewer is None:
+        return
+    records = reviewer.evaluate(session_id)
+    if not records:
+        return
+    session = registry.session(session_id)
+    history = session.history if session is not None else ()
+
+    def publish(verdict: Any) -> None:
+        event = TurnEvent.shadow_review_verdict(
+            verdict.verdict, verdict.note, session_id=session_id
+        )
+        for handle in registry.running():
+            if handle.session_id == session_id:
+                # The stream seals at EXCHANGE_END and ignores late
+                # frames, so a verdict that arrives after the exchange
+                # is a silent no-op here — the note still rides the
+                # next turn through the nudge.
+                handle.stream.publish(event)
+
+    reviewer.fire(session_id, records, history=history, publisher=publish)
 
 
 def _retained_exchange(registry: SessionRegistry, turn_id: str | None) -> TurnHandle:
@@ -543,6 +578,10 @@ def create_desktop_app(
         app, remote_runtime=_remote_runtime_bridge(app)
     )
     artifacts = artifacts_store if artifacts_store is not None else jobs.artifacts
+    if app.shadow_review is not None:
+        # P6 item 4: the detector lives on the app, the store lives here.
+        # One bind, at app creation, so every route sees the same store.
+        app.shadow_review.bind_store(jobs.artifacts)
 
     def _authorized(request: Request) -> bool:
         if not bearer_token:
@@ -676,6 +715,28 @@ def create_desktop_app(
             return await change_permission_profile(app, shared, document)
         except DesktopIngressError as exc:
             return _refused(exc)
+
+    @api.get("/chat/session/{session_id}")
+    async def chat_session(request: Request, session_id: str) -> Any:
+        # P6 item 5: the App's adoption check for a handoff URL. The path
+        # segment is untrusted input — the closed charset answers 404
+        # without a store read, and a session nothing saved answers the
+        # same 404, so a deep link can never probe which ids exist.
+        if not _authorized(request):
+            return _unauthorized()
+        registry = app.sessions
+        if registry is None or not HANDOFF_SESSION_ID.fullmatch(session_id):
+            return JSONResponse({"detail": "session_not_found"}, status_code=404)
+        session = await registry.load_session(session_id)
+        if session is None:
+            return JSONResponse({"detail": "session_not_found"}, status_code=404)
+        return JSONResponse(
+            {
+                "session_id": session_id,
+                "message_count": len(session.history),
+                "updated_at": session.updated_at,
+            }
+        )
 
     @api.get("/env/doctor")
     async def env_doctor(request: Request) -> Any:

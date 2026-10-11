@@ -110,6 +110,7 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/chat/permission",
         "/chat/abort",
         "/chat/session-permission-profile",
+        "/chat/session/{session_id}",
         "/workspace",
         "/env/doctor",
         "/health",

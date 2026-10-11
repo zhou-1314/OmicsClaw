@@ -193,6 +193,9 @@ def _one_of_every_type() -> dict[TurnEventType, TurnEvent]:
             QuestionAnswer(AnswerStatus.NO_ANSWER, reason=QUESTION_TIMEOUT_REASON),
             seq=13,
         ),
+        TurnEventType.SHADOW_REVIEW: TurnEvent.shadow_review_verdict(
+            "warn", "recheck the p-value", seq=14, session_id="s", turn_id="t"
+        ),
         TurnEventType.TURN_END: _turn_end(Usage(input_tokens=10, output_tokens=4)),
         TurnEventType.GAP: TurnEvent.gap_at(8, 11, session_id="s", turn_id="t"),
         TurnEventType.EXCHANGE_END: TurnEvent.exchange_end(
@@ -656,6 +659,10 @@ def test_the_desktop_frame_names_are_the_clients_and_not_invented() -> None:
         "keep_alive",
         "done",
         "error",
+        # P6 item 4: published by this backend in sse_schema_version 3 as
+        # an additive frame (see desktop/turn_observation.py), and consumed
+        # by the App's stream switch as an unknown-type-dropped frame.
+        "shadow_review",
     }
     assert set(DESKTOP_CHAT_FRAME_TYPE) <= set(TurnEventType)
     assert set(DESKTOP_CHAT_FRAME_TYPE.values()) <= published

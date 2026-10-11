@@ -137,6 +137,14 @@ class TurnEventType(StrEnum):
     """The question was answered or declined, its deadline passed, or the
     exchange ended first."""
 
+    SHADOW_REVIEW = "shadow_review"
+    """An automatic shadow review returned a ``warn`` or ``fail``
+    verdict for this session's recent artifacts (P6 item 4). Published
+    into the running exchange's stream when one is live; the verdict's
+    note is also attached to the next turn's request. Control-class, for
+    the reason :attr:`APPROVAL_REQUIRED` gives: a consumer that missed
+    it would show a stale view of what the reviewer said."""
+
     TURN_END = "turn_end"
     """Pass-through. **One model call** finished — *N* per exchange, not
     one (Q21)."""
@@ -242,6 +250,7 @@ class TurnEvent:
         APPROVAL_SETTLED  -> request_id, decision
         QUESTION_ASKED    -> question, request_id
         QUESTION_SETTLED  -> request_id, answer
+        SHADOW_REVIEW     -> review_verdict, review_note
         TURN_END          -> engine
         GAP               -> gap
         EXCHANGE_END      -> terminal, error
@@ -328,6 +337,14 @@ class TurnEvent:
 
     answer: QuestionAnswer | None = None
     """How the question ended, on a ``QUESTION_SETTLED`` frame."""
+
+    review_verdict: str = ""
+    """``"warn"`` or ``"fail"`` on a ``SHADOW_REVIEW`` frame; empty
+    otherwise. ``pass`` is never published — quiet is the frame's absence."""
+
+    review_note: str = ""
+    """The reviewer's one-paragraph note on a ``SHADOW_REVIEW`` frame,
+    already capped by the shadow-review module."""
 
     # ---- constructors ---------------------------------------------------
     #
@@ -513,6 +530,27 @@ class TurnEvent:
             turn_id=turn_id,
             request_id=request_id,
             answer=answer,
+        )
+
+    @classmethod
+    def shadow_review_verdict(
+        cls,
+        verdict: str,
+        note: str,
+        *,
+        seq: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> TurnEvent:
+        """One ``SHADOW_REVIEW`` frame. Callers publish it only for a
+        ``warn`` or ``fail`` verdict: a pass needs no frame."""
+        return cls(
+            type=TurnEventType.SHADOW_REVIEW,
+            seq=seq,
+            session_id=session_id,
+            turn_id=turn_id,
+            review_verdict=verdict,
+            review_note=note,
         )
 
     @classmethod

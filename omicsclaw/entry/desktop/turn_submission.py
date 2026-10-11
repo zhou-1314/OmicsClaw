@@ -36,6 +36,7 @@ __all__ = [
     "DEFAULT_MAX_REQUEST_BYTES",
     "DESKTOP_PROFILE_ID",
     "DESKTOP_SURFACE",
+    "HANDOFF_SESSION_ID",
     "PERMISSION_PROFILES",
     "ChatStreamRequest",
     "DesktopIngressError",
@@ -72,6 +73,13 @@ PERMISSION_PROFILES: Final = frozenset({DEFAULT_PERMISSION_PROFILE, FULL_ACCESS}
 """The values of a session's ``permission_profile``."""
 
 _OPAQUE_ID = re.compile(r"\A(?:|[0-9a-f]{32})\Z")
+
+HANDOFF_SESSION_ID = re.compile(r"\A[0-9A-Za-z._-]{1,64}\Z")
+"""The closed charset and length cap a handoff session id must fit.
+
+``GET /chat/session/{session_id}`` treats its path segment as untrusted
+input: anything outside this pattern is answered 404 without touching
+the store, which is the same answer a session that does not exist gets."""
 r"""``source_request_id`` and ``installation_id`` are either absent or
 exactly 32 lowercase hex characters. The pattern admits the empty string
 because the field is optional at the transport layer; whether an *empty*

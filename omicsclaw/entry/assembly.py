@@ -78,7 +78,7 @@ import platform
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from collections.abc import Callable
@@ -169,6 +169,7 @@ from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
 from .config import AppConfig, SkillsIndex
+from .shadow_review import ShadowReview
 from .env_supply import EnvSupplyBinding, build_env_supply
 from .memory import (
     MemoryBinding,
@@ -1226,6 +1227,15 @@ class AgentApp:
     passed in, because a deployment that adds a tool of its own is the case
     where losing the gate would be least visible."""
 
+    shadow_review: ShadowReview | None = None
+    """The automatic reviewer (P6 item 4), or ``None`` when
+    :attr:`~omicsclaw.entry.config.AppConfig.shadow_review` is off.
+
+    Built by :func:`build_app` and carried through
+    :func:`~omicsclaw.entry.session.attach_sessions`'s ``replace``. The
+    desktop server binds the artifact store to it once the jobs manager
+    exists; every other surface leaves it unbound and untouched."""
+
     def set_permission_mode(self, mode: PermissionMode) -> PermissionMode | None:
         """Switch the gate between ``default`` and ``auto-approve``.
 
@@ -1724,7 +1734,7 @@ def build_app(
         len(gate.rules),
     )
 
-    return AgentApp(
+    app = AgentApp(
         provider=provider,
         registry=registry,
         engine=engine,
@@ -1746,6 +1756,12 @@ def build_app(
         kernels=kernels,
         env_supply=env_supply,
     )
+    if config.shadow_review:
+        # The reviewer reads the config and receives everything else as
+        # arguments, so holding the pre-attach app is deliberate:
+        # attach_sessions copies this field onto the attached instance.
+        app = replace(app, shadow_review=ShadowReview(app))
+    return app
 
 
 def _apply_bash_policy(

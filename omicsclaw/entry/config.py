@@ -287,6 +287,28 @@ class AppConfig:
     as well. ``0`` turns the reminder off. It is never given when
     :attr:`memory` is false."""
 
+    shadow_review: bool = False
+    """Whether an automatic reviewer watches artifact checkpoints (P6
+    item 4). Off by default, and the default is the whole rationale: every
+    trigger costs an extra model call and injects a note into the next
+    turn's request, so a deployment that has not asked for it keeps
+    byte-identical turns. The desktop surface evaluates checkpoints and
+    runs the reviewer; other surfaces leave the binding unused."""
+
+    shadow_review_model: str = ""
+    """The model the shadow reviewer calls; ``""`` means the main
+    model. The slot exists so a deployment can point the reviewer at a
+    small, cheap model — the reviewer prompt is bounded by construction,
+    which is what keeps a small-model slot honest without a new
+    model-limits entry."""
+
+    shadow_review_timeout_s: float = 30.0
+    """How long one shadow-review call may run before it is dropped.
+
+    The review is a background task either way; this bounds only the
+    reviewer's own model call, and an expiry is logged and skipped —
+    never raised into the main loop."""
+
     subagents: bool = True
     """Whether the agent may delegate a sub-task to a sub-agent.
 
