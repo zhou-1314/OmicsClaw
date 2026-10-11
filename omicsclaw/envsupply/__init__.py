@@ -16,6 +16,13 @@ tool's gate (chat face) and in the person who posted the
 configured mirrors — never a URL taken from a model's arguments.
 """
 
+from .micromamba import (
+    MicromambaLocation,
+    build_probe_argv as build_micromamba_probe_argv,
+    locate_micromamba,
+    parse_micromamba_version,
+    probe_micromamba,
+)
 from .pins import (
     CORE_STACK_PACKAGES,
     DEFAULT_ENV_NAME,
@@ -62,15 +69,20 @@ __all__ = [
     "EnvProbe",
     "EnvSupplyError",
     "KERNEL_BASE_PACKAGES",
+    "MicromambaLocation",
     "PROBE_SENTINEL",
     "PYTHON_VERSION",
     "UV_INSTALL_URL",
     "UV_NOT_FOUND_EXIT",
     "build_env_install_script",
+    "build_micromamba_probe_argv",
     "build_probe_argv",
     "default_probe_runner",
     "env_step_line",
     "interpreter_in_env",
+    "locate_micromamba",
+    "parse_micromamba_version",
+    "probe_micromamba",
     "manual_env_commands",
     "parse_env_step",
     "probe_interpreter",
