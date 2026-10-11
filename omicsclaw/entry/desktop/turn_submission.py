@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final, Mapping
 
 from omicsclaw.entry.ingress import InboundMessage
+from omicsclaw.entry.session import HANDOFF_SESSION_ID
 
 from .wire_contract import DESKTOP_CHAT_REQUEST_SCHEMA_VERSION
 
@@ -36,6 +37,7 @@ __all__ = [
     "DEFAULT_MAX_REQUEST_BYTES",
     "DESKTOP_PROFILE_ID",
     "DESKTOP_SURFACE",
+    "HANDOFF_SESSION_ID",
     "PERMISSION_PROFILES",
     "ChatStreamRequest",
     "DesktopIngressError",
@@ -72,6 +74,10 @@ PERMISSION_PROFILES: Final = frozenset({DEFAULT_PERMISSION_PROFILE, FULL_ACCESS}
 """The values of a session's ``permission_profile``."""
 
 _OPAQUE_ID = re.compile(r"\A(?:|[0-9a-f]{32})\Z")
+
+# HANDOFF_SESSION_ID is imported from omicsclaw.entry.session — the
+# closed charset a handoff session id must fit has one canonical
+# definition, beside the id vocabulary.
 r"""``source_request_id`` and ``installation_id`` are either absent or
 exactly 32 lowercase hex characters. The pattern admits the empty string
 because the field is optional at the transport layer; whether an *empty*

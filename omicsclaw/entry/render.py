@@ -149,6 +149,9 @@ DESKTOP_CHAT_FRAME_TYPE: Final[dict[TurnEventType, str]] = {
     TurnEventType.PROGRESS: "tool_output",
     TurnEventType.APPROVAL_REQUIRED: "permission_request",
     TurnEventType.SUGGESTIONS: "suggestions",
+    # P6 item 4: an automatic shadow-review verdict, additive like the
+    # other frames here — a client that does not know the type drops it.
+    TurnEventType.SHADOW_REVIEW: "shadow_review",
 }
 """``/chat/stream`` frame names for the types the published contract has
 one for.
@@ -605,6 +608,11 @@ def _payload(event: TurnEvent) -> dict[str, Any]:
             "request_id": event.request_id,
             "approved": decision.approved if decision is not None else None,
             "reason": decision.reason if decision is not None else "",
+        }
+    if kind is TurnEventType.SHADOW_REVIEW:
+        return {
+            "verdict": event.review_verdict,
+            "note": event.review_note,
         }
     if kind is TurnEventType.QUEUED:
         return {"ahead": event.queued_ahead}

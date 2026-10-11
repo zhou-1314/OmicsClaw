@@ -43,7 +43,13 @@ The frames of ``sse_schema_version`` 3:
   effect for this call) and the identity keys. Sent only while the
   request is outstanding; a request a session grant or ``full_access``
   answers is allowed without a card.
-* ``event_omitted`` — frames were lost to this cursor, or one frame was
+ * ``shadow_review`` — additive in ``sse_schema_version`` 3 (P6 item
+   4): an automatic reviewer's ``warn`` or ``fail`` verdict on this
+   session's recent artifacts, ``{"verdict", "note"}`` plus the
+   identity keys. Sent only while an exchange of the session is live; a
+   client that does not know the type drops it, and ``pass`` is never
+   sent — quiet is the frame's absence case exactly.
+ * ``event_omitted`` — frames were lost to this cursor, or one frame was
   too large to send. Its ``id:`` is the sequence number just before the
   first event still available, or the oversized event's own.
 * ``result`` — once, before ``done``, when the exchange converged:
@@ -246,6 +252,11 @@ def desktop_chat_frame(
         payload.pop("schema_version", None)
         payload.pop("type", None)
         return ("status", _wire_json_value(payload))
+    if kind is TurnEventType.SHADOW_REVIEW:
+        payload = to_wire(event)
+        payload.pop("schema_version", None)
+        payload.pop("type", None)
+        return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
     if kind is TurnEventType.GAP:
         oldest, latest = event.gap or (0, 0)
         return (

@@ -177,6 +177,11 @@ ADDED_SLASH_COMMANDS: list[tuple[str, str]] = [
         "Stop asking about ordinary tool calls, now and at the next start: "
         "/auto [on|off|status]",
     ),
+    (
+        "/handoff",
+        "Print the URL that hands this session to the OmicsClaw App: "
+        "/handoff [port]",
+    ),
 ]
 """Commands this build has that the ported catalogue never listed.
 

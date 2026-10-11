@@ -17,6 +17,7 @@ from omicsclaw.schema import Message, ToolDefinition
 
 from .memory import MEMORY_WRITE_TOOL_NAME
 from .planning import build_injector
+from .shadow_review import ShadowReviewNudge
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
     from .assembly import AgentApp
@@ -90,7 +91,22 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
     :returns: What the engine should consult before each model call of
         the exchange, or ``None`` when the deployment has nothing to add.
     """
-    return chain(_memory_nudge(app), build_injector(app, session_id=session_id))
+    return chain(
+        _memory_nudge(app),
+        _shadow_review_nudge(app, session_id),
+        build_injector(app, session_id=session_id),
+    )
+
+
+def _shadow_review_nudge(
+    app: "AgentApp", session_id: str
+) -> ShadowReviewNudge | None:
+    """The nudge carrying a shadow-review verdict into *session_id*'s next
+    turn, or ``None`` when shadow review is off or has nothing pending."""
+    reviewer = getattr(app, "shadow_review", None)
+    if reviewer is None:
+        return None
+    return reviewer.nudge_for(session_id)
 
 
 def _memory_nudge(app: "AgentApp") -> MemoryNudge | None:

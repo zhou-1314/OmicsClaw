@@ -150,6 +150,7 @@ from ._auto import (
     saved_cli_mode,
 )
 from ._constants import WELCOME_SLOGANS
+from ._handoff import handoff_url, parse_handoff_port
 from ._input import ChoiceSource, FreshSource, PromptSource
 from ._markdown import MarkdownStreamFormatter
 from ._reasoning import ReasoningStreamWriter
@@ -800,6 +801,9 @@ class Repl:
             return
         if name == "/auto":
             self._auto(arg)
+            return
+        if name == "/handoff":
+            self._handoff(arg)
             return
         if name == "/sessions":
             await self._sessions()
@@ -1965,6 +1969,31 @@ class Repl:
     def _live_mode_name(self) -> str:
         mode = self._live_mode()
         return mode.value if mode is not None else "ungated"
+
+    def _handoff(self, arg: str) -> None:
+        """Print the URL that hands this session to the OmicsClaw App."""
+        try:
+            url = handoff_url(
+                self.state.session_id, port=parse_handoff_port(arg)
+            )
+        except ValueError as exc:
+            self._screen.print(Text(str(exc), style="yellow"))
+            return
+        self._screen.print(
+            Text(
+                "Open this URL in the OmicsClaw App to take this session over:",
+                style="dim",
+            )
+        )
+        self._screen.print(Text(url, style="bold cyan"))
+        self._screen.print(
+            Text(
+                "The App adopts the session by id from the shared workspace "
+                f"database ({self.state.workspace_dir}/.omicsclaw/memory.db); "
+                "the port names the desktop backend's bind.",
+                style="dim",
+            )
+        )
 
     def _auto(self, argument: str) -> None:
         """Switch between asking and not asking, now and for the next start.

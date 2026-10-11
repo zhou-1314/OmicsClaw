@@ -88,6 +88,7 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/chat/permission",
     "/chat/abort",
     "/chat/session-permission-profile",
+    "/chat/session/{session_id}",
     "/workspace",
     "/env/doctor",
     "/health",
@@ -114,7 +115,8 @@ mounts, templated paths spelled as FastAPI spells them. ``/workspace``
 and ``/providers`` answer ``GET`` and ``PUT``; ``/env/doctor``,
 ``/skills``, ``/skills/{domain}/{name}``, ``/mcp/servers``,
 ``/files/tree`` and ``/files/serve`` answer ``GET``; ``/health`` answers
-``GET`` and ``HEAD``; ``/remote/hosts/{alias}`` answers ``DELETE``; the
+``GET`` and ``HEAD``; ``/remote/hosts/{alias}`` answers ``DELETE``;
+``/chat/session/{session_id}`` answers ``GET``; the
 rest answer ``POST``."""
 
 

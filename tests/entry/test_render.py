@@ -196,6 +196,9 @@ def _one_of_every_type() -> dict[TurnEventType, TurnEvent]:
         TurnEventType.SUGGESTIONS: TurnEvent.suggestions_offered(
             ("What clustering resolution?", "Show the marker heatmap?"), seq=14
         ),
+        TurnEventType.SHADOW_REVIEW: TurnEvent.shadow_review_verdict(
+            "warn", "recheck the p-value", seq=15, session_id="s", turn_id="t"
+        ),
         TurnEventType.TURN_END: _turn_end(Usage(input_tokens=10, output_tokens=4)),
         TurnEventType.GAP: TurnEvent.gap_at(8, 11, session_id="s", turn_id="t"),
         TurnEventType.EXCHANGE_END: TurnEvent.exchange_end(
@@ -665,7 +668,13 @@ def test_the_desktop_frame_names_are_the_clients_and_not_invented() -> None:
         "error",
     }
     assert set(DESKTOP_CHAT_FRAME_TYPE) <= set(TurnEventType)
-    assert set(DESKTOP_CHAT_FRAME_TYPE.values()) <= published
+    # P6 item 4: "shadow_review" is backend-internal — the frame carries
+    # an automatic reviewer's verdict and the client drops unknown types,
+    # so it is deliberately NOT in the client-literal set above. The
+    # verdict's delivery channel is the next-turn nudge; a GUI may
+    # surface the frame later, which is the moment the client literal
+    # joins this pin.
+    assert set(DESKTOP_CHAT_FRAME_TYPE.values()) - {"shadow_review"} <= published
     assert TurnEventType.EXCHANGE_END not in DESKTOP_CHAT_FRAME_TYPE
 
 

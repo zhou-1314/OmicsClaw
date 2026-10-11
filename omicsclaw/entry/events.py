@@ -149,6 +149,14 @@ class TurnEventType(StrEnum):
     shows no chips, which is cosmetic, but one that missed the *next*
     answer's chips because the event was dropped shows stale ones."""
 
+    SHADOW_REVIEW = "shadow_review"
+    """An automatic shadow review returned a ``warn`` or ``fail``
+    verdict for this session's recent artifacts (P6 item 4). Published
+    into the running exchange's stream when one is live; the verdict's
+    note is also attached to the next turn's request. Control-class, for
+    the reason :attr:`APPROVAL_REQUIRED` gives: a consumer that missed
+    it would show a stale view of what the reviewer said."""
+
     TURN_END = "turn_end"
     """Pass-through. **One model call** finished — *N* per exchange, not
     one (Q21)."""
@@ -255,6 +263,7 @@ class TurnEvent:
         QUESTION_ASKED    -> question, request_id
         QUESTION_SETTLED  -> request_id, answer
         SUGGESTIONS       -> suggestions
+        SHADOW_REVIEW     -> review_verdict, review_note
         TURN_END          -> engine
         GAP               -> gap
         EXCHANGE_END      -> terminal, error
@@ -346,6 +355,14 @@ class TurnEvent:
     """The offered follow-ups on a ``SUGGESTIONS`` frame, at most three
     (:data:`~omicsclaw.entry.suggestions.SUGGESTION_LIMIT`), already
     stripped and deduplicated by the splitter that parsed them."""
+
+    review_verdict: str = ""
+    """``"warn"`` or ``"fail"`` on a ``SHADOW_REVIEW`` frame; empty
+    otherwise. ``pass`` is never published — quiet is the frame's absence."""
+
+    review_note: str = ""
+    """The reviewer's one-paragraph note on a ``SHADOW_REVIEW`` frame,
+    already capped by the shadow-review module."""
 
     # ---- constructors ---------------------------------------------------
     #
@@ -551,6 +568,27 @@ class TurnEvent:
             session_id=session_id,
             turn_id=turn_id,
             suggestions=tuple(questions[:_SUGGESTION_LIMIT]),
+        )
+
+    @classmethod
+    def shadow_review_verdict(
+        cls,
+        verdict: str,
+        note: str,
+        *,
+        seq: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> TurnEvent:
+        """One ``SHADOW_REVIEW`` frame. Callers publish it only for a
+        ``warn`` or ``fail`` verdict: a pass needs no frame."""
+        return cls(
+            type=TurnEventType.SHADOW_REVIEW,
+            seq=seq,
+            session_id=session_id,
+            turn_id=turn_id,
+            review_verdict=verdict,
+            review_note=note,
         )
 
     @classmethod
