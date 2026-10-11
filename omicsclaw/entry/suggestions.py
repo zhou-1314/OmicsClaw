@@ -61,9 +61,11 @@ rather than be told off, because the block is a convenience and a
 correction round-trip for it costs more than a lost chip."""
 
 _BLOCK_MAX_CHARS: Final = 2000
-"""Captured-block ceiling. A model that rambles past this cannot grow an
-unbounded buffer inside the kernel; the questions are the first lines
-after the sentinel, so the tail that would be cut is junk anyway."""
+"""Captured-block ceiling; the block keeps its FIRST characters when the
+ceiling is hit, on both the incremental and the sentinel-match path. A
+model that rambles past this cannot grow an unbounded buffer inside the
+kernel, and the questions are the first lines after the sentinel — the
+tail that gets cut is junk by construction."""
 
 
 def parse_suggestion_block(block: str) -> tuple[str, ...]:
@@ -78,7 +80,15 @@ def parse_suggestion_block(block: str) -> tuple[str, ...]:
     seen: set[str] = set()
     for raw_line in block.splitlines():
         line = raw_line.strip()
-        if len(line) > 2 and line[0].isdigit() and line[1] in ".-)":
+        # The delimiter must be followed by whitespace: "1. question"
+        # strips, "3.5 Mb is a lot" does not — a decimal is prose, not
+        # a list number.
+        if (
+            len(line) > 2
+            and line[0].isdigit()
+            and line[1] in ".-)"
+            and line[2].isspace()
+        ):
             line = line[2:].strip()
         elif len(line) > 1 and line[0] in "-*" and line[1] == " ":
             line = line[2:].strip()
@@ -139,6 +149,17 @@ class SuggestionSplitter:
     which is the one whose chips a surface should show.
 
     Pure aside from its own accumulators; deterministic under test.
+
+    **Known bound, accepted**: a literal ``[[FOLLOW-UPS]]`` inside a
+    markdown code fence in the answer is still treated as the block's
+    opening line, and everything after it leaves the *displayed* text.
+    Distinguishing fenced from unfenced sentinel hits would mean
+    parsing markdown mid-stream, and the loss is bounded twice over —
+    the conversation history keeps the model's bytes verbatim, and the
+    prompt rule tells the model the marker exists only at an answer's
+    very end. Do not "fix" this by writing the sentinel into the
+    prompt-stream text: that trades a display-only tail loss for
+    corrupting the bytes caches and replays match on.
     """
 
     __slots__ = ("_block", "_carry")
@@ -157,16 +178,13 @@ class SuggestionSplitter:
         """
 
         if self._block is not None:
-            if len(self._block) < _BLOCK_MAX_CHARS:
-                self._block += delta
+            self._block = (self._block + delta)[:_BLOCK_MAX_CHARS]
             return ""
         text = self._carry + delta
         self._carry = ""
         at = text.find(FOLLOW_UP_SENTINEL)
         if at >= 0:
-            self._block = text[at + len(FOLLOW_UP_SENTINEL) :]
-            if len(self._block) > _BLOCK_MAX_CHARS:
-                self._block = self._block[-_BLOCK_MAX_CHARS:]
+            self._block = text[at + len(FOLLOW_UP_SENTINEL) :][:_BLOCK_MAX_CHARS]
             return text[:at]
         keep = _held_back_tail(text)
         self._carry = text[len(text) - keep :] if keep else ""

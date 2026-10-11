@@ -106,6 +106,26 @@ def test_split_and_strip_read_whole_text() -> None:
     assert strip_suggestions("no block") == "no block"
 
 
+def test_an_oversize_single_delta_keeps_the_leading_questions() -> None:
+    """Regression (review m2): the sentinel-match path once kept the
+    block's TAIL when one delta blew past the ceiling, so the chips came
+    out as the garbage after the questions instead of the questions."""
+    splitter = SuggestionSplitter()
+    shown = splitter.feed(
+        f"Answer.\n{FOLLOW_UP_SENTINEL}\nq1\nq2\nq3\n" + "x" * 3000
+    )
+    assert shown == "Answer.\n"
+    _, questions = splitter.close()
+    assert questions == ("q1", "q2", "q3")
+
+
+def test_a_decimal_number_is_not_a_list_number() -> None:
+    """Regression (review n6): the delimiter needs whitespace after it,
+    so "3.5 Mb is a lot" survives whole while "1. question" strips."""
+    assert parse_suggestion_block("3.5 Mb is a lot") == ("3.5 Mb is a lot",)
+    assert parse_suggestion_block("1. real question") == ("real question",)
+
+
 def test_a_runaway_block_cannot_grow_without_bound() -> None:
     splitter = SuggestionSplitter()
     splitter.feed(FOLLOW_UP_SENTINEL)
