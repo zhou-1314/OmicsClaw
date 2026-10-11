@@ -320,6 +320,206 @@
       "expected_skills": [],
       "decision": "no_skill",
       "inputs": []
+    },
+    {
+      "id": "singlecell__doublet_scrublet",
+      "domain": "singlecell",
+      "query": "Annotate putative doublets in this scRNA-seq AnnData with Scrublet before clustering.",
+      "expected_skills": [
+        "sc-doublet-detection"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/raw_counts.h5ad"
+      ]
+    },
+    {
+      "id": "singlecell__ambient_soupx",
+      "domain": "singlecell",
+      "query": "Remove ambient RNA contamination from these droplet scRNA-seq counts with SoupX.",
+      "expected_skills": [
+        "sc-ambient-removal"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/raw_counts.h5ad"
+      ]
+    },
+    {
+      "id": "singlecell__pseudotime_dpt",
+      "domain": "singlecell",
+      "query": "Order these cells along a developmental trajectory with diffusion pseudotime.",
+      "expected_skills": [
+        "sc-pseudotime"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/normalized.h5ad"
+      ]
+    },
+    {
+      "id": "spatial__variable_genes_sparkx",
+      "domain": "spatial",
+      "query": "Rank spatially variable genes in this slide with SPARK-X and Moran's I.",
+      "expected_skills": [
+        "spatial-genes"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/spatial.h5ad"
+      ]
+    },
+    {
+      "id": "spatial__velocity_scvelo",
+      "domain": "spatial",
+      "query": "Estimate RNA velocity on this spatial AnnData with scVelo's dynamical model.",
+      "expected_skills": [
+        "spatial-velocity"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/spatial_velo.h5ad"
+      ]
+    },
+    {
+      "id": "bulkrna__combat_batches",
+      "domain": "bulkrna",
+      "query": "Correct batch effects across these two bulk RNA-seq cohorts with ComBat.",
+      "expected_skills": [
+        "bulkrna-batch-correction"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/batch_counts.csv"
+      ]
+    },
+    {
+      "id": "bulkrna__splicing_rmats",
+      "domain": "bulkrna",
+      "query": "Summarize significant differential splicing events from this rMATS output table.",
+      "expected_skills": [
+        "bulkrna-splicing"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/rmats_events.csv"
+      ]
+    },
+    {
+      "id": "genomics__phased_block_n50",
+      "domain": "genomics",
+      "query": "Summarize the phased fraction of het variants and phase-block N50 from this WhatsHap-phased VCF.",
+      "expected_skills": [
+        "genomics-phasing"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/phased.vcf"
+      ]
+    },
+    {
+      "id": "genomics__cnv_log2_segments",
+      "domain": "genomics",
+      "query": "Call copy-number segments from this bin-level log2-ratio coverage CSV.",
+      "expected_skills": [
+        "genomics-cnv-calling"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/log2_ratios.csv"
+      ]
+    },
+    {
+      "id": "proteomics__pathway_ora",
+      "domain": "proteomics",
+      "query": "Run Fisher over-representation analysis of these differential proteins against the supplied pathway list.",
+      "expected_skills": [
+        "proteomics-enrichment"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/de_proteins.csv"
+      ]
+    },
+    {
+      "id": "metabolomics__pathway_ora",
+      "domain": "metabolomics",
+      "query": "Run metabolite-name over-representation against the local pathway reference with BH-FDR.",
+      "expected_skills": [
+        "metabolomics-pathway-enrichment"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/significant_metabolites.csv"
+      ]
+    },
+    {
+      "id": "literature__doi_datasets",
+      "domain": "literature",
+      "query": "Fetch the omics datasets behind the DOI references in this paper and list them for reuse.",
+      "expected_skills": [
+        "literature"
+      ],
+      "decision": "route",
+      "inputs": [
+        "data/paper.pdf"
+      ]
+    },
+    {
+      "id": "general__ide_smalltalk",
+      "domain": "general",
+      "query": "Quick aside — do you prefer dark or light IDE themes while coding?",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
+    },
+    {
+      "id": "general__continue_previous",
+      "domain": "general",
+      "query": "Continue from where the previous step left off.",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
+    },
+    {
+      "id": "general__recolor_figure",
+      "domain": "general",
+      "query": "Recolor the volcano plot with a viridis palette and use a bigger title font.",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
+    },
+    {
+      "id": "general__csv_to_parquet",
+      "domain": "general",
+      "query": "Convert results/table.csv to parquet without changing any columns.",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
+    },
+    {
+      "id": "general__concept_fdr",
+      "domain": "general",
+      "query": "Explain the difference between a p-value and a family-wise error rate, in two sentences.",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
+    },
+    {
+      "id": "general__session_summary",
+      "domain": "general",
+      "query": "Summarize what this session has produced so far in five bullets.",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
+    },
+    {
+      "id": "general__rename_outputs",
+      "domain": "general",
+      "query": "Rename the PNGs in figures/ to lowercase with today's date as a prefix.",
+      "expected_skills": [],
+      "decision": "no_skill",
+      "inputs": []
     }
   ]
 }

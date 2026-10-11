@@ -216,7 +216,7 @@ def test_a_live_case_names_its_inputs_and_creates_them_empty(tmp_path):
 
 def test_the_seed_file_loads():
     seeds = load_seeds()
-    assert len(seeds) == 26
+    assert len(seeds) == 45
     assert all(seed.inputs for seed in seeds if seed.decision == "route")
 
 
