@@ -4,7 +4,7 @@ description: Load when detecting tissue domains / niches on a preprocessed spati
   spatial-weighted Leiden / Louvain or graph-neural backends (SpaGCN / STAGATE / GraphST). Skip
   when ranking spatially variable genes (use spatial-genes); spot-level cell-type annotation
   (use spatial-annotate).
-trigger: spatial domain, tissue region, niche, spatial niche, niche identification, niche detection, SpaGCN, STAGATE, CellCharter
+trigger: spatial domain, tissue region, niche, spatial niche, niche identification, niche detection, SpaGCN, STAGATE, CellCharter, BANKSY
 tags:
 - spatial
 - domains

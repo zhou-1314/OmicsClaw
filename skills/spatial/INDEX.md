@@ -29,7 +29,7 @@ Spatial transcriptomics for Visium/Xenium/MERFISH/Slide-seq: QC, domain detectio
 - `spatial-deconv` — Load when deconvolving spot-level cell-type proportions on a Visium-style AnnData using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram). Skip when each spot is a single cell (Xenium / MERFISH) (use spatial-annotate); tissue-domain detection (use spatial-domains).
   triggers: cell type deconvolution, spatial deconvolution, cell proportion, cell type proportion, cell2location, RCTD, DestVI, Stereoscope, Tangram, SPOTlight, CARD
 - `spatial-domains` — Load when detecting tissue domains / niches on a preprocessed spatial AnnData via spatial-weighted Leiden / Louvain or graph-neural backends (SpaGCN / STAGATE / GraphST). Skip when ranking spatially variable genes (use spatial-genes); spot-level cell-type annotation (use spatial-annotate).
-  triggers: spatial domain, tissue region, niche, spatial niche, niche identification, niche detection, SpaGCN, STAGATE, CellCharter
+  triggers: spatial domain, tissue region, niche, spatial niche, niche identification, niche detection, SpaGCN, STAGATE, CellCharter, BANKSY
 - `spatial-enrichment` — Load when running pathway or gene-set enrichment per cluster on spatial AnnData with over-representation, preranked GSEA, or ssGSEA group-mean scores. Skip when ranking spatially variable genes (use spatial-genes) or comparing conditions (use spatial-condition).
   triggers: pathway enrichment, gene set enrichment, enrichr, GSEA, ssGSEA, GO, Reactome, MSigDB
 - `spatial-genes` — Load when ranking spatially variable genes with Moran's I, SpatialDE, SPARK-X, or FlashS. Skip when detecting tissue domains (use spatial-domains) or differential expression between groups (use spatial-de).
