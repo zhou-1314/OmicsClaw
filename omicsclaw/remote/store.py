@@ -122,9 +122,35 @@ class RemoteHostStore:
                 (alias,),
             ).fetchall()
         )
-        if not rows:
-            return None
-        row = rows[0]
+        return self._record(rows[0]) if rows else None
+
+    def list_records(self) -> list[HostRecord]:
+        """Every host row, alias-ordered — the REST face's list view."""
+        rows = self._db.run(
+            lambda conn: conn.execute(
+                "SELECT alias, probed_json, last_probed_at, notes_json"
+                " FROM remote_hosts ORDER BY alias"
+            ).fetchall()
+        )
+        return [self._record(row) for row in rows]
+
+    def delete(self, alias: str) -> bool:
+        """Forget one host. Whether a row was actually removed.
+
+        The row-leaving call of this store, and it is this explicit one
+        only: probes overwrite, notes append, and jobs never touch host
+        rows — "removed a host" is a user action, not a doubt the store
+        resolved on its own.
+        """
+        cursor = self._db.run(
+            lambda conn: conn.execute(
+                "DELETE FROM remote_hosts WHERE alias = ?", (alias,)
+            )
+        )
+        return bool(getattr(cursor, "rowcount", 0))
+
+    @staticmethod
+    def _record(row: Any) -> HostRecord:
         return HostRecord(
             alias=row["alias"],
             probed_json=row["probed_json"],
