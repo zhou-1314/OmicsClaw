@@ -64,14 +64,18 @@ DEFAULT_SKILL_DISCOVERY_TOP_K = 3
 score cutoff below is allowed to leave slots empty, because three
 tentative guesses cost the model more attention than they repay."""
 
-SKILL_DISCOVERY_MIN_SCORE = 0.01
+SKILL_DISCOVERY_MIN_SCORE = 0.02
 """The fused score a hit must reach to be worth a line.
 
-Reciprocal-rank fusion over two rankings cannot exceed ``2/(60+1)`` by
-construction, and a document appearing once near the top of one ranking
-scores about ``0.016``; ``0.01`` is therefore "present and plausible in
-at least one ranking", below which a hit is more likely to be an
-accident of shared function words than a match."""
+The cutoff sits between the two ways a skill can appear in the fused
+score. A whole query term that matches a corpus token lands the skill
+in *both* rankings — BM25 scores it and the substring ranking sees the
+same word — which is worth at least ``1/61 + 1/(60+88) ≈ 0.023`` even
+at the extremes, and passes. A partial-word accident ("plan" inside
+"planned") lands in the substring ranking only, worth at most
+``1/61 ≈ 0.016`` even at rank one, and fails. That is the whole
+ruling: a line in the block certifies that a word of the request
+matched a word of a skill, not that some letters did."""
 
 SPAN_SKILL_DISCOVERY = "omicsclaw.skill.discovery"
 """The span an actual injection opens. Tool calls already carry their own
@@ -90,7 +94,8 @@ _DESCRIPTION_LIMIT = 300
 
 _STOPWORDS = frozenset(
     {
-        "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
+        "a", "after", "an", "and", "are", "as", "at", "be", "been", "before", "but", "by",
+        "during",
         "can", "could", "did", "do", "does", "for", "from", "had", "has",
         "have", "how", "i", "in", "is", "it", "its", "me", "my", "not", "please",
         "of", "on", "or", "our", "should", "that", "the", "their", "them",
