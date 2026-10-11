@@ -849,6 +849,7 @@ def to_dict(report: LiveReport) -> dict[str, Any]:
     confusion: Counter[tuple[str, str]] = Counter()
     denials: list[dict[str, Any]] = []
     totals = Counter()
+    noise = 0
     for entry in report.seeds:
         scored = len(entry.trials) - entry.errors
         bucket = domains.setdefault(entry.seed.domain, [0, 0])
@@ -857,6 +858,8 @@ def to_dict(report: LiveReport) -> dict[str, Any]:
         trials = []
         for trial in entry.trials:
             verdict = trial.verdict
+            if not entry.seed.expected_skills and verdict.chosen is not None:
+                noise += 1
             if verdict.outcome in ("wrong_skill", "no_skill_called"):
                 expected = "|".join(entry.seed.expected_skills) or "(none)"
                 confusion[(expected, verdict.chosen or "(none)")] += 1
@@ -903,6 +906,7 @@ def to_dict(report: LiveReport) -> dict[str, Any]:
         ],
         "denials": denials,
         "tokens": dict(totals),
+        "noise": noise,
     }
 
 
@@ -938,6 +942,7 @@ def markdown(report: LiveReport) -> str:
         f"- trials per seed: {meta.get('trials', '')} (with 3 trials a seed can only score 0%, 33%, 67% or 100%)",
         f"- run at {meta.get('run_at', '')}, commit `{meta.get('git_commit', '')}`",
         f"- overall pass rate: {_percent(data['pass_rate'])}",
+        f"- noise: {data.get('noise', 0)} no_skill trials loaded a skill",
         f"- tokens: input {data['tokens'].get('input_tokens', 0)}, "
         f"cache hits {data['tokens'].get('cache_read_tokens', 0)}, "
         f"output {data['tokens'].get('output_tokens', 0)}, "
@@ -1007,10 +1012,13 @@ def write_markdown(report: LiveReport, path: Path) -> None:
 
 
 def compare(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
-    """How each seed's pass rate and choices changed from *old* to *new*.
+    """How each seed's pass rate, choices and no_skill noise changed.
 
     Both are :func:`to_dict` forms. The first line warns when provider,
     model or base_url differ, since the numbers are then not comparable.
+    The noise line counts no_skill trials that loaded a skill anyway —
+    the answer may still have been right, but the catalogue was
+    consulted where it had no business being.
     """
     lines: list[str] = []
     keys = ("provider", "model", "base_url", "prompt_shape")
@@ -1022,6 +1030,13 @@ def compare(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
     if changed:
         lines.append("WARNING: different runs, not comparable: " + "; ".join(changed))
     lines.append(f"overall: {_percent(old.get('pass_rate'))} -> {_percent(new.get('pass_rate'))}")
+    old_noise = old.get('noise')
+    new_noise = new.get('noise')
+    lines.append(
+        "noise (no_skill trials that loaded a skill): "
+        f"{old_noise if old_noise is not None else 'n/a'} -> "
+        f"{new_noise if new_noise is not None else 'n/a'}"
+    )
     before = {seed["id"]: seed for seed in old["seeds"]}
     for seed in new["seeds"]:
         previous = before.pop(seed["id"], None)
