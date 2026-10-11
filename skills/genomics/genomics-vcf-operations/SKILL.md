@@ -1,14 +1,16 @@
 ---
 name: genomics-vcf-operations
-description: Load when summarising / filtering a VCF — variant classification (SNP / MNP / INS / DEL /
-  COMPLEX), Ti/Tv ratio, QUAL / DP threshold filtering, INFO-field parsing. Skip when calling variants from BAM (run an external caller first); adding functional annotations (use genomics-variant-annotation).
+description: Load for file-based operations on an existing VCF — variant classification (SNP / MNP / INS /
+  DEL / COMPLEX), QUAL / DP threshold filtering, INFO-field parsing, merging or subsetting with bcftools.
+  Skip when computing variant statistics such as the Ti/Tv ratio (use genomics-variant-calling); calling
+  variants from BAM (run an external caller first); adding functional annotations (use
+  genomics-variant-annotation).
 trigger: VCF, bcftools, variant filter, merge VCF
 tags:
 - genomics
 - vcf
 - bcftools
 - filter
-- ti-tv
 - snv
 - indel
 ---

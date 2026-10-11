@@ -19,6 +19,7 @@ from omicsclaw.skills import SkillDiscovery
 
 from .memory import MEMORY_WRITE_TOOL_NAME
 from .planning import build_injector
+from .shadow_review import ShadowReviewNudge
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
     from .assembly import AgentApp
@@ -85,6 +86,10 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
     session scratch block, then the skill discovery block, and the plan
     injector last, so the plan block stays the last thing the model
     reads. Building it restores the session's plan, as
+
+    The memory reminder comes first, the skill discovery block after it,
+    the shadow-review verdict after that, and the plan injector last, so
+    the plan block stays the last thing the model reads. Building it restores the session's plan, as
     :func:`~omicsclaw.entry.planning.build_injector` does.
 
     Sub-agent exchanges do not go through here and get no memory
@@ -101,6 +106,7 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
         _precis_block(app),
         _scratch_block(app, session_id=session_id),
         _skill_discovery(app),
+        _shadow_review_nudge(app, session_id),
         build_injector(app, session_id=session_id),
     )
 
@@ -207,6 +213,16 @@ def _scratch_block(app: "AgentApp", *, session_id: str) -> TurnAugmentor | None:
     return ScratchBlock(VolatileBlock(render=render, wrap=wrap))
 
 
+
+def _shadow_review_nudge(
+    app: "AgentApp", session_id: str
+) -> ShadowReviewNudge | None:
+    """The nudge carrying a shadow-review verdict into *session_id*'s next
+    turn, or ``None`` when shadow review is off or has nothing pending."""
+    reviewer = getattr(app, "shadow_review", None)
+    if reviewer is None:
+        return None
+    return reviewer.nudge_for(session_id)
 def _skill_discovery(app: "AgentApp") -> SkillDiscovery | None:
     """The per-turn skill discovery block for *app*, or ``None``.
 

@@ -92,13 +92,14 @@ class SkillsIndex(StrEnum):
     """How much of the skill catalogue the system prompt carries."""
 
     FULL = "full"
-    """One line per skill, descriptions included. About 8.5k tokens over
-    this repository's 96 skills, and stable enough to sit in a cached
+    """One line per skill, descriptions included. About 6.6k tokens over
+    this repository's 88 skills, and stable enough to sit in a cached
     prefix."""
 
     COMPACT = "compact"
-    """One line per domain, names only. About 600 tokens; the model
-    routes on names alone."""
+    """One line per domain, names only. About 500 tokens; the model
+    routes through the per-turn discovery block and the
+    ``search_skills`` tool."""
 
     OFF = "off"
     """No skills section, and ``use_skill`` is not mounted either. One
@@ -250,7 +251,7 @@ class AppConfig:
     an empty index rather than an error, so a workspace with no skills
     gets a prompt with no skills section."""
 
-    skills_index: SkillsIndex = SkillsIndex.FULL
+    skills_index: SkillsIndex = SkillsIndex.COMPACT
     """Which rendering of the catalogue goes into the system prompt, and
     whether ``use_skill`` is mounted at all. See :class:`SkillsIndex`."""
 
@@ -317,6 +318,28 @@ class AppConfig:
     prompt prefix, at the cost of one extra message per exchange
     boundary. Off restores the original layout: the précis returns to
     the prompt's last section and the augmentor block disappears."""
+
+    shadow_review: bool = False
+    """Whether an automatic reviewer watches artifact checkpoints (P6
+    item 4). Off by default, and the default is the whole rationale: every
+    trigger costs an extra model call and injects a note into the next
+    turn's request, so a deployment that has not asked for it keeps
+    byte-identical turns. The desktop surface evaluates checkpoints and
+    runs the reviewer; other surfaces leave the binding unused."""
+
+    shadow_review_model: str = ""
+    """The model the shadow reviewer calls; ``""`` means the main
+    model. The slot exists so a deployment can point the reviewer at a
+    small, cheap model — the reviewer prompt is bounded by construction,
+    which is what keeps a small-model slot honest without a new
+    model-limits entry."""
+
+    shadow_review_timeout_s: float = 30.0
+    """How long one shadow-review call may run before it is dropped.
+
+    The review is a background task either way; this bounds only the
+    reviewer's own model call, and an expiry is logged and skipped —
+    never raised into the main loop."""
 
     subagents: bool = True
     """Whether the agent may delegate a sub-task to a sub-agent.
@@ -1009,6 +1032,24 @@ _OPTIONS: tuple[_Option, ...] = (
         "--precis-via-augmentor",
         ("OMICSCLAW_PRECIS_VIA_AUGMENTOR",),
         _as_bool,
+    ),
+    _Option(
+        "shadow_review",
+        "--shadow-review",
+        ("OMICSCLAW_SHADOW_REVIEW",),
+        _as_bool,
+    ),
+    _Option(
+        "shadow_review_model",
+        "--shadow-review-model",
+        ("OMICSCLAW_SHADOW_REVIEW_MODEL",),
+        _as_str,
+    ),
+    _Option(
+        "shadow_review_timeout_s",
+        "--shadow-review-timeout",
+        ("OMICSCLAW_SHADOW_REVIEW_TIMEOUT_S",),
+        _as_float,
     ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
     _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),

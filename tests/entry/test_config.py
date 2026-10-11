@@ -264,6 +264,39 @@ def test_delegation_is_on_until_a_deployment_says_otherwise():
     )
 
 
+def test_shadow_review_is_reachable_from_env_and_argv():
+    """The reviewer's switch must be settable by a deployment — it is
+    off by default, and without these rows a production process could
+    never turn it on. Both spellings, because they reach different code:
+    ``--shadow-review`` goes through the argv scan and
+    ``OMICSCLAW_SHADOW_REVIEW`` through the environment one."""
+    assert _config().shadow_review is False
+    assert (
+        resolve_app_config(argv=[], env={"OMICSCLAW_SHADOW_REVIEW": "on"}).shadow_review
+        is True
+    )
+    assert resolve_app_config(argv=["--shadow-review", "true"], env={}).shadow_review is True
+    assert (
+        resolve_app_config(
+            argv=["--shadow-review", "false"], env={"OMICSCLAW_SHADOW_REVIEW": "true"}
+        ).shadow_review
+        is False
+    )
+    tuned = resolve_app_config(
+        argv=[
+            "--shadow-review",
+            "true",
+            "--shadow-review-model",
+            "claude-haiku-4-5",
+            "--shadow-review-timeout",
+            "15.0",
+        ],
+        env={},
+    )
+    assert tuned.shadow_review_model == "claude-haiku-4-5"
+    assert tuned.shadow_review_timeout_s == 15.0
+
+
 def test_a_subagents_value_that_is_not_a_boolean_is_refused():
     """``--subagents maybe`` must not resolve to the permissive default."""
     with pytest.raises(AppConfigError, match="boolean"):

@@ -18,8 +18,10 @@ deliberately not here: it would add a second model call to every turn
 of a product whose cost this module exists to lower. The blind spot is
 handled the honest way instead — a low-confidence block that says so
 and points at ``search_skills``, where the model can spend its own
-understanding of the domain — and by tags and triggers, which are the
-cheap human patch for exactly this failure.
+understanding of the domain — by tags and triggers, which are the
+cheap human patch for exactly this failure, and by the weak-term gate
+(``_WEAK_TERMS``), which keeps session-and-deliverable vocabulary from
+dressing a non-domain request up as one.
 
 **Why the engine is never imported.** :class:`SkillDiscovery` satisfies
 the engine's ``TurnAugmentor`` protocol structurally, the way
@@ -107,7 +109,68 @@ _STOPWORDS = frozenset(
 """Function words only. Domain words like ``data`` or ``analysis`` are
 deliberately absent: they are weak discriminants, but removing them
 would also remove them from the corpus side, and a query and a skill
-description sharing them is evidence, not noise."""
+description sharing them is evidence, not noise. The task-meta
+vocabulary that names the session or the deliverable is handled on the
+query side instead, by ``_WEAK_TERMS`` below: it stays in the corpus,
+where it is evidence, and leaves only the serving gate."""
+
+_WEAK_TERMS = frozenset(
+    {
+        # session / task bookkeeping
+        "continue", "previou", "step", "next", "back", "off", "left", "start",
+        "stop", "done", "finish", "work", "working", "task", "session",
+        "summary", "summarize", "bullet", "produce", "produced",
+        # request framing
+        "what", "how", "which", "why", "when", "where", "give", "show",
+        "tell", "make", "made", "use", "using", "want", "need", "would",
+        "could", "should", "please", "help", "something", "anything",
+        "like", "look", "quick", "briefly", "simple", "simply", "just",
+        "really", "maybe", "perhap", "also", "still", "then", "than",
+        "per", "via", "based", "without", "any", "between", "difference",
+        "explain", "example", "case", "way", "thing", "part", "bit", "ok",
+        "thank", "two", "three", "four", "five", "sentence", "match",
+        "some", "far", "so", "grab", "coffee", "talk", "meeting", "ide",
+        "theme", "dark", "light", "prefer", "aside", "while", "coding",
+        # workflow verbs
+        "run", "go", "going", "route", "appropriate", "appropriately",
+        "implement", "recent", "brand", "new", "read", "find", "parse",
+        "extract", "fetch", "download", "list", "check",
+        # files, formats and deliverables
+        "file", "path", "folder", "directory", "format", "convert",
+        "converting", "conversion", "rename", "renaming", "change",
+        "changing", "output",
+        "result", "table", "csv", "tsv", "parquet", "png", "jpg", "jpeg",
+        "tiff", "svg", "figure", "plot", "title", "font", "color",
+        "palette", "viridis", "recolor", "lowercase", "today", "date",
+        "prefix", "column", "row", "size", "big", "bigger", "smaller",
+        "large",
+        # generic analysis vocabulary
+        "data", "dataset", "analysi", "analyse", "analyze", "method",
+        "approach", "workflow", "pipeline", "metadata", "value", "error",
+        "rate", "family", "wise",
+    }
+)
+"""Task-meta vocabulary: words that name the session, the workspace or
+the deliverable rather than a domain.
+
+The corpus keeps these — skill descriptions are full of them, and two
+skills sharing one is evidence, not noise — but they are removed from
+the query side of the serving gate. A request built entirely of them
+("continue where we left off", "recolor the figure", "rename the
+outputs") is not a description of a domain, and a discovery block
+under it would be guesswork the model would have to argue with; one
+domain word ("leiden", "volcano", "wgcna") is enough to pass. This is
+the corpus-tuned stopword patch the lexical blind spot expects, in the
+same family as ``tags`` and ``triggers``: the list grows as the
+catalogue does, and every entry is a word a real request used to dress
+up a non-domain ask.
+
+Entries are the tokenizer's output forms — camel-split, lowercased,
+naively singularised ("analysis" arrives as ``analysi``, "datasets" as
+``dataset``) — because the gate compares them against
+:func:`tokenize` output, not against raw text.
+"""
+
 
 _WORD = re.compile(r"[A-Za-z0-9]+")
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -214,6 +277,19 @@ def tokenize(text: str) -> tuple[str, ...]:
                 continue
             words.append(word)
     return tuple(words)
+
+
+def _strong_terms(terms: Sequence[str]) -> tuple[str, ...]:
+    """*terms* minus the task-meta vocabulary of :data:`_WEAK_TERMS`.
+
+    The surviving terms are what the serving gate looks at: none left
+    means the request names no domain, and the block is withheld
+    silently — like the thin-query guard above it, silence beats a
+    block of guesses. The weak terms leave the gate only, never the
+    ranking, where they still help order the skills a strong term
+    matched.
+    """
+    return tuple(term for term in terms if term not in _WEAK_TERMS)
 
 
 def clean_query(text: str) -> str:
@@ -452,7 +528,10 @@ class SkillDiscovery:
         message, or when the last user message is too thin to retrieve
         with — "continue" is a request to keep going, not a description
         of a domain, and a block of guesses under it is noise the model
-        would have to argue with.
+        would have to argue with — or when its terms are all task-meta
+        words: "rename the output files" is about the workspace, not
+        about metabolomics, and the weak-term gate withholds it the
+        same way.
 
         :param history: The conversation this call will be sent, after
             compaction.
@@ -470,6 +549,8 @@ class SkillDiscovery:
             return ()
         terms = tokenize(clean_query(request))
         if len(terms) < 2:
+            return ()
+        if not _strong_terms(terms):
             return ()
 
         loaded = _loaded_names(history, self._use_skill_tool)

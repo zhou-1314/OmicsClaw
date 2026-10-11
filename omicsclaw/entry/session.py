@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import re
 import time
 import uuid
 from collections import OrderedDict, deque
@@ -117,6 +118,18 @@ def new_turn_id() -> str:
     exchanges.
     """
     return uuid.uuid4().hex
+
+
+HANDOFF_SESSION_ID = re.compile(r"\A[0-9A-Za-z._-]{1,64}\Z")
+"""The closed charset and length cap a handoff session id must fit.
+
+P6 item 5: one definition, both consumers import it — the CLI's
+``/handoff`` URL builder (``omicsclaw/entry/cli/_handoff.py``) and the
+desktop's ``GET /chat/session/{session_id}`` route, which treats its
+path segment as untrusted input and answers 404 outside this pattern.
+The OmicsClaw-App repo keeps its own copy of the same pattern in
+``src/lib/deep-link.ts`` (``HANDOFF_SESSION_ID_PATTERN``); the repos
+cannot import each other, so the copies must be edited together."""
 
 
 @dataclass(slots=True)

@@ -40,7 +40,7 @@ import itertools
 import logging
 from collections import Counter
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import (
     AsyncIterator,
     Callable,
@@ -65,6 +65,7 @@ from omicsclaw.context import (
 from omicsclaw.engine import (
     EngineError,
     EngineEvent,
+    EngineEventType,
     RunResult,
     StopReason,
     TurnAugmentor,
@@ -87,6 +88,7 @@ from .nudges import build_augmentor
 from .question import QuestionBroker
 from .stream import DEFAULT_RING_SIZE, TurnObservation, TurnStream
 from .subagent import DelegatedUsage
+from .suggestions import SuggestionSplitter, strip_suggestions
 
 __all__ = [
     "PINNED_SYSTEM_MESSAGES",
@@ -380,7 +382,13 @@ def _outcome(result: RunResult, exchange: _Exchange) -> TurnOutcome:
         result=result,
         history=exchange.conversation.carried,
         prompt=cast(AssembledPrompt, result.prompt),
-        reply=_reply(result.messages, exchange.conversation.history),
+        # Display text, unlike RunResult.messages, must not carry the
+        # suggestion block: a Channel posts this string verbatim, and its
+        # users have no chips to render. History keeps the bytes the model
+        # wrote — prompt-prefix caches and replay evidence match on them.
+        reply=strip_suggestions(
+            _reply(result.messages, exchange.conversation.history)
+        ),
         state=compactor.state,
         compaction=compactor.last_record,
         compactions=compactor.records,
@@ -780,6 +788,8 @@ class TurnRunner:
             return await self._compact_only(exchange.compactor, messages, prompt)
 
         result: RunResult | None = None
+        splitter = SuggestionSplitter()
+        last_delta: EngineEvent | None = None
         async with app.telemetry.run(
             session_id=self.session_id, prompt=user_text
         ) as scope:
@@ -787,11 +797,24 @@ class TurnRunner:
                 scope.observe(event)
                 if event.result is not None:
                     result = event.result
+                if event.type is EngineEventType.TEXT_DELTA:
+                    last_delta = event
+                    visible = splitter.feed(event.delta)
+                    if not visible:
+                        continue
+                    if visible != event.delta:
+                        # The one sanctioned re-pack of a pass-through
+                        # event: `replace` keeps every field the engine's
+                        # event grows, so this cannot become the second
+                        # place events.py warns about.
+                        event = replace(event, delta=visible)
                 self._publish(
                     TurnEvent.from_engine(
                         event, session_id=self.session_id, turn_id=self.turn_id
                     )
                 )
+                if event.type is EngineEventType.TURN_END:
+                    self._publish_suggestions(splitter, last_delta)
         if result is None:  # pragma: no cover - the engine's own invariant
             raise EngineError("the engine's event stream ended without a result")
         return _outcome(result, exchange)
@@ -819,6 +842,39 @@ class TurnRunner:
             compaction=record,
             compactions=compactor.records,
         )
+
+    def _publish_suggestions(
+        self, splitter: SuggestionSplitter, last_delta: EngineEvent | None
+    ) -> None:
+        """Close one model call's suggestion block and publish what it left.
+
+        A multi-round exchange runs the splitter across every call, and
+        closes it at each ``TURN_END``: only the call whose text actually
+        ended with the block yields questions, which is the call whose
+        answer a surface has just finished showing.
+
+        The *tail* is bytes the matcher held back that never became a
+        sentinel — answer text, so it rides one final delta (rebuilt from
+        the call's last real delta, so the pass-through stays a
+        pass-through) before the questions' own event.
+        """
+        tail, questions = splitter.close()
+        if tail and last_delta is not None:
+            self._publish(
+                TurnEvent.from_engine(
+                    replace(last_delta, delta=tail),
+                    session_id=self.session_id,
+                    turn_id=self.turn_id,
+                )
+            )
+        if questions:
+            self._publish(
+                TurnEvent.suggestions_offered(
+                    questions,
+                    session_id=self.session_id,
+                    turn_id=self.turn_id,
+                )
+            )
 
     def _on_measure(self, report: BudgetReport) -> None:
         self._publish(

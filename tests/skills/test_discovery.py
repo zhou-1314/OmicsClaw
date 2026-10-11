@@ -378,3 +378,65 @@ def test_clean_query_strips_transcript_cargo():
     assert "tool_call" not in cleaned
     assert "550e8400" not in cleaned
     assert "request" in cleaned
+# ---- the weak-term gate, pinned to the real catalogue ------------------------
+
+
+def _real_index():
+    """The repository's catalogue, the corpus the weak list tunes."""
+    return load_skills(_SOURCE.parents[2] / "skills")
+
+
+def _seed_queries(*ids):
+    """The (id, query) pairs from the routing seed file, in file order."""
+    seed_file = _SOURCE.parents[2] / "tests" / "evals" / "fixtures" / "live_routing_seed.json"
+    data = json.loads(seed_file.read_text(encoding="utf-8"))
+    wanted = set(ids)
+    return tuple((c["id"], c["query"]) for c in data["cases"] if c["id"] in wanted)
+
+
+def test_a_task_meta_request_is_left_silent():
+    """The gate withholds a block when no term names a domain.
+
+    These are the real run's noise cases: before the gate every one
+    got a full block out of session-and-workspace talk, and the model
+    loaded skills off two of them. Silence is the whole point.
+    """
+    index = _real_index()
+    discovery = SkillDiscovery(index)
+    quiet = (
+        "general__continue_previous",
+        "general__csv_to_parquet",
+        "general__concept_fdr",
+        "general__session_summary",
+        "general__rename_outputs",
+        "general__ide_smalltalk",
+    )
+    for seed_id, query in _seed_queries(*quiet):
+        result = discover(discovery, [_user(query)])
+        assert result == (), f"{seed_id} should be left silent, got {result!r}"
+
+
+def test_a_domain_word_rescues_a_task_meta_request():
+    """One domain word passes the gate; the block then ranks normally.
+
+    ``volcano`` is domain vocabulary even when the ask is about a
+    figure, so this near-miss keeps its block. That is the documented
+    acceptance — the gate removes non-domain talk, not every
+    figure-recolouring ask.
+    """
+    index = _real_index()
+    discovery = SkillDiscovery(index)
+    for _seed_id, query in _seed_queries("general__recolor_figure"):
+        (block,) = discover(discovery, [_user(query)])
+        assert "bulkrna-de" in hits(block), block.content[:200]
+
+
+def test_weak_terms_leave_the_gate_but_not_the_ranking(tmp_path):
+    """A strong-plus-weak mix still ranks on every term it carries."""
+    index = build(tmp_path)
+    discovery = SkillDiscovery(index)
+    (block,) = discover(
+        discovery,
+        [_user("make a figure of the differentially expressed genes please")],
+    )
+    assert hits(block)[0] == "spatial-de"

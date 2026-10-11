@@ -89,6 +89,7 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/chat/permission",
     "/chat/abort",
     "/chat/session-permission-profile",
+    "/chat/session/{session_id}",
     "/workspace",
     "/env/doctor",
     "/health",
@@ -120,7 +121,8 @@ and ``/providers`` answer ``GET`` and ``PUT``; ``/env/doctor``,
 ``/files/tree`` and ``/files/serve`` answer ``GET``; ``/health`` answers
 ``GET`` and ``HEAD``; ``/remote/hosts/{alias}`` answers ``DELETE``;
 ``/remote/hosts/aliases`` and the two ``/remote/hosts/{alias}/files/*``
-routes answer ``GET``; the rest answer ``POST``."""
+routes answer ``GET``; ``/chat/session/{session_id}`` also answers ``GET``;
+the rest answer ``POST``."""
 
 
 def desktop_chat_contract(

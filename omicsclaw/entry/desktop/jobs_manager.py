@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from omicsclaw.entry.render import HUMAN_DESCRIPTION_CHARS, human_tool_description
 from omicsclaw.envsupply import parse_env_step
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.schema.env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
@@ -115,7 +116,6 @@ HEARTBEAT_INTERVAL_S: Final = 25.0
 _DATA_PARAMETER_NAMES: Final = ("adata", "data", "dataset", "input")
 _DATA_INPUT_KEYS: Final = ("adata", "data", "dataset", "input")
 _RESULT_SUMMARY_CHARS: Final = 4000
-_HUMAN_DESCRIPTION_CHARS: Final = 160
 
 
 class JobError(ValueError):
@@ -416,40 +416,9 @@ def _row_to_record(row: Any) -> JobRecord:
 
 # ---- the vocabulary helpers ------------------------------------------------
 
-
-def human_tool_description(tool: str, arguments: str = "") -> str:
-    """One plain-language line for a tool call, from its name and arguments.
-
-    The cheap half of the P1 experience win: a card that says "run
-    spatial_domains clustering (n=12)" instead of a JSON blob. Never
-    raises — an unparseable payload degrades to the tool's name.
-    """
-    label = tool.rsplit("/", 1)[-1].replace("_", " ").strip() or tool
-    try:
-        decoded = json.loads(arguments) if arguments else {}
-    except (TypeError, ValueError):
-        decoded = {}
-    if not isinstance(decoded, dict):
-        decoded = {}
-    facts: list[str] = []
-    command = decoded.get("command")
-    if isinstance(command, str) and command.strip():
-        facts.append(command.strip().splitlines()[0].strip())
-    for key in ("method", "name", "skill", "file", "path"):
-        value = decoded.get(key)
-        if isinstance(value, str) and value.strip():
-            facts.append(value.strip())
-    for key in ("n", "n_domains", "count", "resolution", "epochs"):
-        value = decoded.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            facts.append(key + "=" + str(value))
-    summary = " ".join(facts)[:_HUMAN_DESCRIPTION_CHARS]
-    verb = "run"
-    for candidate in ("delete", "remove", "write", "read"):
-        if candidate in tool.lower():
-            verb = candidate
-            break
-    return ("{verb} {label} {summary}".format(verb=verb, label=label, summary=summary)).strip()
+# human_tool_description moved up to omicsclaw.entry.render (P6 item 1
+# needed it on the chat approval frame too); imported above and kept in
+# this module's __all__ so existing importers are unaffected.
 
 
 def validate_inputs_against_schema(inputs: Any, schema: Mapping[str, Any]) -> str:
@@ -600,7 +569,7 @@ class JobApprovalGate:
                 "call_id": call_id,
                 "tool": request.tool_name,
                 "risk": str(getattr(request.risk_level, "value", request.risk_level)),
-                "summary": summary[:_HUMAN_DESCRIPTION_CHARS],
+                "summary": summary[:HUMAN_DESCRIPTION_CHARS],
                 "arguments": request.arguments,
             },
         )
@@ -685,7 +654,7 @@ class JobExecutionContext:
                 "human_description": (
                     human_description
                     or human_tool_description(tool, arguments)
-                )[:_HUMAN_DESCRIPTION_CHARS],
+                )[:HUMAN_DESCRIPTION_CHARS],
             },
         )
 

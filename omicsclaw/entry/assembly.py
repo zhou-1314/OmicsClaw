@@ -80,7 +80,7 @@ import platform
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from collections.abc import Callable
@@ -178,6 +178,7 @@ from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
 from .archive import archive_tools
 from .config import AppConfig, SkillsIndex
+from .shadow_review import ShadowReview
 from .env_supply import EnvSupplyBinding, build_env_supply
 from .memory import (
     MemoryBinding,
@@ -196,6 +197,7 @@ from .sandbox import (
     unstarted_sandbox,
 )
 from .skill_env import SkillEnvBinding, build_skill_env, log_skill_env
+from .suggestions import FOLLOW_UP_SENTINEL
 from .subagent import ChildRunner, build_subagent_registry
 
 if TYPE_CHECKING:  # pragma: no cover - session.py imports this module
@@ -206,6 +208,7 @@ __all__ = [
     "COMPACTION_CONTRACT_RULES",
     "COMPACTION_SECTION_HEADING",
     "CONTRACT_FILE",
+    "FOLLOW_UP_RULES",
     "LOGGER_NAME",
     "REMOTE_SCHEDULING_RULES",
     "SAFETY_RULES",
@@ -355,6 +358,20 @@ instructions (the untrusted-marking convention). Rendered only when the
 deployment mounts the archive tools, because two of the three sentences
 name them.
 """
+
+FOLLOW_UP_RULES = f"""\
+- You may close a substantive final answer with the line `{FOLLOW_UP_SENTINEL}` followed by exactly three short questions, one per line, that this user is most likely to ask next. Omit the whole block for tool-only turns, clarifying questions, error reports and one-word replies. Never mention the block or its marker in the answer above it, and write the questions in the user's language."""
+"""The P6 suggestion-chips rule, and the only copy of it.
+
+The sentinel is interpolated from
+:data:`~omicsclaw.entry.suggestions.FOLLOW_UP_SENTINEL` so the prompt and
+the stream splitter cannot drift apart — a marker the two disagreed
+about would either leak the raw block to users or swallow answer text.
+A static section like the safety rules, because it must survive a
+deployment with no ``OMICSCLAW.md`` beside its skill tree, and because
+the block is transport metadata rather than persona: a surface that
+does not know the frame strips nothing and a model that does not write
+the block costs nothing (the chips are optional on purpose)."""
 
 
 def build_skill_index(config: AppConfig) -> SkillIndex:
@@ -980,6 +997,11 @@ def default_sections(
         Section("safety", "## Safety rules", static(SAFETY_RULES)),
         Section("tools", "## Tool guidance", static(TOOL_GUIDANCE)),
         *compaction,
+        Section(
+            "follow-ups",
+            "## Follow-up suggestions",
+            static(FOLLOW_UP_RULES),
+        ),
         *planning,
         *execution,
         *remote_rules,
@@ -1356,6 +1378,15 @@ class AgentApp:
     :func:`build_app`, which always sets it — including for tools a caller
     passed in, because a deployment that adds a tool of its own is the case
     where losing the gate would be least visible."""
+
+    shadow_review: ShadowReview | None = None
+    """The automatic reviewer (P6 item 4), or ``None`` when
+    :attr:`~omicsclaw.entry.config.AppConfig.shadow_review` is off.
+
+    Built by :func:`build_app` and carried through
+    :func:`~omicsclaw.entry.session.attach_sessions`'s ``replace``. The
+    desktop server binds the artifact store to it once the jobs manager
+    exists; every other surface leaves it unbound and untouched."""
 
     def set_permission_mode(self, mode: PermissionMode) -> PermissionMode | None:
         """Switch the gate between ``default`` and ``auto-approve``.
@@ -1859,7 +1890,7 @@ def build_app(
         len(gate.rules),
     )
 
-    return AgentApp(
+    app = AgentApp(
         provider=provider,
         registry=registry,
         engine=engine,
@@ -1881,6 +1912,12 @@ def build_app(
         kernels=kernels,
         env_supply=env_supply,
     )
+    if config.shadow_review:
+        # The reviewer reads the config and receives everything else as
+        # arguments, so holding the pre-attach app is deliberate:
+        # attach_sessions copies this field onto the attached instance.
+        app = replace(app, shadow_review=ShadowReview(app))
+    return app
 
 
 def _apply_bash_policy(

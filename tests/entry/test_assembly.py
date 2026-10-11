@@ -431,6 +431,7 @@ def test_the_default_prompt_is_contract_then_safety_then_guidance_in_this_order(
         "contract",
         "safety",
         "tools",
+        "follow-ups",
         "planning",
         "skills",
         "environment",
@@ -445,6 +446,7 @@ def test_the_catalogue_can_be_switched_off_and_its_section_goes(tmp_path):
         "contract",
         "safety",
         "tools",
+        "follow-ups",
         "planning",
         "environment",
     )
@@ -482,6 +484,7 @@ def test_the_memory_section_leaves_with_the_precis_migration(tmp_path):
         "contract",
         "safety",
         "tools",
+        "follow-ups",
         "planning",
         "skills",
         "environment",
@@ -490,6 +493,7 @@ def test_the_memory_section_leaves_with_the_precis_migration(tmp_path):
         "contract",
         "safety",
         "tools",
+        "follow-ups",
         "planning",
         "skills",
         "environment",
@@ -592,7 +596,7 @@ def test_the_skills_index_reaches_the_system_prompt(tmp_path):
     system = build_prompt(default_sections(config)).render().system_prompt
 
     assert "## Available skills" in system
-    assert "- spatial-preprocess: Load when preprocessing." in system
+    assert "spatial (1 skills): spatial-preprocess" in system
     assert "`use_skill`" in system
 
 

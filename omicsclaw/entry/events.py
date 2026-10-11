@@ -72,6 +72,10 @@ from omicsclaw.tools.context import (
     QuestionRequest,
 )
 
+# Imported for the cap only, not re-exported: the limit belongs to the
+# suggestions module and this class enforces rather than defines it.
+from omicsclaw.entry.suggestions import SUGGESTION_LIMIT as _SUGGESTION_LIMIT
+
 
 class TurnEventType(StrEnum):
     """Kind of payload in one :class:`TurnEvent`.
@@ -136,6 +140,22 @@ class TurnEventType(StrEnum):
     QUESTION_SETTLED = "question_settled"
     """The question was answered or declined, its deadline passed, or the
     exchange ended first."""
+
+    SUGGESTIONS = "suggestions"
+    """Follow-up questions the model offered with a finished answer (P6
+    item 2). Carries zero or more one-line questions; never published
+    when the answer carried no suggestion block. Control-class, for the
+    reason :attr:`APPROVAL_REQUIRED` gives: a consumer that missed it
+    shows no chips, which is cosmetic, but one that missed the *next*
+    answer's chips because the event was dropped shows stale ones."""
+
+    SHADOW_REVIEW = "shadow_review"
+    """An automatic shadow review returned a ``warn`` or ``fail``
+    verdict for this session's recent artifacts (P6 item 4). Published
+    into the running exchange's stream when one is live; the verdict's
+    note is also attached to the next turn's request. Control-class, for
+    the reason :attr:`APPROVAL_REQUIRED` gives: a consumer that missed
+    it would show a stale view of what the reviewer said."""
 
     TURN_END = "turn_end"
     """Pass-through. **One model call** finished — *N* per exchange, not
@@ -242,6 +262,8 @@ class TurnEvent:
         APPROVAL_SETTLED  -> request_id, decision
         QUESTION_ASKED    -> question, request_id
         QUESTION_SETTLED  -> request_id, answer
+        SUGGESTIONS       -> suggestions
+        SHADOW_REVIEW     -> review_verdict, review_note
         TURN_END          -> engine
         GAP               -> gap
         EXCHANGE_END      -> terminal, error
@@ -328,6 +350,19 @@ class TurnEvent:
 
     answer: QuestionAnswer | None = None
     """How the question ended, on a ``QUESTION_SETTLED`` frame."""
+
+    suggestions: tuple[str, ...] = ()
+    """The offered follow-ups on a ``SUGGESTIONS`` frame, at most three
+    (:data:`~omicsclaw.entry.suggestions.SUGGESTION_LIMIT`), already
+    stripped and deduplicated by the splitter that parsed them."""
+
+    review_verdict: str = ""
+    """``"warn"`` or ``"fail"`` on a ``SHADOW_REVIEW`` frame; empty
+    otherwise. ``pass`` is never published — quiet is the frame's absence."""
+
+    review_note: str = ""
+    """The reviewer's one-paragraph note on a ``SHADOW_REVIEW`` frame,
+    already capped by the shadow-review module."""
 
     # ---- constructors ---------------------------------------------------
     #
@@ -513,6 +548,47 @@ class TurnEvent:
             turn_id=turn_id,
             request_id=request_id,
             answer=answer,
+        )
+
+    @classmethod
+    def suggestions_offered(
+        cls,
+        questions: tuple[str, ...],
+        *,
+        seq: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> TurnEvent:
+        """One ``SUGGESTIONS`` frame. Callers publish it only with at
+        least one question: an empty block is no chips, which needs no
+        frame."""
+        return cls(
+            type=TurnEventType.SUGGESTIONS,
+            seq=seq,
+            session_id=session_id,
+            turn_id=turn_id,
+            suggestions=tuple(questions[:_SUGGESTION_LIMIT]),
+        )
+
+    @classmethod
+    def shadow_review_verdict(
+        cls,
+        verdict: str,
+        note: str,
+        *,
+        seq: int = 0,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> TurnEvent:
+        """One ``SHADOW_REVIEW`` frame. Callers publish it only for a
+        ``warn`` or ``fail`` verdict: a pass needs no frame."""
+        return cls(
+            type=TurnEventType.SHADOW_REVIEW,
+            seq=seq,
+            session_id=session_id,
+            turn_id=turn_id,
+            review_verdict=verdict,
+            review_note=note,
         )
 
     @classmethod

@@ -27,6 +27,12 @@ The frames of ``sse_schema_version`` 3:
   ``is_error``, ``elapsed_s`` (which includes any approval wait),
   ``elapsed_includes_approval_wait``, ``turn``, and the identity keys.
 * ``tool_output`` — a tool's progress message.
+* ``suggestions`` — additive in ``sse_schema_version`` 3 (P6 item 2):
+  up to three follow-up questions the model offered with the finished
+  answer, ``{"suggestions": [...]}`` plus the identity keys. Sent only
+  when the answer ended with the prompt's suggestion block; a client
+  that does not know the type drops it, which is the frame's absence
+  case exactly.
 * ``status`` — a compaction: ``kind`` is ``"compaction"``, with the
   before/after counts, ``degraded``, ``written_back`` and the identity
   keys. A ``/compact`` exchange always sends one, including when nothing
@@ -37,7 +43,13 @@ The frames of ``sse_schema_version`` 3:
   effect for this call) and the identity keys. Sent only while the
   request is outstanding; a request a session grant or ``full_access``
   answers is allowed without a card.
-* ``event_omitted`` — frames were lost to this cursor, or one frame was
+ * ``shadow_review`` — additive in ``sse_schema_version`` 3 (P6 item
+   4): an automatic reviewer's ``warn`` or ``fail`` verdict on this
+   session's recent artifacts, ``{"verdict", "note"}`` plus the
+   identity keys. Sent only while an exchange of the session is live; a
+   client that does not know the type drops it, and ``pass`` is never
+   sent — quiet is the frame's absence case exactly.
+ * ``event_omitted`` — frames were lost to this cursor, or one frame was
   too large to send. Its ``id:`` is the sequence number just before the
   first event still available, or the oversized event's own.
 * ``result`` — once, before ``done``, when the exchange converged:
@@ -186,8 +198,9 @@ def desktop_chat_frame(
 
     ``data`` is a plain string for ``text``, ``thinking`` and
     ``tool_output``, and an object for ``tool_use``, ``tool_result``,
-    ``permission_request``, ``status`` and ``event_omitted``;
-    ``_chat_sse.render_chat_sse_frame`` serialises the object and keeps the
+    ``permission_request``, ``status``, ``suggestions`` and
+    ``event_omitted``; ``_chat_sse.render_chat_sse_frame`` serialises the
+    object and keeps the
     whole frame under 4 MiB.
 
     ``TURN_END`` and ``EXCHANGE_END`` return ``None``: model-call usage is
@@ -228,12 +241,22 @@ def desktop_chat_frame(
         )
         payload["can_remember"] = can_remember
         return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
+    if kind is TurnEventType.SUGGESTIONS:
+        payload = to_wire(event)
+        payload.pop("schema_version", None)
+        payload.pop("type", None)
+        return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
     if kind is TurnEventType.COMPACTION:
         payload = to_wire(event)
         payload["kind"] = "compaction"
         payload.pop("schema_version", None)
         payload.pop("type", None)
         return ("status", _wire_json_value(payload))
+    if kind is TurnEventType.SHADOW_REVIEW:
+        payload = to_wire(event)
+        payload.pop("schema_version", None)
+        payload.pop("type", None)
+        return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
     if kind is TurnEventType.GAP:
         oldest, latest = event.gap or (0, 0)
         return (
