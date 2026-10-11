@@ -188,6 +188,25 @@ def mount_jobs_routes(
                     raise DesktopIngressError("invalid_location", status_code=422)
                 bag["location"] = location
                 inputs = bag
+            # P5's env_install folds the same way: ``{kind, env?,
+            # packages?}`` at the top level, folded into ``inputs`` for
+            # the runner. Shape-checked here; the name/package rules the
+            # runner owns, like code_run's language and location.
+            if kind == "env_install":
+                env = document.get("env", "main")
+                if env is not None and not isinstance(env, str):
+                    raise DesktopIngressError("invalid_env", status_code=422)
+                extra = document.get("packages", [])
+                if extra is None:
+                    extra = []
+                if not isinstance(extra, list) or not all(
+                    isinstance(item, str) for item in extra
+                ):
+                    raise DesktopIngressError("invalid_packages", status_code=422)
+                bag = dict(inputs) if isinstance(inputs, dict) else {}
+                bag["env"] = env
+                bag["packages"] = extra
+                inputs = bag
             record = await jobs.create_job(
                 kind=kind,
                 skill=skill or "",

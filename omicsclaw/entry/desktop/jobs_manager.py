@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from omicsclaw.envsupply import parse_env_step
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.memory.database import Database
 from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
@@ -79,6 +80,7 @@ __all__ = [
     "JOB_EVENTS_RETAINED",
     "HEARTBEAT_INTERVAL_S",
     "CodeRunRunner",
+    "EnvInstallRunner",
     "JobError",
     "JobExecutionContext",
     "JobFailure",
@@ -1140,6 +1142,108 @@ class CodeRunRunner:
 
 
 
+class EnvInstallRunner:
+    """``kind="env_install"``: provision one local Python environment.
+
+    P5's job face, riding the CodeRunRunner shape: an injected seam
+    (whatever answers the ``manage_environments`` Protocol — the
+    deployment's :class:`~omicsclaw.entry.env_supply.EnvSupplyBinding`),
+    a door-check ``validate``, and a ``__call__`` that speaks the P1
+    vocabulary with no new event types. ``tool_started`` names the
+    ``manage_environments`` surface it shares; the installer's step
+    markers (``===OMICSCLAW_ENV_STEP:<name>===``) map onto ``progress``
+    frames with honest phase-level percents — uv's own line format is
+    nobody's contract — and its raw output rides ``tool_output_chunk``
+    for the person watching the job panel.
+
+    Pre-consented by construction: a job is a thing a person started on
+    purpose, so the install runs without an approval card (the chat
+    face's ``manage_environments`` asks; this face's approval was the
+    POST). A runner with no binding behind it — the switch is off —
+    answers ``env_install_unavailable`` (409), the
+    ``remote_runtime_unavailable`` refusal copied for the local plane.
+    """
+
+    _STEP_PERCENT: Final = {"python": 20.0, "venv": 40.0, "packages": 75.0, "verify": 95.0}
+    """Phase-level percents; the phases between markers are uv's, not ours."""
+
+    def __init__(self, env_supply: Any) -> None:
+        self._supply = env_supply
+
+    def validate(self, skill: str, inputs: Any) -> None:
+        if self._supply is None:
+            raise JobError("env_install_unavailable", status_code=409)
+        env = inputs.get("env", "main") if isinstance(inputs, dict) else "main"
+        if env is None:
+            env = "main"
+        if not isinstance(env, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.-]*", env
+        ):
+            raise JobError("invalid_env")
+        packages = inputs.get("packages", []) if isinstance(inputs, dict) else []
+        if packages is None:
+            packages = []
+        if not isinstance(packages, list) or not all(
+            isinstance(item, str) for item in packages
+        ):
+            raise JobError("invalid_packages")
+        for item in packages:
+            if item and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", item.strip()):
+                raise JobError("invalid_packages")
+
+    async def __call__(self, record: JobRecord, ctx: JobExecutionContext) -> Any:
+        env = str(record.inputs.get("env") or "main")
+        packages = [
+            str(item).strip()
+            for item in record.inputs.get("packages", [])
+            if str(item).strip()
+        ]
+        ctx.tool_started(
+            "manage_environments",
+            json.dumps({"env": env, "packages": packages}, ensure_ascii=False),
+            human_description=(
+                "set up the "
+                + env
+                + " environment"
+                + (" (+" + ", ".join(packages) + ")" if packages else "")
+            ),
+        )
+        ctx.progress("provisioning the " + env + " environment", 5.0)
+
+        def on_output(line: str) -> None:
+            step = parse_env_step(line)
+            if step is not None:
+                ctx.progress(
+                    "environment " + env + ": " + step,
+                    self._STEP_PERCENT.get(step, 50.0),
+                )
+                return
+            if line.strip():
+                ctx.tool_output(line)
+
+        try:
+            report = await self._supply.install_environment(
+                env=env, packages=tuple(packages), on_output=on_output
+            )
+        except Exception as exc:  # noqa: BLE001 - EnvSupplyError is job data
+            # The binding's EnvSupplyError carries the manual commands
+            # in its message; letting it through to the manager's own
+            # failure handling puts them on the ``job.failed`` frame the
+            # person reads, which is the disclosure the remote plane set.
+            raise JobFailure(str(exc), phase="run") from exc
+        ctx.progress("environment " + env + " ready", 100.0)
+        interpreter = str(report.get("interpreter", ""))
+        ctx.tool_output(
+            "environment ready: " + interpreter + "; installed: "
+            + ", ".join(str(name) for name in report.get("packages", ()))
+        )
+        return {
+            "env": env,
+            "interpreter": interpreter,
+            "packages": list(report.get("packages", ())),
+        }
+
+
 def _summarize_result(result: Any) -> str:
     if result is None:
         return "done"
@@ -1187,6 +1291,7 @@ class JobsManager:
         max_concurrent: int = MAX_CONCURRENT_JOBS,
         remote_runtime: RemoteJobsBridge | None = None,
         kernels: Any = None,
+        env_supply: Any = None,
     ) -> None:
         self._app = app
         if store is None:
@@ -1225,6 +1330,15 @@ class JobsManager:
             "code_run",
             CodeRunRunner(kernels, artifact_store=self.artifacts),
         )
+        # P5's env_install rides the same lifecycle over the deployment's
+        # environment supply: the binding build_app mounted behind
+        # ``manage_environments`` when the switch is on, else None — and
+        # a None binding still registers, so the kind is refused with
+        # its own code (409) rather than a generic unknown_kind that
+        # would read as "this backend is old".
+        if env_supply is None:
+            env_supply = getattr(app, "env_supply", None)
+        self.register_runner("env_install", EnvInstallRunner(env_supply))
 
     # ---- construction and lookup ----
 

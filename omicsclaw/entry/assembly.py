@@ -163,11 +163,13 @@ from omicsclaw.tools import (
 )
 from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
 from omicsclaw.tools.builtin.bash import BashEnvironment
+from omicsclaw.tools.builtin.manage_env import ManageEnvironmentsTool
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
 from .config import AppConfig, SkillsIndex
+from .env_supply import EnvSupplyBinding, build_env_supply
 from .memory import (
     MemoryBinding,
     memory_section,
@@ -1201,6 +1203,14 @@ class AgentApp:
     (a cell still finishing inside the grace keeps its kernel until it
     finishes)."""
 
+    env_supply: EnvSupplyBinding | None = None
+    """P5's local environment supply, or ``None`` when the deployment
+    left :attr:`~omicsclaw.entry.config.AppConfig.env_supply` off. The
+    ``manage_environments`` tool runs over it and the desktop jobs
+    plane's ``env_install`` runner reads it back — one binding, both
+    faces, so they provision the same directories with the same
+    mirrors."""
+
     permission: PermissionGate | None = None
     """The gate in front of every tool in :attr:`registry`.
 
@@ -1558,6 +1568,10 @@ def build_app(
         if remote_plane is not None
         else None
     )
+    # P5 rides its own switch the same way C3 rode the plane's: on gets
+    # the binding (and with it the tool and the job kind), off gets the
+    # previous object graph byte for byte.
+    env_supply = build_env_supply(config) if config.env_supply else None
     try:
         # P4's kernel binding is built before the tool list so both of its
         # consumers mount the same object: the ``python`` tool below, and
@@ -1593,6 +1607,15 @@ def build_app(
                     allow_remote=remote_kernels is not None,
                 ),
             )
+            if env_supply is not None:
+                # Appended in the one slot the wiring tests allow: after
+                # the foundation set and P4's python, before nothing —
+                # a deployment without the switch sees the tool list it
+                # has always seen.
+                mounted = (
+                    *mounted,
+                    ManageEnvironmentsTool(supply=env_supply),
+                )
         else:
             mounted = tools
         if mcp is not None:
@@ -1721,6 +1744,7 @@ def build_app(
         remote=remote_plane,
         telemetry=observing,
         kernels=kernels,
+        env_supply=env_supply,
     )
 
 

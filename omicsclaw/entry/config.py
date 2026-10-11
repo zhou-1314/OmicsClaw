@@ -356,6 +356,43 @@ class AppConfig:
     :class:`SkillEnvMode`; has no effect with ``skills_index=off``, and
     read-only mode gets no note."""
 
+    env_supply: bool = False
+    """Whether the agent may provision this machine's Python environments.
+
+    One switch with one meaning, following :attr:`remote_execution`: it
+    mounts or unmounts the ``manage_environments`` tool (P5's "环境即工
+    具"), arms the additive ``kind="env_install"`` job (the binding the
+    runner needs), and nothing else — the App's own first-run bootstrap
+    does not pass through this switch at all.
+
+    **Off by default, deliberately.** On means the model can ask to
+    install packages onto this machine (each install behind the
+    approval gate, packages from the configured mirror only — never a
+    URL the model sent) into ``env_supply_env_root``. A deployment that
+    means that turns it on here (or with
+    ``OMICSCLAW_ENV_SUPPLY=1`` / ``--env-supply``); one that does not
+    keeps the previous behaviour byte for byte."""
+
+    env_supply_env_root: Path | None = None
+    """Where named environments live; ``None`` is ``~/.omicsclaw/envs``
+    (Tier 1's ``main`` under it). :func:`resolve_app_config` makes a
+    relative path absolute against the current directory."""
+
+    env_supply_index_url: str | None = None
+    """The PyPI mirror local installs prefix their pip line with; ``None``
+    is the CN-friendly default in
+    :data:`omicsclaw.envsupply.DEFAULT_UV_INDEX_URL`. Overridable so a
+    deployment on an official-CDN-friendly network can go direct."""
+
+    env_supply_python_mirror: str | None = None
+    """The python-build-standalone mirror (``UV_PYTHON_INSTALL_MIRROR``)
+    interpreter downloads use; ``None`` is the CN-friendly default in
+    :data:`omicsclaw.envsupply.DEFAULT_UV_PYTHON_MIRROR`."""
+
+    env_supply_install_timeout_s: float = 1800.0
+    """Upper bound on one environment install, the remote plane's
+    half-hour. Must be positive."""
+
     skill_env_dir: Path | None = None
     """Where overlays are kept; ``None`` is ``$XDG_CACHE_HOME/omicsclaw/envs``,
     else ``~/.cache/omicsclaw/envs``. :func:`resolve_app_config` makes a
@@ -542,6 +579,10 @@ class AppConfig:
         if not self.skill_env_install_timeout_s > 0:
             raise AppConfigError(
                 f"skill_env_install_timeout_s must be positive, not {self.skill_env_install_timeout_s!r}"
+            )
+        if not self.env_supply_install_timeout_s > 0:
+            raise AppConfigError(
+                f"env_supply_install_timeout_s must be positive, not {self.env_supply_install_timeout_s!r}"
             )
 
     def skills_root(self) -> Path:
@@ -919,6 +960,31 @@ _OPTIONS: tuple[_Option, ...] = (
         ("OMICSCLAW_SKILL_ENV_INSTALL_TIMEOUT_S",),
         _as_positive_float,
     ),
+    _Option("env_supply", "--env-supply", ("OMICSCLAW_ENV_SUPPLY",), _as_bool),
+    _Option(
+        "env_supply_env_root",
+        "--env-supply-env-root",
+        ("OMICSCLAW_ENV_SUPPLY_ENV_ROOT",),
+        _as_optional_path,
+    ),
+    _Option(
+        "env_supply_index_url",
+        "--env-supply-index-url",
+        ("OMICSCLAW_ENV_SUPPLY_INDEX_URL",),
+        _as_str,
+    ),
+    _Option(
+        "env_supply_python_mirror",
+        "--env-supply-python-mirror",
+        ("OMICSCLAW_ENV_SUPPLY_PYTHON_MIRROR",),
+        _as_str,
+    ),
+    _Option(
+        "env_supply_install_timeout_s",
+        "--env-supply-install-timeout",
+        ("OMICSCLAW_ENV_SUPPLY_INSTALL_TIMEOUT_S",),
+        _as_positive_float,
+    ),
     _Option("compact_at", "--compact-at", ("OMICSCLAW_COMPACT_AT",), _as_pressure),
     _Option(
         "max_queued_per_session",
@@ -1199,5 +1265,8 @@ def resolve_app_config(
     overlays = values.get("skill_env_dir")
     if isinstance(overlays, Path):
         values["skill_env_dir"] = overlays.expanduser().resolve()
+    env_root = values.get("env_supply_env_root")
+    if isinstance(env_root, Path):
+        values["env_supply_env_root"] = env_root.expanduser().resolve()
 
     return AppConfig(**values)  # type: ignore[arg-type]
