@@ -122,6 +122,11 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/chat/title",
         "/files/tree",
         "/files/serve",
+        "/runs",
+        "/runs/{run_id}",
+        "/runs/{run_id}/events",
+        "/runs/{run_id}/events/stream",
+        "/runs/{run_id}/verifications",
         "/jobs",
         "/jobs/{job_id}",
         "/jobs/{job_id}/events",
@@ -134,6 +139,19 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/remote/hosts/aliases",
         "/remote/hosts/{alias}/files/tree",
         "/remote/hosts/{alias}/files/serve",
+        "/notebooks",
+        "/notebooks/{notebook_id}",
+        "/notebooks/{notebook_id}/cells/{cell_id}",
+        "/notebooks/{notebook_id}/cells/{cell_id}/execute",
+        "/notebooks/{notebook_id}/executions/{execution_id}/events",
+        "/notebooks/{notebook_id}/executions/{execution_id}/cancel",
+        "/notebooks/{notebook_id}/import",
+        "/notebooks/{notebook_id}/export",
+        "/notebooks/{notebook_id}/feedback",
+        "/notebooks/{notebook_id}/binding",
+        "/notebooks/{notebook_id}/live-state",
+        "/notebooks/{notebook_id}/live-app",
+        "/notebooks/{notebook_id}/live-app/state",
    )
 
 
@@ -421,3 +439,13 @@ def test_source_build_identity_includes_untracked_runtime_files(tmp_path):
     (module.parent / 'new_runtime.py').write_text('value = 1')
     changed = runpy.run_path(str(module))['build_identity']()
     assert changed == {'commit': clean['commit'], 'dirty': True}
+
+
+def test_declared_paths_match_the_mounted_application(tmp_path):
+    from omicsclaw.entry.desktop.server import create_desktop_app
+
+    api = create_desktop_app(_app_for_health(tmp_path))
+    mounted = {route.path for route in api.routes} - {
+        "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"
+    }
+    assert mounted == set(wire_contract.SERVED_PATHS)

@@ -34,12 +34,11 @@ terminal, in the desktop app and on chat platforms.
 
 ## What's new
 
+- [Interactive analysis](docs/core-features/notebook.md) connects chat, a persistent Notebook kernel and hosted HTML/JS apps, with approval-gated publishing and versioned interaction state for the next model request.
 - The chat stream's approval frames carry the tool's risk tier and a one-line plain-language summary of the call, the agent may close an answer with up to three suggested follow-up questions (additive  frames), and the model is prompted for exactly that — the P6 usability round's first three items, on top of the Desktop jobs plane P1 built.
 - Across seven domains, 83 skills expose function libraries and replayable examples; five remain CLI-only, including the demo-only XCMS stub, and Python/R modules support IO tracking and review before acceptance ([0074](docs/plans/0074-singlecell-skill-migration.md), [0075](docs/plans/0075-spatial-skill-migration.md), [0076](docs/plans/0076-remaining-modalities-migration.md)).
 - A real-model routing eval (`tests/evals/live/`, run by hand) measures whether the model picks the right skill for 26 seed requests, the CI unit-test job now also runs the launch shell, attachments, top-level and desktop HTTP tests, and the four consensus skills whose scripts could not start have since been deleted ([0068](docs/plans/0068-eval-hardening.md), [0070](docs/plans/0070-notebook-skill-runtime.md)).
 - The agent framework has been rebuilt around three entry points, `oc cli`, `oc desktop` and `oc channel`, and the old `oc interactive`, `oc tui`, `oc onboard` and `oc run` commands are gone ([rebuild status](docs/FRAMEWORK-REBUILD.md)).
-- [Desktop v0.1.8](https://github.com/TianGzlab/OmicsClaw/releases/tag/v0.1.8) is available for macOS, Windows and Linux, with Desktop v3, SSH session recovery and an optional Independent review button below each completed reply.
-- The agent tells you which of a skill's packages your environment lacks, and with `OMICSCLAW_SKILL_ENV=install` it can install them after you approve, into a separate overlay that leaves the base environment untouched ([0061](docs/plans/0061-adaptive-env-provisioning.md)).
 
 Earlier entries are in [CHANGELOG.md](CHANGELOG.md).
 
@@ -96,6 +95,8 @@ network access by setting `OMICSCLAW_SANDBOX=docker` and
 `OMICSCLAW_SANDBOX_IMAGE` (see [`.env.example`](.env.example)).
 
 ## Desktop App
+
+The current source App includes an [interactive Python notebook](docs/core-features/notebook.md) with persistent kernel sessions, durable execution replay, `.ipynb` interchange, and execution-linked feedback. Run matching backend and App source to use the Notebook navigation item.
 
 <p align="center">
   <img src="docs/images/omicsclaw-app-overview.png" alt="The OmicsClaw desktop app, with a project's conversations in the sidebar and the chat box in the middle" width="94%"/>

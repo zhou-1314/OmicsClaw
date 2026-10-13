@@ -31,6 +31,11 @@ jobs:
       # (tests/entry/test_desktop_*.py) run here instead of skipping.
       # nbclient and ipykernel let tests/sdk/notebook start real kernels.
       - run: pip install -e . pytest numpy "pandas>=2.0,<3.0" scipy scikit-learn matplotlib seaborn networkx PyYAML requests "anndata==0.11.4" h5py rich nbformat nbclient ipykernel fastapi httpx uvicorn
+      - name: Install the R kernel for Desktop execution tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends r-base-core r-cran-irkernel
+          Rscript -e 'IRkernel::installspec(user = TRUE)'
       # The framework layers, the launch shell, attachments, the benchmark
       # harness and the top-level tests. Tests known to fail are listed in
       # tests/ci_known_failures.txt and run as xfail.

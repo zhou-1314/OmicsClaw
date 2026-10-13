@@ -151,6 +151,7 @@ class TestStatusParsing:
             ("SUSPENDED", "running"),
             ("COMPLETED", "done"),
             ("FAILED", "failed"),
+            ("BOOT_FAIL", "failed"),
             ("TIMEOUT", "failed"),
             ("OUT_OF_MEMORY", "failed"),
             ("NODE_FAIL", "failed"),
@@ -163,8 +164,8 @@ class TestStatusParsing:
     def test_slurm_states(self, output, state):
         assert parse_status(KIND_SLURM, output) == (state, None)
 
-    def test_slurm_gone_from_everything_reads_done(self):
-        assert parse_status(KIND_SLURM, "__OMICSCLAW_LOST__") == ("done", None)
+    def test_slurm_missing_accounting_remains_unknown(self):
+        assert parse_status(KIND_SLURM, "__OMICSCLAW_LOST__") == ("unknown", None)
 
     def test_nohup_running(self):
         assert parse_status(KIND_NOHUP, "__OMICSCLAW_RUNNING__") == ("running", None)
@@ -222,6 +223,7 @@ def test_a_positive_pgid_still_builds_the_group_commands():
     assert "kill -0 -- -4242" in build_status_command(handle)
     assert build_cancel_command(handle) == "kill -TERM -- -4242"
     # slurm handles never take the group path, whatever their pgid says
-    slurm = RemoteJobHandle(kind=KIND_SLURM, host="h", workdir="/w",
-                            job_id="7", pgid=None)
+    slurm = RemoteJobHandle(
+        kind=KIND_SLURM, host="h", workdir="/w", job_id="7", pgid=None
+    )
     assert build_cancel_command(slurm) == "scancel 7"

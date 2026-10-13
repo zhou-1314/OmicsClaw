@@ -22,8 +22,8 @@ import pytest
 
 from omicsclaw.entry.desktop.jobs_manager import (
     JobError,
-    JobStore,
     JobsManager,
+    JobStore,
 )
 from omicsclaw.memory.database import Database
 from omicsclaw.remote.bridge import RemoteJobFailed, RemoteJobsBridge
@@ -31,8 +31,7 @@ from omicsclaw.remote.jobs import RemoteJobHandle
 from omicsclaw.remote.plane import RemotePlaneBinding
 from omicsclaw.remote.ssh import RemoteHostUnreachable
 from omicsclaw.tools.builtin.remote import StatusReport
-
-from tests.remote._fakes import FakeSpawner, PROBE_OK, run
+from tests.remote._fakes import PROBE_OK, FakeSpawner, run
 
 TERMINAL = ("succeeded", "failed", "canceled", "interrupted")
 
@@ -66,7 +65,7 @@ class _ScriptedExecutor:
     needs to script.
     """
 
-    def __init__(self, plane: "_ScriptedPlane") -> None:
+    def __init__(self, plane: _ScriptedPlane) -> None:
         self._plane = plane
 
     async def status(self, handle: RemoteJobHandle) -> StatusReport:
@@ -85,9 +84,7 @@ class _ScriptedPlane(RemotePlaneBinding):
     """A real plane over a fake transport, with knob-turnable status."""
 
     def __init__(self, spawner: FakeSpawner, workspace=None):
-        super().__init__(
-            Database(":memory:"), spawner=spawner, workspace=workspace
-        )
+        super().__init__(Database(":memory:"), spawner=spawner, workspace=workspace)
         self.state = "running"
         self._scripted = _ScriptedExecutor(self)
 
@@ -97,12 +94,14 @@ class _ScriptedPlane(RemotePlaneBinding):
     async def status(self, job_ref: str) -> StatusReport:
         # The bridge polls through this method; the reconciler through
         # executor_for().status — both read the same knob.
-        return await self._scripted.status(RemoteJobHandle(kind="nohup", host="", workdir=""))
+        return await self._scripted.status(
+            RemoteJobHandle(kind="nohup", host="", workdir="")
+        )
 
 
 def _manager(spawner: FakeSpawner, tmp_path, *, plane: _ScriptedPlane | None = None):
-    scripted = plane if plane is not None else _ScriptedPlane(
-        spawner, workspace=tmp_path
+    scripted = (
+        plane if plane is not None else _ScriptedPlane(spawner, workspace=tmp_path)
     )
     manager = JobsManager(
         _App(str(tmp_path)),
@@ -143,9 +142,7 @@ class TestRemoteRouting:
             assert record.runtime == "remote:hpc1"
             manager.plane.state = "done"
             finished = await _terminal(manager, record.id)
-            return finished, any(
-                "setsid nohup" in c for c in spawner.ssh_commands()
-            )
+            return finished, any("setsid nohup" in c for c in spawner.ssh_commands())
 
         finished, submitted = run(main())
         assert finished.status == "succeeded"
@@ -216,7 +213,9 @@ class TestRemoteRouting:
         assert host_alias == "hpc1"
         assert kind == "nohup"
 
-    def test_creation_freezes_one_target_snapshot_in_both_stores(self, spawner, tmp_path):
+    def test_creation_freezes_one_target_snapshot_in_both_stores(
+        self, spawner, tmp_path
+    ):
         async def main():
             manager = _manager(spawner, tmp_path)
             record = await manager.create_job(
@@ -238,7 +237,9 @@ class TestRemoteRouting:
         assert local_snapshot[1].startswith("/scratch/fake/omicsclaw/")
         assert local_snapshot[2] == ("remote_exec", "remote_submit")
 
-    def test_code_run_remote_location_freezes_kernel_target_snapshot(self, spawner, tmp_path):
+    def test_code_run_remote_location_freezes_kernel_target_snapshot(
+        self, spawner, tmp_path
+    ):
         async def main():
             manager = _manager(spawner, tmp_path)
             record = await manager.create_job(
@@ -284,7 +285,8 @@ class TestValidationAndRefusal:
         assert caught.value.code == "remote_runtime_unavailable"
 
     @pytest.mark.parametrize(
-        "runtime", ["remote:", "remote:bad host", "remote:-x", "elsewhere", "remote:a;b"]
+        "runtime",
+        ["remote:", "remote:bad host", "remote:-x", "elsewhere", "remote:a;b"],
     )
     def test_malformed_runtimes_are_refused(self, spawner, tmp_path, runtime):
         async def main():
@@ -307,9 +309,9 @@ class TestValidationAndRefusal:
     @pytest.mark.parametrize(
         "declared",
         [
-            ["data/counts.csv"],                      # bare strings, not pairs
-            [{"src": "data/counts.csv"}],             # no dst
-            [{"src": "a", "dst": ""}],                # empty dst
+            ["data/counts.csv"],  # bare strings, not pairs
+            [{"src": "data/counts.csv"}],  # no dst
+            [{"src": "a", "dst": ""}],  # empty dst
             ["not-a-list"],
         ],
     )
@@ -372,8 +374,10 @@ class TestCancellationAndRestart:
             await _until(lambda: manager.get_job(record.id).status == "running")
             outcome = manager.cancel(record.id)
             finished = await _terminal(manager, record.id)
-            return outcome, finished.status, any(
-                "kill -TERM -- -4242" in c for c in spawner.ssh_commands()
+            return (
+                outcome,
+                finished.status,
+                any("kill -TERM -- -4242" in c for c in spawner.ssh_commands()),
             )
 
         outcome, status, cancelled_remotely = run(main())
@@ -453,3 +457,81 @@ class TestCancellationAndRestart:
         assert report["checked"] == 1
         assert report["unknown"] == 1
         assert status == "unknown"
+
+
+class TestRunEvidence:
+    def test_external_cancellation_is_not_success(self, spawner, tmp_path):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            record = await manager.create_job(
+                inputs={"command": "echo hi"}, runtime="remote:hpc1"
+            )
+            manager.plane.state = "canceled"
+            await _terminal(manager, record.id)
+            return manager.get_job(record.id).status
+
+        assert run(main()) == "canceled"
+
+    def test_remote_outputs_and_real_exit_evidence(self, spawner, tmp_path):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            record = await manager.create_job(
+                inputs={"command": "echo hi > out.txt", "outputs": ["out.txt"]},
+                runtime="remote:hpc1",
+                session_id="lineage",
+            )
+            manager.plane.state = "done"
+            await _terminal(manager, record.id)
+            return manager.run_store.list("artifact"), manager.run_store.list(
+                "verification"
+            )
+
+        artifacts, checks = run(main())
+        assert artifacts[0].uri.startswith("remote://hpc1/")
+        assert artifacts[0].host_id == "hpc1"
+        assert any(v.check == "exit_code" and v.verdict == "pass" for v in checks)
+        assert any(
+            v.check == "file_exists" and v.verdict == "inconclusive" for v in checks
+        )
+
+
+def test_two_remote_outputs_keep_distinct_retry_versions(spawner, tmp_path):
+    async def main():
+        manager = _manager(spawner, tmp_path)
+        manager.plane.state = "done"
+        for _ in range(2):
+            record = await manager.create_job(
+                inputs={"command": "echo hi", "outputs": ["a.txt", "b.txt"]},
+                runtime="remote:hpc1",
+                session_id="versions",
+            )
+            await _terminal(manager, record.id)
+        return manager.run_store.list("artifact")
+
+    artifacts = run(main())
+    assert len({a.artifact_id for a in artifacts}) == 4
+    for key in {a.lineage_key for a in artifacts}:
+        versions = sorted(
+            [a for a in artifacts if a.lineage_key == key], key=lambda a: a.version
+        )
+        assert [a.version for a in versions] == [1, 2]
+        assert versions[1].parent_artifact_id == versions[0].artifact_id
+
+
+def test_remote_kernel_run_location_uses_target_snapshot(spawner, tmp_path):
+    async def main():
+        manager = _manager(spawner, tmp_path)
+
+        async def runner(record, ctx):
+            return None
+
+        manager.register_runner("code_run", runner)
+        record = await manager.create_job(
+            kind="code_run",
+            inputs={"location": "remote:hpc1"},
+            session_id="remote-code",
+        )
+        await _terminal(manager, record.id)
+        return manager.run_store.load(manager._run_ids[record.id]).execution_location
+
+    assert run(main()) == "remote:hpc1"

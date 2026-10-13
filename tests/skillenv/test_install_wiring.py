@@ -162,13 +162,13 @@ def test_the_tool_comes_before_every_mcp_tool(tmp_path, offline):
     _, config = _golden_install(tmp_path)
     app = assembly.build_app(config, mcp=_FakeMCP())
     try:
-        # The gated install tool still comes before every MCP tool;
-        # P4's python joined the tail after save_artifact.
-        assert _names(app)[-6:] == [
+        # The install tool precedes the kernel and app tools, then MCP.
+        assert _names(app)[-7:] == [
             "ask_user",
             "install_skill_deps",
             "save_artifact",
             "python",
+            "live_app",
             "mcp__demo__echo",
             "task",
         ]

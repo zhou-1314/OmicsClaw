@@ -52,7 +52,7 @@ import asyncio
 from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Final
+from typing import Any, Final
 
 from omicsclaw.entry.events import TurnEvent, TurnEventType, is_droppable
 
@@ -85,6 +85,13 @@ slack before the wire does.
 DEFAULT_MAX_OBSERVERS: Final = 16
 """Concurrent observers of one exchange. ``max_subscribers_per_turn``
 from the deleted hub, unchanged."""
+
+
+def _stream_key(session_id: str, turn_id: str) -> str:
+    """Collision-free durable key for the two untrusted identifiers."""
+    import json
+
+    return json.dumps([session_id, turn_id], ensure_ascii=False, separators=(",", ":"))
 
 
 class ObserverCapacityError(RuntimeError):
@@ -135,6 +142,11 @@ class TurnStream:
         "_sealed",
         "session_id",
         "turn_id",
+        "_durable_log",
+        "_durable_tasks",
+        "_durable_lock",
+        "_durable_error",
+        "_durable_owner_epoch",
     )
 
     def __init__(
@@ -146,6 +158,7 @@ class TurnStream:
         observer_queue_size: int = DEFAULT_OBSERVER_QUEUE,
         max_observers: int = DEFAULT_MAX_OBSERVERS,
         on_observer_change: Callable[[int], None] | None = None,
+        durable_log: Any = None,
     ) -> None:
         """``on_observer_change`` is the "last observer left" seam (trap 9).
 
@@ -164,6 +177,25 @@ class TurnStream:
                 raise ValueError(f"{name} must be a positive integer")
         self.session_id = session_id
         self.turn_id = turn_id
+        self._durable_log = durable_log
+        self._durable_owner_epoch: int | None = None
+        if durable_log is not None:
+            import logging
+
+            from omicsclaw.memory.turn_events import StreamOwnerConflict
+
+            try:
+                self._durable_owner_epoch = durable_log.acquire_owner(
+                    _stream_key(session_id, turn_id)
+                )
+            except StreamOwnerConflict:
+                # Read-only observers can attach while another producer owns the stream.
+                logging.getLogger(__name__).debug(
+                    "attaching durable stream observer for %s/%s", session_id, turn_id
+                )
+        self._durable_tasks: set[asyncio.Task[Any]] = set()
+        self._durable_lock = asyncio.Lock()
+        self._durable_error: BaseException | None = None
         self._ring: deque[TurnEvent] = deque(maxlen=ring_size)
         self._observer_queue_size = observer_queue_size
         self._max_observers = max_observers
@@ -171,6 +203,12 @@ class TurnStream:
         self._observers: list[TurnObservation] = []
         self._next_seq = 1
         self._latest = 0
+        if self._durable_log is not None:
+            _, latest = self._durable_log.bounds(
+                _stream_key(self.session_id, self.turn_id)
+            )
+            self._latest = latest
+            self._next_seq = latest + 1
         self._sealed = False
         self._loop: asyncio.AbstractEventLoop | None = _running_loop()
 
@@ -205,6 +243,41 @@ class TurnStream:
         stamped = event if event.seq == seq else replace(event, seq=seq)
         self._next_seq = seq + 1
         self._latest = seq
+        if self._durable_log is not None:
+            from omicsclaw.entry.render import to_wire
+            from omicsclaw.memory.turn_events import DurableTurnEvent
+
+            # Persist the projected wire payload before exposing the frame.
+            # The payload is inert JSON and is never executed on replay.
+            wire = to_wire(stamped)
+            durable_event = DurableTurnEvent(
+                stream_id=_stream_key(self.session_id, self.turn_id),
+                session_id=self.session_id,
+                turn_id=self.turn_id,
+                seq=seq,
+                type=stamped.type.value,
+                payload=wire,
+                created_at=0.0,
+                owner_epoch=self._durable_owner_epoch or 0,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is None:
+                try:
+                    self._durable_log.append(durable_event)
+                except Exception as exc:
+                    self._durable_error = self._durable_error or exc
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "durable turn event append failed", exc_info=True
+                    )
+            else:
+                task = loop.create_task(self._append_durable(durable_event))
+                self._durable_tasks.add(task)
+                task.add_done_callback(self._durable_tasks.discard)
         self._ring.append(stamped)
         if stamped.type is TurnEventType.EXCHANGE_END:
             self._sealed = True
@@ -236,6 +309,30 @@ class TurnStream:
             )
         loop.call_soon_threadsafe(self.publish, event)
 
+    async def _append_durable(self, event: Any) -> None:
+        try:
+            async with self._durable_lock:
+                await asyncio.to_thread(self._durable_log.append, event)
+        except Exception as exc:
+            self._durable_error = self._durable_error or exc
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "durable turn event append failed", exc_info=True
+            )
+
+    @property
+    def durable_error(self) -> BaseException | None:
+        """First append failure, if the optional durable sink degraded."""
+        return self._durable_error
+
+    async def flush_durable(self) -> bool:
+        """Wait for queued appends and report whether all durable writes succeeded."""
+        tasks = tuple(self._durable_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return self._durable_error is None
+
     # ---- consumers ------------------------------------------------------
 
     def observe(self, *, after_seq: int = 0) -> TurnObservation:
@@ -257,26 +354,105 @@ class TurnStream:
             raise ValueError("after_seq must be non-negative")
         if len(self._observers) >= self._max_observers:
             raise ObserverCapacityError(
-                f"exchange {self.turn_id!r} already has "
-                f"{self._max_observers} observers"
+                f"exchange {self.turn_id!r} already has {self._max_observers} observers"
             )
         if self._loop is None:
             self._loop = _running_loop()
 
+        oldest_durable = None
+        latest_durable = 0
+        if self._durable_log is not None:
+            oldest_durable, latest_durable = self._durable_log.bounds(
+                _stream_key(self.session_id, self.turn_id)
+            )
+            if latest_durable > self._latest:
+                self._latest = latest_durable
+                self._next_seq = latest_durable + 1
         cursor = min(after_seq, self._latest)
         retained = tuple(self._ring)
         oldest = retained[0].seq if retained else None
         pending: deque[TurnEvent] = deque()
-        if oldest is not None and cursor + 1 < oldest:
-            pending.append(
-                TurnEvent.gap_at(
-                    oldest,
-                    self._latest,
-                    session_id=self.session_id,
-                    turn_id=self.turn_id,
-                )
+        needs_durable = self._durable_log is not None and (
+            not retained or (oldest is not None and cursor + 1 < oldest)
+        )
+        if needs_durable and cursor < self._latest:
+            rows = self._durable_log.replay(
+                _stream_key(self.session_id, self.turn_id), after_seq=cursor
             )
-        pending.extend(frame for frame in retained if frame.seq > cursor)
+            if oldest_durable is not None and cursor + 1 < oldest_durable:
+                pending.append(
+                    TurnEvent.gap_at(
+                        oldest_durable,
+                        self._latest,
+                        session_id=self.session_id,
+                        turn_id=self.turn_id,
+                    )
+                )
+            for row in rows:
+                payload = dict(row.payload)
+                for key in (
+                    "schema_version",
+                    "type",
+                    "sequence",
+                    "session_id",
+                    "turn_id",
+                ):
+                    payload.pop(key, None)
+                try:
+                    kind = TurnEventType(row.type)
+                except ValueError:
+                    continue
+                kwargs = {
+                    "type": kind,
+                    "seq": row.seq,
+                    "session_id": row.session_id,
+                    "turn_id": row.turn_id,
+                    "wire_payload": payload,
+                }
+                if kind is TurnEventType.EXCHANGE_END:
+                    kwargs["terminal"] = payload.get("terminal")
+                elif kind is TurnEventType.GAP:
+                    kwargs["gap"] = (
+                        payload.get("oldest_available", row.seq),
+                        payload.get("latest", self._latest),
+                    )
+                pending.append(TurnEvent(**kwargs))
+            if not rows and cursor + 1 < self._latest:
+                # The async writer may not have flushed yet. The ring is the
+                # authoritative same-process fallback; only emit GAP when
+                # neither durable rows nor retained frames cover the cursor.
+                fallback = [frame for frame in retained if frame.seq > cursor]
+                if fallback:
+                    if cursor + 1 < fallback[0].seq:
+                        pending.append(
+                            TurnEvent.gap_at(
+                                fallback[0].seq,
+                                self._latest,
+                                session_id=self.session_id,
+                                turn_id=self.turn_id,
+                            )
+                        )
+                    pending.extend(fallback)
+                else:
+                    pending.append(
+                        TurnEvent.gap_at(
+                            oldest_durable or (cursor + 1),
+                            self._latest,
+                            session_id=self.session_id,
+                            turn_id=self.turn_id,
+                        )
+                    )
+        else:
+            if oldest is not None and cursor + 1 < oldest:
+                pending.append(
+                    TurnEvent.gap_at(
+                        oldest,
+                        self._latest,
+                        session_id=self.session_id,
+                        turn_id=self.turn_id,
+                    )
+                )
+            pending.extend(frame for frame in retained if frame.seq > cursor)
 
         observation = TurnObservation(
             stream=self,

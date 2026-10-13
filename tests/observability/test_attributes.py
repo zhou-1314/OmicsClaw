@@ -28,7 +28,7 @@ def test_every_declared_instrument_has_a_kind_a_unit_and_a_description():
         assert description, name
 
 
-def test_the_six_instruments_of_the_reference_are_all_present():
+def test_reference_and_run_event_instruments_are_present():
     """Parity, named one by one so a deletion is a failing test."""
     assert set(INSTRUMENTS) == {
         "omicsclaw.llm.request.duration",
@@ -37,6 +37,7 @@ def test_the_six_instruments_of_the_reference_are_all_present():
         "omicsclaw.tool.calls.total",
         "omicsclaw.tool.execution.duration",
         "omicsclaw.agent.turns.total",
+        "omicsclaw.run.events.total",
     }
 
 
@@ -49,10 +50,10 @@ def test_durations_are_seconds_and_counts_are_annotations():
             assert unit.startswith("{") and unit.endswith("}"), name
 
 
-def test_the_four_span_names_are_distinct_and_namespaced():
+def test_span_names_are_distinct_and_namespaced():
     names = _constants("SPAN_")
 
-    assert len(set(names.values())) == 4
+    assert len(set(names.values())) == 5
     assert all(value.startswith("omicsclaw.") for value in names.values())
 
 

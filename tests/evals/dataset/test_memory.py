@@ -1,4 +1,4 @@
-"""memory: memory_write and memory_search; the précis in the next exchange's prompt."""
+"""memory: memory_write and memory_search; the précis in the next exchange's user context."""
 
 from __future__ import annotations
 
@@ -16,14 +16,22 @@ CONTENT = "For PBMC data the user wants Leiden clustering at resolution 1.0."
 def _add():
     return tool_call(
         "memory_write",
-        {"action": "add", "title": TITLE, "content": CONTENT, "category": "preference", "importance": 8},
+        {
+            "action": "add",
+            "title": TITLE,
+            "content": CONTENT,
+            "category": "preference",
+            "importance": 8,
+        },
     )
 
 
 def _write_then_search():
     return ScriptedProvider(
         ScriptedTurn(tool_calls=(_add(),)),
-        ScriptedTurn(tool_calls=(tool_call("memory_search", {"query": "Leiden resolution"}),)),
+        ScriptedTurn(
+            tool_calls=(tool_call("memory_search", {"query": "Leiden resolution"}),)
+        ),
         ScriptedTurn(text="Saved and found your preference."),
     )
 
@@ -49,8 +57,13 @@ CASES = [
         "memory/precis_reaches_next_exchange",
         "Remember that I like Leiden at resolution 1.0 for PBMC.",
         _precis,
-        SentContains(TITLE, call=2, role="system"),
-        SentContains("## Long-term memory", call=2, role="system"),
+        SentContains(
+            ("<long_term_memory>", TITLE, CONTENT, "</long_term_memory>"),
+            call=2,
+            role="user",
+        ),
+        SentContains(TITLE, call=2, role="system", times=0),
+        SentContains("## Long-term memory", call=2, role="system", times=0),
         NoError(),
         followups=("Cluster my PBMC data.",),
     ),

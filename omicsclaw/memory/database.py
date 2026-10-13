@@ -111,6 +111,28 @@ CREATE TABLE IF NOT EXISTS job_events (
     FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS turn_stream_owners (
+    stream_id   TEXT PRIMARY KEY,
+    owner_id    TEXT NOT NULL,
+    epoch       INTEGER NOT NULL,
+    lease_until REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS turn_events (
+    stream_id    TEXT NOT NULL,
+    session_id   TEXT NOT NULL DEFAULT '',
+    turn_id      TEXT NOT NULL DEFAULT '',
+    seq          INTEGER NOT NULL,
+    type         TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at   REAL NOT NULL,
+    PRIMARY KEY (stream_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_turn_events_stream_seq
+    ON turn_events (stream_id, seq);
+
 CREATE TABLE IF NOT EXISTS artifacts (
     id              TEXT PRIMARY KEY,
     job_id          TEXT,
@@ -206,6 +228,46 @@ CREATE TABLE IF NOT EXISTS session_scratch (
 -- text again writes nothing rather than a second copy.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_scratch_dedup
     ON session_scratch (session_id, kind, content);
+
+CREATE TABLE IF NOT EXISTS notebook_cells (
+    notebook_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    session_epoch INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'idle',
+    output_json TEXT NOT NULL DEFAULT 'null',
+    provenance_json TEXT NOT NULL DEFAULT 'null',
+    trust_label TEXT NOT NULL DEFAULT '',
+    client_command_id TEXT NOT NULL DEFAULT '',
+    execution_id TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (notebook_id, cell_id, session_epoch)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notebook_cells_notebook
+    ON notebook_cells (notebook_id, session_epoch, cell_id);
+
+CREATE TABLE IF NOT EXISTS notebook_executions (
+    execution_id TEXT PRIMARY KEY,
+    notebook_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    session_epoch INTEGER NOT NULL DEFAULT 0,
+    client_command_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    output_json TEXT NOT NULL DEFAULT 'null',
+    provenance_json TEXT NOT NULL DEFAULT 'null',
+    trust_label TEXT NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    finished_at REAL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notebook_execution_command
+    ON notebook_executions (
+        client_command_id, session_epoch, notebook_id, cell_id
+    )
+    WHERE client_command_id <> '';
 """
 """The schema of every :class:`Database`, on open, forever additive.
 

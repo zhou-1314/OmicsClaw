@@ -82,6 +82,7 @@ from omicsclaw.kernel.session import r_available
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.version import __version__, build_identity
 
+from .artifacts import mount_artifacts_routes
 from .catalog import mcp_servers, skill_catalog, skill_detail
 from .doctor import doctor_report, effective_model
 from .files import (
@@ -99,11 +100,10 @@ from .interactions import (
     answer_permission,
     change_permission_profile,
 )
-from .artifacts import mount_artifacts_routes
 from .jobs import mount_jobs_routes
-from .remote_hosts import mount_remote_host_routes
 from .jobs_manager import JobsManager
 from .providers import SettingsFile, provider_listing, save_provider, test_provider
+from .remote_hosts import mount_remote_host_routes
 from .title import generate_title
 from .turn_observation import KEEPALIVE_INTERVAL_S, DesktopChatSSEBody
 from .turn_submission import (
@@ -117,8 +117,8 @@ from .wire_contract import (
     CONNECTION_EPOCH,
     DESKTOP_CAPABILITIES,
     SERVED_PATHS,
-    desktop_chat_contract,
     desktop_artifacts_contract,
+    desktop_chat_contract,
     desktop_jobs_contract,
 )
 
@@ -277,7 +277,6 @@ async def open_chat_stream(
 
     known = interactions.turn_for(request.session_id, request.source_request_id)
     compacting = request.content.strip() == COMPACT_COMMAND
-    handle: TurnHandle
     if compacting:
         handle = await _compaction(registry, request.session_id, known)
     else:
@@ -290,9 +289,7 @@ async def open_chat_stream(
         turn_id=handle.turn_id,
         session_id=handle.session_id,
         resumed=known == handle.turn_id,
-        body=_observed_body(
-            app, handle, after_seq, keepalive_s, interactions, epoch
-        ),
+        body=_observed_body(app, handle, after_seq, keepalive_s, interactions, epoch),
     )
 
 
@@ -507,9 +504,7 @@ def change_workspace(app: AgentApp, document: Mapping[str, Any]) -> dict[str, An
     if not isinstance(declared, str) or not declared.strip():
         raise DesktopIngressError("workspace_required")
     if not _same_workspace(declared, app.config.workspace):
-        raise DesktopIngressError(
-            "workspace_change_requires_restart", status_code=409
-        )
+        raise DesktopIngressError("workspace_change_requires_restart", status_code=409)
     return workspace_payload(app)
 
 
@@ -551,6 +546,7 @@ def create_desktop_app(
     settings: SettingsFile | None = None,
     jobs_manager: JobsManager | None = None,
     artifacts_store: ArtifactStore | None = None,
+    notebook_analysis=None,
 ) -> Any:
     """Build the FastAPI application serving :data:`SERVED_PATHS`.
 
@@ -575,13 +571,25 @@ def create_desktop_app(
 
     :raises ModuleNotFoundError: ``fastapi`` is not installed.
     """
+    from contextlib import asynccontextmanager
+
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, StreamingResponse
 
-    api = FastAPI(title="OmicsClaw Desktop", version=__version__)
+    @asynccontextmanager
+    async def lifespan(_api):
+        await jobs.reconcile_remote_jobs()
+        try:
+            yield
+        finally:
+            await close_notebooks()
+
+    api = FastAPI(title="OmicsClaw Desktop", version=__version__, lifespan=lifespan)
     shared = interactions if interactions is not None else DesktopInteractions(app)
-    jobs = jobs_manager if jobs_manager is not None else JobsManager(
-        app, remote_runtime=_remote_runtime_bridge(app)
+    jobs = (
+        jobs_manager
+        if jobs_manager is not None
+        else JobsManager(app, remote_runtime=_remote_runtime_bridge(app))
     )
     artifacts = artifacts_store if artifacts_store is not None else jobs.artifacts
     if app.shadow_review is not None:
@@ -629,17 +637,13 @@ def create_desktop_app(
             if length < 0:
                 raise DesktopIngressError("invalid_content_length", status_code=400)
             if length > limit:
-                raise DesktopIngressError(
-                    "request_document_too_large", status_code=413
-                )
+                raise DesktopIngressError("request_document_too_large", status_code=413)
         chunks: list[bytes] = []
         observed = 0
         async for chunk in request.stream():
             observed += len(chunk)
             if observed > limit:
-                raise DesktopIngressError(
-                    "request_document_too_large", status_code=413
-                )
+                raise DesktopIngressError("request_document_too_large", status_code=413)
             chunks.append(chunk)
         return b"".join(chunks)
 
@@ -662,7 +666,8 @@ def create_desktop_app(
                 after_seq=after_seq,
                 keepalive_s=keepalive_s,
                 interactions=shared,
-                epoch=CONNECTION_EPOCH,
+                # Chat v3 clients require exactly type/data in each envelope.
+                # Process identity remains available through /health.
             )
         except DesktopIngressError as exc:
             return _refused(exc)
@@ -885,10 +890,35 @@ def create_desktop_app(
         _note_runtime_header(request.headers.get("X-OmicsClaw-Runtime"))
         return health_payload(app)
 
-    mount_jobs_routes(api, jobs, authorized=_authorized)
-    mount_remote_host_routes(
-        api, getattr(app, "remote", None), authorized=_authorized
+    from omicsclaw.memory.database import Database
+
+    from .notebooks import mount_notebook_routes
+    from .notebooks_manager import NotebookAnalysis
+
+    notebook_db = None
+    if notebook_analysis is None:
+        if app.kernels is not None:
+            notebook_analysis = app.kernels.notebooks
+        else:
+            notebook_db = Database(
+                Path(app.config.workspace) / ".omicsclaw" / "notebooks.db"
+            )
+            notebook_analysis = NotebookAnalysis(notebook_db, None)
+    mount_notebook_routes(
+        api,
+        notebook_analysis,
+        authorized=_authorized,
+        read_json=_read_json,
+        sessions=lambda: app.sessions,
     )
+
+    async def close_notebooks():
+        await notebook_analysis.close()
+        if notebook_db is not None:
+            notebook_db.close()
+
+    mount_jobs_routes(api, jobs, authorized=_authorized)
+    mount_remote_host_routes(api, getattr(app, "remote", None), authorized=_authorized)
     mount_artifacts_routes(api, artifacts, jobs=jobs, authorized=_authorized)
 
     return api

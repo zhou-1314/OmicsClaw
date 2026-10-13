@@ -84,6 +84,7 @@ from .session import (
     SubmissionRefused,
     attach_sessions,
 )
+from .notebook_app import execute_cell_live
 from .stream import (
     EventObserverDetached,
     ObserverCapacityError,
@@ -142,6 +143,7 @@ __all__ = [
     "build_skill_index",
     "build_subagent_registry",
     "compose",
+    "execute_cell_live",
     "fields_set_by_argv",
     "inert_prose",
     "open_app",
