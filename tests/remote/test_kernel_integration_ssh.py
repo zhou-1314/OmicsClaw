@@ -161,9 +161,7 @@ def test_two_rounds_of_code_share_the_remote_namespace(workspace, runtime):
     asyncio.run(asyncio.wait_for(scenario(), 240))
 
 
-def test_a_killed_tunnel_re_attaches_and_the_variables_survive(
-    workspace, runtime
-):
+def test_a_killed_tunnel_re_attaches_and_the_variables_survive(workspace, runtime):
     async def scenario():
         manager = PersistentKernelManager(workspace, remote_runtime=runtime)
         try:
@@ -171,6 +169,7 @@ def test_a_killed_tunnel_re_attaches_and_the_variables_survive(
                 "c3-acc-2",
                 "survivor = 'still here'",
                 location=f"remote:{HOST}",
+                timeout_s=30,
             )
             kernel = _remote_state(manager, "c3-acc-2").kernel
             first_tunnel = kernel._tunnel
@@ -186,6 +185,7 @@ def test_a_killed_tunnel_re_attaches_and_the_variables_survive(
                 "c3-acc-2",
                 "print('after the outage:', survivor)",
                 location=f"remote:{HOST}",
+                timeout_s=30,
             )
             assert second.status == "ok", second.stderr
             assert "after the outage: still here" in second.stdout
@@ -222,16 +222,12 @@ def test_the_environment_supply_is_idempotent(spawner):
     asyncio.run(asyncio.wait_for(scenario(), 120))
 
 
-def test_shutdown_cleans_the_tunnel_the_pid_and_the_session_dir(
-    workspace, runtime
-):
+def test_shutdown_cleans_the_tunnel_the_pid_and_the_session_dir(workspace, runtime):
     async def scenario():
         manager = PersistentKernelManager(workspace, remote_runtime=runtime)
         tunnel = pid = session_dir = None
         try:
-            await manager.execute(
-                "c3-acc-4", "bye = 1", location=f"remote:{HOST}"
-            )
+            await manager.execute("c3-acc-4", "bye = 1", location=f"remote:{HOST}")
             kernel = _remote_state(manager, "c3-acc-4").kernel
             # captured before the close: teardown nulls the kernel's own
             # references, and the test needs the records to verify with
@@ -256,9 +252,9 @@ def test_the_kernel_is_lazy_nothing_launches_before_the_first_cell(
     async def scenario():
         manager = PersistentKernelManager(workspace, remote_runtime=runtime)
         try:
-            assert not any(
-                "ipykernel_launcher" in c for c in spawner.commands
-            ), "a kernel launched before any cell asked for one"
+            assert not any("ipykernel_launcher" in c for c in spawner.commands), (
+                "a kernel launched before any cell asked for one"
+            )
             await manager.execute(
                 "c3-acc-5", "print('first cell')", location=f"remote:{HOST}"
             )

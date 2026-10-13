@@ -142,21 +142,29 @@ REMOTE_LAUNCH_TIMEOUT_S = 90.0
 its connection file (up to 60 s inside) + cat it back."""
 
 TUNNEL_OPTIONS: tuple[str, ...] = (
-    "-o", "BatchMode=yes",
-    "-o", "ForwardAgent=no",
-    "-o", "ConnectTimeout=10",
-    "-o", "ServerAliveInterval=15",
-    "-o", "ServerAliveCountMax=2",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ForwardAgent=no",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=2",
     # The tunnel is a long-lived connection of its own. Sharing the
     # command channel's ControlMaster socket would make this -N process
     # the master for every other remote call, so killing a kernel's
     # tunnel would tear down in-flight probes with it — the one coupling
     # this module must not create.
-    "-o", "ControlMaster=no",
-    "-o", "ControlPath=none",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
     # A forward that cannot bind (local port taken) must fail the start
     # loudly, not come up four-fifths alive.
-    "-o", "ExitOnForwardFailure=yes",
+    "-o",
+    "ExitOnForwardFailure=yes",
 )
 """The ``ssh -N`` tunnel's options. The security posture is
 :data:`~omicsclaw.remote.ssh.SSH_OPTIONS`'s (batch, no agent, system
@@ -219,9 +227,7 @@ class RemoteKernelEnvError(RuntimeError):
         self.manual_commands = tuple(manual_commands)
         text = message
         if self.manual_commands:
-            text += " Manual setup on the host:\n  " + "\n  ".join(
-                self.manual_commands
-            )
+            text += " Manual setup on the host:\n  " + "\n  ".join(self.manual_commands)
         super().__init__(text)
 
 
@@ -294,9 +300,7 @@ def build_env_install_script(
     took from OmicOS, without its mirror racing). Pure: the caller
     decides what to run it on and who approved it.
     """
-    resolved = tuple(KERNEL_BASE_PACKAGES) + tuple(
-        packages or CORE_STACK_PACKAGES
-    )
+    resolved = tuple(KERNEL_BASE_PACKAGES) + tuple(packages or CORE_STACK_PACKAGES)
     pip_prefix = f"UV_INDEX_URL={uv_index_url} " if uv_index_url else ""
     lines = [
         "set -e",
@@ -310,21 +314,12 @@ def build_env_install_script(
         '  UV="$HOME/.local/bin/uv"',
         "fi",
         f'"$UV" python install {shell_quote(python_version)}',
+        (f'"$UV" venv {_remote_path(env_dir)} --python {shell_quote(python_version)}'),
         (
-            f'"$UV" venv {_remote_path(env_dir)} --python'
-            f" {shell_quote(python_version)}"
+            pip_prefix + f'"$UV" pip install --python'
+            f" {_remote_path(env_dir + '/bin/python')}" + " " + " ".join(resolved)
         ),
-        (
-            pip_prefix
-            + f'"$UV" pip install --python'
-            f" {_remote_path(env_dir + '/bin/python')}"
-            + " "
-            + " ".join(resolved)
-        ),
-        (
-            f'{_remote_path(env_dir + "/bin/python")}'
-            ' -c "import ipykernel"'
-        ),
+        (f'{_remote_path(env_dir + "/bin/python")} -c "import ipykernel"'),
     ]
     return "\n".join(lines)
 
@@ -498,7 +493,7 @@ def _marker_section(text: str, marker: str) -> str:
     start = text.find(marker)
     if start < 0:
         return ""
-    body = text[start + len(marker):]
+    body = text[start + len(marker) :]
     following = body.find("===OMICSCLAW_KERNEL_")
     if following >= 0:
         body = body[:following]
@@ -523,8 +518,7 @@ def parse_launch_output(text: str) -> tuple[dict[str, Any], int]:
         info = json.loads(conn_text)
     except ValueError as exc:
         raise RemoteKernelLaunchError(
-            f"the remote connection file did not parse: {exc}; got"
-            f" {conn_text[:200]!r}"
+            f"the remote connection file did not parse: {exc}; got {conn_text[:200]!r}"
         ) from exc
     missing = [name for name in CONNECTION_PORTS if not info.get(name)]
     if missing or "key" not in info:
@@ -566,10 +560,12 @@ def rewrite_connection_info(info: dict[str, Any]) -> dict[str, Any]:
     return rewritten
 
 
-def build_tunnel_argv(host: str, ports: dict[str, Any]) -> list[str]:
+def build_tunnel_argv(
+    host: str, ports: dict[str, Any], *, remote_ports: dict[str, Any] | None = None
+) -> list[str]:
     """The ``ssh -N`` argv carrying the five forwards. Pure.
 
-    Each forward is ``127.0.0.1:<port>:127.0.0.1:<port>`` — the local
+    Each forward maps a local loopback port to its remote loopback port — the local
     bind is loopback-only (no other local user may reach the kernel's
     keyless ports) and the remote destination is the remote loopback the
     kernel bound. ``-N`` carries no shell; ``--`` ends options before
@@ -578,7 +574,8 @@ def build_tunnel_argv(host: str, ports: dict[str, Any]) -> list[str]:
     argv = ["ssh", *TUNNEL_OPTIONS]
     for name in CONNECTION_PORTS:
         port = int(ports[name])
-        argv.extend(["-L", f"127.0.0.1:{port}:127.0.0.1:{port}"])
+        destination = int((remote_ports or ports)[name])
+        argv.extend(["-L", f"127.0.0.1:{port}:127.0.0.1:{destination}"])
     argv.extend(["-N", "--", host])
     return argv
 
@@ -634,9 +631,7 @@ class SyncSshRunner:
                 " thread — this is a call-graph bug, not a network one"
             )
         return asyncio.run(
-            self._spawner.spawn(
-                build_ssh_argv(self._host, command), timeout=timeout
-            )
+            self._spawner.spawn(build_ssh_argv(self._host, command), timeout=timeout)
         )
 
 
@@ -665,9 +660,7 @@ def _tcp_port_open(port: int) -> bool:
         return False
 
 
-def _attach_via_jupyter_client(
-    connection_file: str, timeout: float
-) -> tuple[Any, Any]:
+def _attach_via_jupyter_client(connection_file: str, timeout: float) -> tuple[Any, Any]:
     """Attach, never start: a manager whose connection info is the
     tunnel-facing file, and the blocking client over it. Raises on a
     kernel that does not answer ``kernel_info`` within *timeout*."""
@@ -683,7 +676,7 @@ def _attach_via_jupyter_client(
         try:
             client.stop_channels()
         except Exception:  # noqa: BLE001 - tearing down a broken client
-            pass
+            _log.debug("Failed to close unready kernel channels", exc_info=True)
         raise
     return manager, client
 
@@ -767,6 +760,7 @@ class RemoteSessionKernel(SessionKernel):
         self._attach = attach or _attach_via_jupyter_client
         self._port_open = port_open or _tcp_port_open
         self._tunnel: Any = None
+        self._remote_ports: dict[str, Any] | None = None
         self._torn_down = False
         self._local_conn: Path | None = None
         """The tunnel-facing copy of the connection file, in the local
@@ -786,9 +780,7 @@ class RemoteSessionKernel(SessionKernel):
             raise RuntimeError("kernel already started")
         session_dir = f"{self._sessions_dir}/{_session_slug(self.session_id)}"
         outcome = self._driver(
-            build_kernel_launch_command(
-                self.python, session_dir, self._target_workdir
-            ),
+            build_kernel_launch_command(self.python, session_dir, self._target_workdir),
             timeout=REMOTE_LAUNCH_TIMEOUT_S,
         )
         if outcome.exit_code != 0:
@@ -799,7 +791,23 @@ class RemoteSessionKernel(SessionKernel):
         info, pid = parse_launch_output(outcome.output)
         self.remote_pid = pid
         self.session_dir = session_dir
+        self._remote_ports = dict(info)
         local_info = rewrite_connection_info(info)
+        # Remote ports may already belong to another local process (or to
+        # the kernel itself for localhost). Reserve distinct local endpoints.
+        reservations: list[socket.socket] = []
+        try:
+            for name in CONNECTION_PORTS:
+                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                reservations.append(listener)
+                listener.bind(("127.0.0.1", 0))
+                local_info[name] = listener.getsockname()[1]
+        except BaseException:
+            self.kill()
+            raise
+        finally:
+            for listener in reservations:
+                listener.close()
         scratch = (
             self.workspace
             / ".omicsclaw"
@@ -809,18 +817,14 @@ class RemoteSessionKernel(SessionKernel):
         )
         (scratch / "runtime").mkdir(parents=True, exist_ok=True)
         conn_path = scratch / "runtime" / "kernel.json"
-        conn_path.write_text(
-            json.dumps(local_info, indent=1), encoding="utf-8"
-        )
+        conn_path.write_text(json.dumps(local_info, indent=1), encoding="utf-8")
         # the file carries the session key: the same 0600 the remote
         # side's umask gave its copy, so no other local user may read it
         conn_path.chmod(0o600)
         self._local_conn = conn_path
         try:
             self._start_tunnel(local_info)
-            self._km, self._kc = self._attach(
-                str(conn_path), self._startup_timeout
-            )
+            self._km, self._kc = self._attach(str(conn_path), self._startup_timeout)
         except BaseException:
             self.kill()
             raise
@@ -844,7 +848,9 @@ class RemoteSessionKernel(SessionKernel):
                 if self._kc.is_alive():
                     return True
             except Exception:  # noqa: BLE001 - a broken client is not a verdict
-                pass
+                _log.debug(
+                    "Kernel heartbeat unavailable; probing remote PID", exc_info=True
+                )
         return self._remote_pid_alive()
 
     def interrupt(self) -> None:
@@ -871,7 +877,9 @@ class RemoteSessionKernel(SessionKernel):
                 try:
                     self._kc.stop_channels()
                 except Exception:  # noqa: BLE001
-                    pass
+                    _log.debug(
+                        "Failed to stop kernel channels during teardown", exc_info=True
+                    )
             self._kill_tunnel()
         finally:
             self._km = None
@@ -999,9 +1007,7 @@ class RemoteSessionKernel(SessionKernel):
         if not _valid_pid(pid) or self._torn_down:
             return None
         try:
-            outcome = self._driver(
-                f"cat /proc/{pid}/stat 2>/dev/null", timeout=15.0
-            )
+            outcome = self._driver(f"cat /proc/{pid}/stat 2>/dev/null", timeout=15.0)
             fields = outcome.output.rsplit(")", 1)[1].split()
             ticks = int(fields[11]) + int(fields[12])
             # utime + stime, in clock ticks; 100 Hz is USER_HZ on every
@@ -1031,15 +1037,13 @@ class RemoteSessionKernel(SessionKernel):
             if self._local_conn is None:
                 raise RemoteKernelTunnelError("no connection info to tunnel")
             info = json.loads(self._local_conn.read_text(encoding="utf-8"))
-        argv = build_tunnel_argv(self.host, info)
+        argv = build_tunnel_argv(self.host, info, remote_ports=self._remote_ports)
         self._tunnel = self._tunnel_factory(argv)
         probe_port = int(info["hb_port"])
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             if self._tunnel.poll() is not None:
-                listed = ", ".join(
-                    f"{name}={info[name]}" for name in CONNECTION_PORTS
-                )
+                listed = ", ".join(f"{name}={info[name]}" for name in CONNECTION_PORTS)
                 raise RemoteKernelTunnelError(
                     f"the ssh port-forward to {self.host} exited"
                     f" immediately (exit {self._tunnel.returncode}); a"
@@ -1063,7 +1067,10 @@ class RemoteSessionKernel(SessionKernel):
                 " forwards (the remote kernel keeps its namespace)",
                 self.host,
             )
-            self._start_tunnel()
+            # A listening SSH port alone does not mean the old ZMQ sockets
+            # have reconnected. Attach and wait for readiness before the next
+            # execute request, otherwise that request can be lost.
+            self._reattach()
 
     def _watch_tunnel(self, stop: threading.Event) -> None:
         """While a cell runs: restore a tunnel that dies, once per
@@ -1076,9 +1083,7 @@ class RemoteSessionKernel(SessionKernel):
                 try:
                     self._start_tunnel()
                 except Exception:  # noqa: BLE001 - the cell's deadline is the backstop
-                    _log.debug(
-                        "tunnel restore failed for %s", self.host, exc_info=True
-                    )
+                    _log.debug("tunnel restore failed for %s", self.host, exc_info=True)
                     return
 
     def _reattach(self) -> None:
@@ -1090,7 +1095,9 @@ class RemoteSessionKernel(SessionKernel):
             try:
                 self._kc.stop_channels()
             except Exception:  # noqa: BLE001
-                pass
+                _log.debug(
+                    "Failed to stop old kernel channels during reattach", exc_info=True
+                )
         assert self._local_conn is not None  # start() set it before any channel
         self._km, self._kc = self._attach(
             str(self._local_conn), min(self._startup_timeout, 60.0)
@@ -1115,15 +1122,13 @@ class RemoteSessionKernel(SessionKernel):
                 _kill_process_group(tunnel.pid)
             tunnel.wait(timeout=5)
         except Exception:  # noqa: BLE001 - teardown is best-effort
-            pass
+            _log.debug("Failed to reap kernel tunnel", exc_info=True)
 
     def _remote_pid_alive(self) -> bool:
         if not _valid_pid(self.remote_pid):
             return False
         try:
-            outcome = self._driver(
-                f"kill -0 {self.remote_pid}", timeout=15.0
-            )
+            outcome = self._driver(f"kill -0 {self.remote_pid}", timeout=15.0)
         except Exception as exc:  # noqa: BLE001 - unreachable proves nothing
             _log.debug(
                 "cannot ask %s about pid %s (%s); treating the kernel as"

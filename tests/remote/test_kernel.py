@@ -66,7 +66,7 @@ class FakeDriver:
         self.calls: list[tuple[str, float]] = []
         self.rules: list[tuple[str, ExecOutcome]] = []
 
-    def on(self, needle: str, outcome: ExecOutcome) -> "FakeDriver":
+    def on(self, needle: str, outcome: ExecOutcome) -> FakeDriver:
         self.rules.insert(0, (needle, outcome))
         return self
 
@@ -133,6 +133,7 @@ class FakeClient:
 
     def start_channels(self) -> None:
         self.started_channels = True
+        self.stopped = False
 
     def stop_channels(self) -> None:
         self.stopped = True
@@ -203,9 +204,12 @@ class FakeAttach:
         return object(), client
 
 
-def _kernel(tmp_path: pathlib.Path, driver: FakeDriver, client: FakeClient,
-            tunnels: list[FakeTunnelProcess] | None = None) -> tuple[
-        RemoteSessionKernel, FakeAttach, list[FakeTunnelProcess]]:
+def _kernel(
+    tmp_path: pathlib.Path,
+    driver: FakeDriver,
+    client: FakeClient,
+    tunnels: list[FakeTunnelProcess] | None = None,
+) -> tuple[RemoteSessionKernel, FakeAttach, list[FakeTunnelProcess]]:
     made: list[FakeTunnelProcess] = tunnels if tunnels is not None else []
 
     def factory(argv: list[str]):
@@ -220,9 +224,9 @@ def _kernel(tmp_path: pathlib.Path, driver: FakeDriver, client: FakeClient,
         host="lab1",
         workspace=tmp_path,
         python="/opt/envs/k/bin/python",
-        driver=driver.on("ipykernel_launcher", ExecOutcome(
-            output=_launch_output(), exit_code=0
-        )),
+        driver=driver.on(
+            "ipykernel_launcher", ExecOutcome(output=_launch_output(), exit_code=0)
+        ),
         tunnel_factory=factory,
         attach=attach,
         port_open=lambda port: True,  # no real listener in a unit test
@@ -286,8 +290,7 @@ def test_the_rewrite_pins_loopback_and_keeps_ports():
     rewritten = rewrite_connection_info(widened)
     assert rewritten["ip"] == "127.0.0.1"
     assert rewritten["transport"] == "tcp"
-    for name in ("shell_port", "iopub_port", "stdin_port", "hb_port",
-                 "control_port"):
+    for name in ("shell_port", "iopub_port", "stdin_port", "hb_port", "control_port"):
         assert rewritten[name] == CONN[name]
 
 
@@ -296,8 +299,13 @@ def test_the_tunnel_argv_forwards_five_loopback_ports_and_shares_nothing():
     forwards = [part for part in argv if part.startswith("127.0.0.1:")]
     assert forwards == [
         f"127.0.0.1:{CONN[name]}:127.0.0.1:{CONN[name]}"
-        for name in ("shell_port", "iopub_port", "stdin_port", "hb_port",
-                     "control_port")
+        for name in (
+            "shell_port",
+            "iopub_port",
+            "stdin_port",
+            "hb_port",
+            "control_port",
+        )
     ]
     assert argv[-3:] == ["-N", "--", "lab1"]
     assert "ExitOnForwardFailure=yes" in argv
@@ -317,9 +325,9 @@ def test_start_launches_tunnels_and_attaches(tmp_path: pathlib.Path):
     assert "ipykernel_launcher" in driver.commands()[0]
     # the tunnel carries the five ports of the *rewritten* file
     assert len(tunnels) == 1
-    assert tunnels[0].argv == build_tunnel_argv("lab1", CONN)
     # the local conn file is the rewritten one, under the workspace
     local = json.loads(pathlib.Path(attach.files[0]).read_text())
+    assert tunnels[0].argv == build_tunnel_argv("lab1", local, remote_ports=CONN)
     assert local["ip"] == "127.0.0.1"
     assert attach.files[0].startswith(str(tmp_path))
     assert client.started_channels
@@ -337,7 +345,7 @@ def test_a_failed_launch_raises_and_leaves_no_tunnel(tmp_path: pathlib.Path):
 
 def test_a_tunnel_that_cannot_bind_fails_the_start(tmp_path: pathlib.Path):
     driver, client = FakeDriver(), FakeClient()
-    kernel, _, tunnels = _kernel(tmp_path, driver, client)
+    kernel, _, _tunnels = _kernel(tmp_path, driver, client)
 
     def dead_factory(argv: list[str]):
         process = FakeTunnelProcess()
@@ -372,9 +380,7 @@ def test_kill_tears_down_tunnel_and_remote_by_the_recorded_pid(
     assert kernel.is_alive() is False
     # idempotent: a second kill issues nothing further
     kernel.kill()
-    assert len(
-        [c for c in driver.commands() if c.startswith("kill -KILL 4242")]
-    ) == 1
+    assert len([c for c in driver.commands() if c.startswith("kill -KILL 4242")]) == 1
 
 
 def test_shutdown_is_polite_then_fatal(tmp_path: pathlib.Path):
@@ -420,9 +426,13 @@ def test_the_usage_probes_read_the_remote_proc(tmp_path: pathlib.Path):
     kernel, _, _tunnels = _kernel(tmp_path, driver, client)
     kernel.start()
     driver.on("VmHWM", ExecOutcome(output="VmHWM:\t 1048576 kB\n", exit_code=0))
-    driver.on("cat /proc/4242/stat",
-              ExecOutcome(output="4242 (python) S 1 4242 4242 0 -1 0 100 0 0 0 "
-                                 "12 34 0 0 20 0 1 0\n", exit_code=0))
+    driver.on(
+        "cat /proc/4242/stat",
+        ExecOutcome(
+            output="4242 (python) S 1 4242 4242 0 -1 0 100 0 0 0 12 34 0 0 20 0 1 0\n",
+            exit_code=0,
+        ),
+    )
     assert kernel.peak_rss_kb() == 1048576
     # utime=12 + stime=34 ticks at 100 Hz
     assert kernel.cpu_seconds() == pytest.approx(0.46)
@@ -447,13 +457,14 @@ def test_a_dead_tunnel_between_cells_is_respawned_not_a_death(
     tmp_path: pathlib.Path,
 ):
     driver, client = FakeDriver(), FakeClient()
-    kernel, _, tunnels = _kernel(tmp_path, driver, client)
+    kernel, attach, tunnels = _kernel(tmp_path, driver, client)
     kernel.start()
     first = tunnels[0]
     first.die()  # the forward process is killed between cells
     result = kernel.execute("print('still here')", timeout_s=30.0)
     assert result.status == "ok"
     assert len(tunnels) == 2  # a second forward was raised
+    assert len(attach.files) == 2  # a ready channel before sending the next cell
     assert kernel.remote_pid == 4242  # the same kernel, never restarted
 
 
@@ -475,9 +486,11 @@ def test_the_group_kill_refuses_nonpositive_pids(monkeypatch):
     monkeypatch.setattr(_os, "kill", lambda *a: fired.append(("kill", a)))
     monkeypatch.setattr(_os, "killpg", lambda *a: fired.append(("killpg", a)))
     monkeypatch.setattr(
-        _os, "getpgid", lambda p: (_ for _ in ()).throw(
+        _os,
+        "getpgid",
+        lambda p: (_ for _ in ()).throw(
             AssertionError("getpgid reached for a nonpositive pid")
-        )
+        ),
     )
     for bad in (-1, 0, None, "4242"):
         _kill_process_group(bad)  # type: ignore[arg-type]
@@ -609,3 +622,23 @@ def test_the_mid_cell_retry_happens_once_never_twice(tmp_path: pathlib.Path):
     assert len(broken_one.sent) == 1 and len(broken_two.sent) == 1
     assert len(attach.files) == 2  # the original attach and one re-attach
     assert result.notice == ""  # a dead cell is not dressed as a retry
+
+
+def test_tunnel_can_use_distinct_local_and_remote_ports():
+    local = dict(CONN, hb_port=54104)
+    argv = build_tunnel_argv("lab1", local, remote_ports=CONN)
+    assert "127.0.0.1:54104:127.0.0.1:53104" in argv
+
+
+def test_local_port_allocation_failure_cleans_remote_kernel(tmp_path, monkeypatch):
+    driver, client = FakeDriver(), FakeClient()
+    kernel, _, tunnels = _kernel(tmp_path, driver, client)
+
+    def exhausted(*args, **kwargs):
+        raise OSError("socket unavailable")
+
+    monkeypatch.setattr("omicsclaw.remote.kernel.socket.socket", exhausted)
+    with pytest.raises(OSError, match="socket unavailable"):
+        kernel.start()
+    assert any("kill" in command and "4242" in command for command in driver.commands())
+    assert not tunnels
