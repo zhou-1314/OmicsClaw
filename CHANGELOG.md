@@ -1,3 +1,7 @@
+## 2026-10-13 — Main integration acceptance
+
+CI provisions the R kernel used by Desktop code execution. Compaction acceptance explicitly checks EMERGENCY history write-back, and the process-entry inventory includes the offline remote-target migration command.
+
 ## 2026-10-13 — Hosted Notebook live apps
 
 Notebooks can host a versioned, self-contained HTML/JS application linked to a completed execution. The Agent publishes through the approval-gated `live_app` tool. The Desktop iframe provides bounded Notebook context and saves structured interaction state through revision-checked routes; the next chat request receives that state as untrusted reference data. See `docs/core-features/notebook.md` for the API, bridge and hosting limits.

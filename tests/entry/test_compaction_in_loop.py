@@ -330,14 +330,13 @@ def test_compact_summarizes_a_quiet_session_in_its_lane(tmp_path):
     assert provider.calls == 1, "no model turn ran for the compaction"
 
 
-def test_a_failed_compact_leaves_the_session_as_it_was(tmp_path):
-    """Tight enough that the truncating fallback really removes messages,
-    so keeping it and not keeping it are distinguishable."""
+def test_an_emergency_failed_compact_writes_back_truncation(tmp_path):
+    """An emergency fallback removes messages and becomes the new history."""
     provider = Scripted(Message.assistant("done"))
     # The divisor sits the composed conversation (system prompt included)
-    # in the FULL tier: 0.72 crossed into EMERGENCY once the compaction
-    # contract grew the prompt, and EMERGENCY writes its truncation back
-    # whatever the summary does.
+    # in EMERGENCY once the compaction contract is present. EMERGENCY is
+    # the one degraded result that must be written back: the original
+    # history cannot be sent, so its truncation becomes the new baseline.
     tight = int(estimate_messages_tokens(_bulk()) / 0.70)
     app = attach_sessions(
         _app(tmp_path, provider, Table().tool(), tokens=tight, summarizer=Failing())
@@ -351,9 +350,12 @@ def test_a_failed_compact_leaves_the_session_as_it_was(tmp_path):
     outcome, session = _run(drive())
 
     record = outcome.compaction
+    assert record.pressure is Pressure.EMERGENCY
     assert record.degraded and record.msgs_after < record.msgs_before
-    assert not record.written_back
-    assert session.history == _bulk()
+    assert record.written_back
+    assert session.history == outcome.history
+    assert len(session.history) <= record.msgs_after
+    assert session.history != _bulk()
 
 
 def test_the_channel_command_reports_the_compaction(tmp_path):
