@@ -743,7 +743,7 @@ class RemoteSessionKernel(SessionKernel):
     ) -> None:
         super().__init__(
             session_id,
-            workspace=workspace,
+            workspace=Path(workspace),
             limits=limits,
             on_figure=on_figure,
             startup_timeout=startup_timeout,
