@@ -175,13 +175,13 @@ def test_health_publishes_jobs_contract_and_connection_epoch(tmp_path):
         assert path in payload["served_paths"]
 
 
-def test_chat_stream_frames_carry_epoch(tmp_path):
+def test_chat_stream_preserves_the_v3_two_key_envelope(tmp_path):
     _, http = jobs_client(tmp_path)
     with http as client:
         frames = drain_sse_post(client)
     assert frames, "the scripted exchange produced no frames"
     for _, envelope in frames:
-        assert envelope["epoch"] == CONNECTION_EPOCH
+        assert set(envelope) == {"type", "data"}
 
 
 def drain_sse_post(client) -> list[tuple[int | None, dict]]:

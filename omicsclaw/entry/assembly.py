@@ -118,6 +118,7 @@ from omicsclaw.memory.artifacts import (
     new_artifact_id,
 )
 from omicsclaw.memory.database import Database
+from omicsclaw.memory.notebook import NotebookCell, NotebookStore, ExecutionRecord
 from omicsclaw.observability import Telemetry, build_telemetry
 from omicsclaw.permission import (
     GatedTool,
@@ -493,7 +494,11 @@ def foundation_tools(
     if config.skills_index is not SkillsIndex.OFF:
         index = build_skill_index(config) if skills is None else skills
         annotate = skill_env.annotate if skill_env is not None else None
-        tools = (*tools, use_skill_tool(index, annotate=annotate), search_skill_tool(index))
+        tools = (
+            *tools,
+            use_skill_tool(index, annotate=annotate),
+            search_skill_tool(index),
+        )
     if plans is not None:
         tools = (*tools, plan_write_tool(plans))
     if memory is not None:
@@ -535,9 +540,7 @@ class WorkspaceArtifactSink:
 
     def _ensure(self) -> ArtifactStore:
         if self._store is None:
-            self._store = ArtifactStore(
-                Database(self._root / ".omicsclaw" / "jobs.db")
-            )
+            self._store = ArtifactStore(Database(self._root / ".omicsclaw" / "jobs.db"))
         return self._store
 
     def save(self, *, path: str, kind: str, title: str, session_id: str) -> str:
@@ -616,6 +619,7 @@ class WorkspaceKernelBinding:
         workspace: Workspace | Path | str,
         *,
         remote_runtime: RemoteKernelStarter | None = None,
+        notebook_store: NotebookStore | None = None,
     ) -> None:
         """*remote_runtime* (C3) is the remote kernel half or ``None`` —
         ``None`` is the off answer: the manager then refuses remote
@@ -631,12 +635,33 @@ class WorkspaceKernelBinding:
         )
         self._root = root
         self._store: ArtifactStore | None = None
+        self._notebook_store = notebook_store
+        self._notebooks = None
+        self._notebooks_db = None
+
+    @property
+    def notebooks(self):
+        if self._notebooks is None:
+            from .desktop.notebooks_manager import NotebookAnalysis
+
+            self._notebooks_db = Database(self._root / ".omicsclaw" / "notebooks.db")
+            self._notebooks = NotebookAnalysis(self._notebooks_db, self.manager)
+        return self._notebooks
+
+    async def aclose(self):
+        try:
+            if self._notebooks is not None:
+                await self._notebooks.close()
+        finally:
+            try:
+                await self.manager.aclose()
+            finally:
+                if self._notebooks_db is not None:
+                    self._notebooks_db.close()
 
     def _ensure_store(self) -> ArtifactStore:
         if self._store is None:
-            self._store = ArtifactStore(
-                Database(self._root / ".omicsclaw" / "jobs.db")
-            )
+            self._store = ArtifactStore(Database(self._root / ".omicsclaw" / "jobs.db"))
         return self._store
 
     def _register_figure(
@@ -679,6 +704,10 @@ class WorkspaceKernelBinding:
         on_output=None,
         timeout_s: float | None = None,
         location: str = "local",
+        notebook_id: str = "",
+        cell_id: str = "",
+        client_command_id: str = "",
+        session_epoch: int = 0,
     ) -> str:
         """The ``KernelRunner`` seam: one cell, one summary string.
 
@@ -686,21 +715,202 @@ class WorkspaceKernelBinding:
         manager verbatim — the refusals (no runtime, bad shape) are the
         manager's, so both faces answer them identically."""
         from omicsclaw.kernel import KernelCallbacks
+        from omicsclaw.tools.context import context_value
+        import hashlib
+        import uuid
+
+        if self.notebooks.binding(session_id=session_id) is not None:
+            call = context_value("tool_call_id", "")
+            turn = context_value("turn_id", "")
+            command = hashlib.sha256(
+                json.dumps([session_id, turn, call or uuid.uuid4().hex]).encode()
+            ).hexdigest()
+            return await self.notebooks.run_agent(
+                session_id,
+                code,
+                command,
+                on_output=on_output,
+                timeout_s=timeout_s,
+                location=location,
+            )
 
         def _stream(name: str, text: str) -> None:
-            if on_output is not None and name == "stdout":
-                on_output(text)
+            if name == "stdout":
+                chunks.append(text)
+                if on_output is not None:
+                    on_output(text)
 
-        result = await self.manager.execute(
-            session_id,
-            code,
-            origin="agent",  # TODO(P4): distinguish user cells when the
-            # desktop chat surface starts sending them; the screenshot
-            # semantics of CS's origin=="user" hang off this flag.
-            location=location,
-            callbacks=KernelCallbacks(on_stream=_stream),
-            timeout_s=timeout_s,
-        )
+        import uuid
+
+        execution_id = uuid.uuid4().hex
+        notebook_id = notebook_id or session_id
+        cell_id = cell_id or execution_id
+        chunks: list[str] = []
+        store = self._notebook_store
+        if store is not None:
+            base_cell = NotebookCell(
+                notebook_id=notebook_id,
+                cell_id=cell_id,
+                source=code,
+                status="queued",
+                provenance={"source": "persistent_kernel"},
+                trust_label="kernel_output_data",
+                session_epoch=session_epoch,
+                client_command_id=client_command_id,
+                execution_id=execution_id,
+            )
+            await store.put_cell(base_cell)
+            await store.record_execution(
+                ExecutionRecord(
+                    execution_id=execution_id,
+                    notebook_id=notebook_id,
+                    cell_id=cell_id,
+                    session_epoch=session_epoch,
+                    client_command_id=client_command_id,
+                    status="queued",
+                    provenance={"source": "persistent_kernel"},
+                    trust_label="kernel_output_data",
+                )
+            )
+            await store.update_execution(execution_id, status="running")
+            await store.put_cell(
+                NotebookCell(
+                    notebook_id=notebook_id,
+                    cell_id=cell_id,
+                    source=code,
+                    status="running",
+                    provenance={"source": "persistent_kernel"},
+                    trust_label="kernel_output_data",
+                    session_epoch=session_epoch,
+                    client_command_id=client_command_id,
+                    execution_id=execution_id,
+                )
+            )
+        result = None
+        try:
+            result = await self.manager.execute(
+                session_id,
+                code,
+                origin="agent",  # TODO(P4): distinguish user cells when the
+                # desktop chat surface starts sending them; the screenshot
+                # semantics of CS's origin=="user" hang off this flag.
+                location=location,
+                callbacks=KernelCallbacks(on_stream=_stream),
+                timeout_s=timeout_s,
+            )
+        except asyncio.CancelledError:
+            if store is not None:
+                output = {
+                    "status": "interrupted",
+                    "stdout": "".join(chunks),
+                    "error_type": "CancelledError",
+                }
+                await store.update_execution(
+                    execution_id,
+                    status="interrupted",
+                    output=output,
+                    provenance={
+                        "source": "persistent_kernel",
+                        "execution_id": execution_id,
+                    },
+                    trust_label="kernel_output_data",
+                    finished_at=time.time(),
+                )
+                await store.put_cell(
+                    NotebookCell(
+                        notebook_id=notebook_id,
+                        cell_id=cell_id,
+                        source=code,
+                        status="interrupted",
+                        output=output,
+                        provenance={
+                            "source": "persistent_kernel",
+                            "execution_id": execution_id,
+                        },
+                        trust_label="kernel_output_data",
+                        session_epoch=session_epoch,
+                        client_command_id=client_command_id,
+                        execution_id=execution_id,
+                    )
+                )
+            raise
+        except BaseException as exc:
+            if store is not None:
+                output = {
+                    "status": "failed",
+                    "stdout": "".join(chunks),
+                    "error_type": type(exc).__name__,
+                }
+                await store.update_execution(
+                    execution_id,
+                    status="failed",
+                    output=output,
+                    provenance={
+                        "source": "persistent_kernel",
+                        "execution_id": execution_id,
+                    },
+                    trust_label="kernel_output_data",
+                    finished_at=time.time(),
+                )
+                await store.put_cell(
+                    NotebookCell(
+                        notebook_id=notebook_id,
+                        cell_id=cell_id,
+                        source=code,
+                        status="failed",
+                        output=output,
+                        provenance={
+                            "source": "persistent_kernel",
+                            "execution_id": execution_id,
+                        },
+                        trust_label="kernel_output_data",
+                        session_epoch=session_epoch,
+                        client_command_id=client_command_id,
+                        execution_id=execution_id,
+                    )
+                )
+            raise
+        status = {
+            "ok": "completed",
+            "error": "failed",
+            "timeout": "interrupted",
+            "interrupted": "interrupted",
+        }.get(result.status, "failed")
+        output = {
+            "status": result.status,
+            "stdout": "".join(chunks),
+            "stderr": result.stderr,
+            "error": result.error,
+        }
+        if store is not None:
+            await store.update_execution(
+                execution_id,
+                status=status,
+                output=output,
+                provenance={
+                    "source": "persistent_kernel",
+                    "execution_id": execution_id,
+                },
+                trust_label="kernel_output_data",
+                finished_at=time.time(),
+            )
+            await store.put_cell(
+                NotebookCell(
+                    notebook_id=notebook_id,
+                    cell_id=cell_id,
+                    source=code,
+                    status=status,
+                    output=output,
+                    provenance={
+                        "source": "persistent_kernel",
+                        "execution_id": execution_id,
+                    },
+                    trust_label="kernel_output_data",
+                    session_epoch=session_epoch,
+                    client_command_id=client_command_id,
+                    execution_id=execution_id,
+                )
+            )
         return format_cell_summary(result)
 
 
@@ -1060,9 +1270,7 @@ class RecordingPromptSource:
         digest = hashlib.sha256(prompt.system_prompt.encode("utf-8")).hexdigest()[:16]
         if digest != self._last:
             total = prompt.total_estimated_tokens
-            stats = ",".join(
-                f"{key}={tokens}" for key, tokens in prompt.section_stats
-            )
+            stats = ",".join(f"{key}={tokens}" for key, tokens in prompt.section_stats)
             _log.info(
                 "prompt.render changed hash=%s tokens=%d sections=%s",
                 digest,
@@ -1513,7 +1721,7 @@ class AgentApp:
                             # kernel to finish on — and before the memory
                             # closes, because a finishing cell may still be
                             # registering artifacts.
-                            await self.kernels.manager.aclose()
+                            await self.kernels.aclose()
                     finally:
                         try:
                             if self.memory is not None:
@@ -1740,7 +1948,13 @@ def build_app(
         # :attr:`AgentApp.kernels` (the desktop jobs plane's code_run runner
         # reads it back). Lazy kernels keep this cheap for deployments that
         # never run a cell.
-        kernels = WorkspaceKernelBinding(config.workspace, remote_runtime=remote_kernels)
+        kernels = WorkspaceKernelBinding(
+            config.workspace,
+            remote_runtime=remote_kernels,
+            notebook_store=(
+                NotebookStore(remembering.database) if remembering is not None else None
+            ),
+        )
         if tools is None:
             mounted: Sequence[Tool] = (
                 *foundation_tools(

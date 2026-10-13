@@ -97,6 +97,8 @@ network access by setting `OMICSCLAW_SANDBOX=docker` and
 
 ## Desktop App
 
+The current source App includes an [interactive Python notebook](docs/core-features/notebook.md) with persistent kernel sessions, durable execution replay, `.ipynb` interchange, and execution-linked feedback. Run matching backend and App source to use the Notebook navigation item.
+
 <p align="center">
   <img src="docs/images/omicsclaw-app-overview.png" alt="The OmicsClaw desktop app, with a project's conversations in the sidebar and the chat box in the middle" width="94%"/>
 </p>

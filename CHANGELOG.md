@@ -1,3 +1,37 @@
+## 2026-10-13 — Shared Notebook analysis and bounded live state
+
+Chats can explicitly bind to a notebook and share its local Python kernel. Approved Agent calls and user cells now enter the same durable execution history; cancellation covers admission and kernel startup. A versioned live-state endpoint publishes execution-linked notes, selections and view parameters as bounded, untrusted reference data on each model request. The Desktop UI carries runtime identity across both directions of navigation. See `docs/core-features/notebook.md` for contracts and `docs/NOTEBOOK_DELIVERY.md` for final verification.
+
+
+## 2026-10-13 — Desktop interactive notebook
+
+- Matched declared Desktop routes against the mounted application and restored Chat v3 two-key envelopes for old and current App clients.
+- Added authenticated notebook editing, explicit execution and cancellation, durable SSE replay, source revision checks, command deduplication, and owner-loss recovery using the existing persistent kernel manager.
+- Added `.ipynb` code-cell import/export and inert execution-linked notes/selections. Imported outputs never execute.
+- Added the App Notebook workspace with runtime-bound forwarding, reconnect, outputs, PNG/JPEG figures, and bilingual controls.
+- Closed admission/shutdown and terminal-flush races with targeted tests and independent backend/frontend reviews.
+
+## 2026-10-13 -- Notebook interchange and live-app refeed
+
+- Added safe nbformat 4 import/export helpers. Imports preserve code source and provenance while dropping stored outputs and marking cells untrusted.
+- Added a live-app adapter that re-feeds kernel callback output as ordered TurnStream progress data, with a completion marker after cross-thread callbacks drain.
+- Added import/export and live refeed acceptance tests.
+## 2026-10-13 — Cross-process durable stream ownership
+
+- Added transactional owner leases with expiry takeover, stale-epoch rejection, and explicit owner conflicts.
+- Enforced contiguous durable sequence writes and added cross-connection tests.
+- Documented flush and terminal durability semantics, including observable durable sink failures.
+
+## 2026-10-12 — Durable TurnStream replay (P1)
+
+- Added the additive `turn_events` SQLite log with idempotent sequence writes and retention bounds.
+- TurnStream can dual-write projected wire events and recover reconnect cursors from durable storage; true retention loss remains an explicit `GAP`. Writes use an ordered async worker, ring fallback, and `flush_durable()` before a turn is awaited.
+- WorkspaceKernelBinding optionally records persistent-kernel cell lifecycle in NotebookStore with provenance and trust labels. The registry integration is a gray rollout behind `OMICSCLAW_DURABLE_TURN_EVENTS=1`.
+
+## 2026-10-12 — Durable notebook P0
+
+- Added additive SQLite-backed notebook cells and execution records with revision checks, session epochs, and idempotent command/execution writes.
+
 # Changelog
 
 Milestones and repository decisions, newest first. The entries below the

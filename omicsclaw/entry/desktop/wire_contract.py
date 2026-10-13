@@ -118,6 +118,17 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/remote/hosts/aliases",
     "/remote/hosts/{alias}/files/tree",
     "/remote/hosts/{alias}/files/serve",
+    "/notebooks",
+    "/notebooks/{notebook_id}",
+    "/notebooks/{notebook_id}/cells/{cell_id}",
+    "/notebooks/{notebook_id}/cells/{cell_id}/execute",
+    "/notebooks/{notebook_id}/executions/{execution_id}/events",
+    "/notebooks/{notebook_id}/executions/{execution_id}/cancel",
+    "/notebooks/{notebook_id}/import",
+    "/notebooks/{notebook_id}/export",
+    "/notebooks/{notebook_id}/feedback",
+    "/notebooks/{notebook_id}/binding",
+    "/notebooks/{notebook_id}/live-state",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``

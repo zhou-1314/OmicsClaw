@@ -35,6 +35,7 @@ jupyter_client channel); today R stays on the step-runner subprocess.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,29 @@ class KernelHandle:
             "revision": list(self.revision),
             "summary": self.summary,
         }
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "adata_id": self.adata_id,
+                "session_id": self.session_id,
+                "revision": list(self.revision),
+                "summary": self.summary,
+                "synced_at": self.synced_at,
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> KernelHandle:
+        data = json.loads(text)
+        return cls(
+            adata_id=str(data["adata_id"]),
+            session_id=str(data["session_id"]),
+            revision=tuple(int(x) for x in data["revision"]),
+            summary=str(data.get("summary", "")),
+            synced_at=float(data.get("synced_at", time.time())),
+        )
 
 
 def _revision(path: Path) -> tuple[int, int]:
@@ -147,7 +171,9 @@ class HandleRegistry:
             f"print({OV_KERNEL_VAR}[{adata_id!r}])\n"
         )
         outcome = kernel.execute(code, timeout_s=600.0)
-        summary = outcome.stdout.strip().splitlines()[-1] if outcome.stdout.strip() else ""
+        summary = (
+            outcome.stdout.strip().splitlines()[-1] if outcome.stdout.strip() else ""
+        )
         if outcome.status in ("error", "timeout", "dead"):
             reason = (outcome.error or {}).get("evalue") or outcome.status
             raise HandleError(f"syncing {adata_id!r} into the kernel failed: {reason}")

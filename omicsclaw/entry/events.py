@@ -361,6 +361,9 @@ class TurnEvent:
     otherwise. ``pass`` is never published — quiet is the frame's absence."""
 
     review_note: str = ""
+    wire_payload: dict[str, object] | None = None
+    """Durable replay payload; inert projected data only."""
+
     """The reviewer's one-paragraph note on a ``SHADOW_REVIEW`` frame,
     already capped by the shadow-review module."""
 

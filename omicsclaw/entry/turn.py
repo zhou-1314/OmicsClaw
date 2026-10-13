@@ -957,6 +957,7 @@ class TurnHandle:
         approval_timeout_s: float | None = None,
         abandon_grace_s: float | None = None,
         compaction_only: bool = False,
+        durable_log=None,
     ) -> None:
         """``abandon_grace_s=None`` means an unwatched exchange keeps running.
 
@@ -1009,6 +1010,7 @@ class TurnHandle:
                 ring_size if observer_queue_size is None else observer_queue_size
             ),
             on_observer_change=self._observers_changed,
+            durable_log=durable_log,
         )
         # The ``n`` of every ``<turn id>#<n>`` request id of this exchange,
         # shared by everything that asks the person something.
@@ -1106,6 +1108,7 @@ class TurnHandle:
         one question and prints one answer is that caller.
         """
         await self._settled.wait()
+        await self.stream.flush_durable()
         return self.outcome
 
     @property
@@ -1138,6 +1141,13 @@ class TurnHandle:
         self.terminal = terminal
         self.error = error
         self.outcome = outcome
+        if self.stream._durable_tasks:
+            asyncio.create_task(self._settle_after_durable_flush())
+        else:
+            self._settled.set()
+
+    async def _settle_after_durable_flush(self) -> None:
+        await self.stream.flush_durable()
         self._settled.set()
 
     def _publish_terminal(self, terminal: Terminal) -> None:

@@ -404,6 +404,13 @@ class AppConfig:
     the process that served them and end with it. Not about container
     memory; that is :attr:`sandbox_memory`."""
 
+    durable_turn_events: bool = False
+    """Persist chat turn events for replay when memory is enabled.
+
+    Off by default during rollout. Parsed from the supplied deployment
+    environment or command line; session construction never reads globals.
+    """
+
     skill_env: SkillEnvMode = SkillEnvMode.PROBE
     """Whether ``use_skill`` reports the declared packages ``bash``'s ``python``
     cannot import, and whether ``install_skill_deps`` is mounted. See
@@ -1014,6 +1021,12 @@ _OPTIONS: tuple[_Option, ...] = (
         _as_str,
     ),
     _Option("memory", "--memory", ("OMICSCLAW_MEMORY",), _as_bool),
+    _Option(
+        "durable_turn_events",
+        "--durable-turn-events",
+        ("OMICSCLAW_DURABLE_TURN_EVENTS",),
+        _as_bool,
+    ),
     _Option("planning", "--planning", ("OMICSCLAW_PLANNING",), _as_bool),
     _Option(
         "planning_gate_turns",

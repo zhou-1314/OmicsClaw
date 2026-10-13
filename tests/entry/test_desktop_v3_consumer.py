@@ -13,7 +13,6 @@ httpx = pytest.importorskip("httpx")
 uvicorn = pytest.importorskip("uvicorn")
 pytest.importorskip("fastapi")
 
-from omicsclaw.entry.desktop.wire_contract import CONNECTION_EPOCH
 from tests.entry.desktop_compat_server import compatibility_app
 
 
@@ -44,6 +43,7 @@ def test_v3_consumer_health_chat_approval_and_abort(tmp_path):
                             if not line.startswith('data: '):
                                 continue
                             frame = json.loads(line[6:])
+                            assert set(frame) == {'type', 'data'}
                             assert isinstance(frame['data'], str)
                             frames.append(frame)
                             if frame['type'] == 'permission_request':
@@ -53,9 +53,9 @@ def test_v3_consumer_health_chat_approval_and_abort(tmp_path):
                             if prompt == 'abort' and frame['type'] == 'tool_use':
                                 answer = await client.post('/chat/abort', json={'session_id': body['session_id'], 'source_request_id': body['source_request_id']})
                                 assert answer.json()['state'] == 'cancelling'
-                    assert frames[-1] == {'type': 'done', 'data': '', 'epoch': CONNECTION_EPOCH}
+                    assert frames[-1] == {'type': 'done', 'data': ''}
                     if prompt == 'abort':
-                        assert frames[-2] == {'type': 'error', 'data': 'cancelled', 'epoch': CONNECTION_EPOCH}
+                        assert frames[-2] == {'type': 'error', 'data': 'cancelled'}
                     else:
                         text = ''.join(frame['data'] for frame in frames if frame['type'] == 'text')
                         assert text == ('compatibility hello' if prompt == 'hello' else 'approved: ask ran')

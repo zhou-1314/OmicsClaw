@@ -45,7 +45,12 @@ from contextlib import AbstractContextManager
 from omicsclaw.schema import ToolCall, ToolDefinition, ToolResult
 
 from .base import Tool, ToolPolicy
-from .context import TimeoutPause, use_effective_policy
+from .context import (
+    TimeoutPause,
+    use_effective_policy,
+    current_context,
+    use_tool_context,
+)
 from .context import use_timeout_pause as publish_timeout_pause
 
 _DECLARED_NOTHING = ToolPolicy()
@@ -282,9 +287,7 @@ class ToolRegistry:
 
     # ---- dispatch -------------------------------------------------------
 
-    def use_timeout_pause(
-        self, pause: TimeoutPause
-    ) -> AbstractContextManager[None]:
+    def use_timeout_pause(self, pause: TimeoutPause) -> AbstractContextManager[None]:
         """Carry the scheduler's per-call timeout pause down to the tools.
 
         Entered by the engine around one call and closed after it, so a
@@ -356,7 +359,16 @@ class ToolRegistry:
 
         started = time.perf_counter()
         try:
-            with use_effective_policy(self.policy_for(call.name)):
+            outer = current_context()
+            with (
+                use_effective_policy(self.policy_for(call.name)),
+                use_tool_context(
+                    approval=outer.approval,
+                    progress=outer.progress,
+                    question=outer.question,
+                    values={**outer.values, "tool_call_id": call.id},
+                ),
+            ):
                 output = await tool.execute(call.arguments)
         except Exception as exc:
             return _failed(

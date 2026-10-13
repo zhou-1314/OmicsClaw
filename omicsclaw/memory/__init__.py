@@ -48,6 +48,13 @@ from .extractor import (
     render_conversation,
 )
 from .longterm import Category, MemoryEntry, normalize, signature
+from .notebook import (
+    ExecutionConflict,
+    ExecutionRecord,
+    NotebookCell,
+    NotebookStore,
+    RevisionConflict,
+)
 from .offload import FileOffloadStore, safe_name
 from .precis import (
     PRECIS_MAX_BYTES,
@@ -77,6 +84,11 @@ __all__ = [
     "JsonlCompactionLog",
     "LoggedCompaction",
     "LongTermStore",
+    "NotebookCell",
+    "ExecutionConflict",
+    "ExecutionRecord",
+    "NotebookStore",
+    "RevisionConflict",
     "MemoryEntry",
     "MemoryExtractor",
     "Precis",
@@ -92,4 +104,20 @@ __all__ = [
     "safe_name",
     "signature",
     "truncate_utf8",
+    "DurableTurnEvent",
+    "DurableTurnEventLog",
+    "EventLogConflict",
+    "StreamOwnerConflict",
+    "cells_to_ipynb",
+    "export_ipynb",
+    "import_ipynb",
+    "write_ipynb",
 ]
+
+from .notebook_io import cells_to_ipynb, export_ipynb, import_ipynb, write_ipynb
+from .turn_events import (
+    DurableTurnEvent,
+    DurableTurnEventLog,
+    EventLogConflict,
+    StreamOwnerConflict,
+)
