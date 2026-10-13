@@ -1,3 +1,7 @@
+## 2026-10-13 — Hosted Notebook live apps
+
+Notebooks can host a versioned, self-contained HTML/JS application linked to a completed execution. The Agent publishes through the approval-gated `live_app` tool. The Desktop iframe provides bounded Notebook context and saves structured interaction state through revision-checked routes; the next chat request receives that state as untrusted reference data. See `docs/core-features/notebook.md` for the API, bridge and hosting limits.
+
 ## 2026-10-13 — Shared Notebook analysis and bounded live state
 
 Chats can explicitly bind to a notebook and share its local Python kernel. Approved Agent calls and user cells now enter the same durable execution history; cancellation covers admission and kernel startup. A versioned live-state endpoint publishes execution-linked notes, selections and view parameters as bounded, untrusted reference data on each model request. The Desktop UI carries runtime identity across both directions of navigation. See `docs/core-features/notebook.md` for contracts and `docs/NOTEBOOK_DELIVERY.md` for final verification.
