@@ -289,7 +289,7 @@ class TextRenderer:
         reasoning = event.type is TurnEventType.REASONING_DELTA
         if reasoning and not self._show_reasoning:
             return None
-        delta = event.engine.delta if event.engine is not None else ""
+        delta = event.engine.delta if event.engine is not None else str((event.wire_payload or {}).get("delta", ""))
         if not delta:
             return None
         kind = "reasoning" if reasoning else "text"
@@ -561,6 +561,11 @@ def to_wire(event: TurnEvent) -> dict[str, Any]:
         "turn_id": event.turn_id,
     }
     wire.update(_payload(event))
+    if event.wire_payload is not None:
+        # Durable payloads are untrusted data; identity and schema fields are
+        # owned by the current frame and cannot be overwritten by replay data.
+        wire.update({k: v for k, v in event.wire_payload.items()
+                     if k not in {"schema_version", "type", "sequence", "session_id", "turn_id"}})
     return wire
 
 

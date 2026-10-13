@@ -374,11 +374,14 @@ if augmentor is not None:
 
 ```python
 def should_write_back(record):
-    if record.degraded and record.pressure is not Pressure.EMERGENCY:
-        return False                  # 摘要失败：截断结果只服务这一次调用，下一次重试真摘要
-    return (record.msgs_after < record.msgs_before
-            or record.tokens_after < record.tokens_before
-            or bool(record.offloaded))  # 没有实际削减就不写回
+    changed = (record.msgs_after < record.msgs_before
+               or record.tokens_after < record.tokens_before
+               or bool(record.offloaded))
+    if record.pressure is Pressure.EMERGENCY:
+        return changed          # 原历史发不出去，截断必须成为新基线
+    if record.degraded:
+        return False            # SOFT/FULL 失败只服务本次调用
+    return changed
 ```
 
 - **EMERGENCY 写回**：完整历史已经发不出去，不写回会每轮重新 EMERGENCY；
@@ -460,11 +463,11 @@ class CompactionRecord:
 async def force(history, tools=()) -> tuple[tuple[Message, ...], CompactionRecord]
 ```
 
-不看触发门，以 `floor=Pressure.FULL` 调用 `compact()`：offload + 摘要整个 head；测得 EMERGENCY 时仍然截断；失败照常回退，且同样过 `should_write_back`——摘要失败时截断结果**不会**写进会话。理由是用户键入 `/compact` 期待的就是"现在摘要"。
+不看触发门，以 `floor=Pressure.FULL` 调用 `compact()`：offload + 摘要整个 head；测得 EMERGENCY 时仍然截断；失败照常回退，且同样过 `should_write_back`——SOFT/FULL 的摘要失败保留原历史，EMERGENCY 的截断必须写进会话，因为原历史已经无法发送。理由是用户键入 `/compact` 期待的就是"现在摘要"。
 
 ### 9.2 在会话车道里执行
 
-`SessionRegistry.compact(session_id)` 把它作为一个 `compaction_only` exchange 放进该会话的串行车道，不会与正在进行的 exchange 竞争同一段历史（排满时抛 `QueueFull`，关闭中抛 `RegistryClosed`）。`TurnRunner` 走 `_compact_only`：`compose(app, history, "")` → `compactor.force(messages, app.tools_snapshot)` → 写回时用压缩结果、否则保留原对话 → `TurnOutcome(history=kept[1:], state=compactor.state, compaction=record)`。这条路径不调用主模型、不注入计划块。
+`SessionRegistry.compact(session_id)` 把它作为一个 `compaction_only` exchange 放进该会话的串行车道，不会与正在进行的 exchange 竞争同一段历史（排满时抛 `QueueFull`，关闭中抛 `RegistryClosed`）。`TurnRunner` 走 `_compact_only`：`compose(app, history, "")` → `compactor.force(messages, app.tools_snapshot)` → 写回时用压缩结果、否则保留原对话 → `TurnOutcome(history=kept[1:], state=compactor.state, compaction=record)`。这条路径不调用主模型、不注入计划块。摘要失败时，SOFT/FULL 保留原历史；EMERGENCY 的截断则必须写回，因为原始历史已经无法发送。
 
 `compose` 交出的对话里没有未答的工具调用（`drop_unanswered_calls`，见 [context-engineering.md](context-engineering.md) §7），压缩器拿到的是清理过的历史。摘要成功时，被输出上限截断的调用后面不会再补一条 `MISSING_TOOL_RESULT` 占位。没有写回时，上面说的"原对话"也是清理过的那一份，所以 `/compact` 即使没有写回，也会把这些调用从会话历史里去掉。
 

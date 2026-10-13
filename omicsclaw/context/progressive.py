@@ -42,19 +42,23 @@ CompactionListener = Callable[[CompactionRecord], Awaitable[None]]
 def should_write_back(record: CompactionRecord) -> bool:
     """Whether a compaction's result should replace the history it came from.
 
-    Not when it degraded below the emergency tier: that is a failed
-    summary whose truncated fallback should serve one call while the next
-    call retries. Always after an emergency truncation, since the full
-    history no longer fits at all. Otherwise only when something was
-    actually removed or offloaded.
+    A degraded SOFT or FULL summary is a failed replacement: its
+    truncated view serves one model call, while the next call retries from
+    the original history. EMERGENCY is different. The full history no
+    longer fits, so its truncation is the only sendable state and must be
+    persisted even when ``degraded`` records the fallback reason.
+    Otherwise only a result that removed or offloaded something is kept.
     """
-    if record.degraded and record.pressure is not Pressure.EMERGENCY:
-        return False
-    return (
+    changed = (
         record.msgs_after < record.msgs_before
         or record.tokens_after < record.tokens_before
         or bool(record.offloaded)
     )
+    if record.pressure is Pressure.EMERGENCY:
+        return changed
+    if record.degraded:
+        return False
+    return changed
 
 
 def _did_something(record: CompactionRecord) -> bool:
@@ -163,8 +167,9 @@ class ProgressiveCompactor:
 
         Offloads and summarizes as the FULL tier does; an emergency-level
         conversation is still truncated. Check
-        :attr:`CompactionRecord.written_back` before keeping the result: a
-        failed summary is not written back.
+        :attr:`CompactionRecord.written_back` before keeping the result:
+        failed SOFT/FULL summaries are transient, while an EMERGENCY
+        truncation is always persisted because the original cannot be sent.
         """
         report = measure(history, tools, self._budget, counter=self._counter)
         self._notify_measure(report)

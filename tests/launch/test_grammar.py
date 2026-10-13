@@ -263,6 +263,11 @@ MODULE_GUARDS = {
         "real and saves its output as a stub fixture. Parses only the "
         "skill, the script arguments and the fixture path."
     ),
+    "entry/desktop/migrate_remote_targets.py": (
+        "python -m omicsclaw.entry.desktop.migrate_remote_targets, an explicit "
+        "offline migration of legacy remote target records. Parses only its "
+        "workspace and mutually exclusive dry-run/apply modes, not deployment."
+    ),
     "bench/__main__.py": (
         "python -m omicsclaw.bench, plans, stages, runs and grades a "
         "benchmark campaign. Parses a manifest path and its own flags, "

@@ -65,7 +65,6 @@ from typing import Any, Final
 from omicsclaw.entry.render import HUMAN_DESCRIPTION_CHARS, human_tool_description
 from omicsclaw.envsupply import parse_env_step
 from omicsclaw.memory.artifacts import ArtifactStore
-from omicsclaw.schema.env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
 from omicsclaw.memory.database import Database
 from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
 from omicsclaw.runs.manifest import build_manifest
@@ -80,6 +79,7 @@ from omicsclaw.runs.projections import (
 )
 from omicsclaw.runs.store import RunStore
 from omicsclaw.runs.verification import verify_artifact, verify_exit_code, verify_file
+from omicsclaw.schema.env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
 from omicsclaw.skills.frontmatter import parse_frontmatter
 from omicsclaw.tools.builtin.remote import valid_host
 from omicsclaw.tools.context import (
@@ -91,8 +91,10 @@ from omicsclaw.tools.context import (
 
 __all__ = [
     "DEFAULT_JOB_TIMEOUT_S",
-    "JOB_EVENTS_RETAINED",
     "HEARTBEAT_INTERVAL_S",
+    "JOB_EVENTS_RETAINED",
+    "MAX_CONCURRENT_JOBS",
+    "TERMINAL_JOB_STATUSES",
     "CodeRunRunner",
     "EnvInstallRunner",
     "JobError",
@@ -101,8 +103,6 @@ __all__ = [
     "JobRecord",
     "JobStore",
     "JobsManager",
-    "MAX_CONCURRENT_JOBS",
-    "TERMINAL_JOB_STATUSES",
     "human_tool_description",
 ]
 
@@ -185,7 +185,7 @@ class JobRecord:
 
     def __post_init__(self) -> None:
         if not self.target_alias and self.runtime.startswith("remote:"):
-            object.__setattr__(self, "target_alias", self.runtime[len("remote:"):])
+            object.__setattr__(self, "target_alias", self.runtime[len("remote:") :])
         if not self.target_workdir and isinstance(self.inputs, Mapping):
             candidate = self.inputs.get("target_workdir")
             if isinstance(candidate, str):
@@ -260,15 +260,20 @@ class JobStore:
         if immutable.intersection(changes):
             raise ValueError("target_snapshot_immutable")
         allowed = (
-            "status", "error", "started_at", "finished_at",
-            "session_id", "runtime",
+            "status",
+            "error",
+            "started_at",
+            "finished_at",
+            "session_id",
+            "runtime",
         )
         columns = [name for name in changes if name in allowed]
         if not columns:
             return
         self._db.run(
             lambda conn: conn.execute(
-                "UPDATE jobs SET " + ", ".join(c + " = ?" for c in columns)
+                "UPDATE jobs SET "
+                + ", ".join(c + " = ?" for c in columns)
                 + " WHERE id = ?",
                 (*(changes[c] for c in columns), job_id),
             )
@@ -308,7 +313,8 @@ class JobStore:
                 "SELECT id, session_id, kind, skill, inputs_json, runtime,"
                 " target_alias, target_workdir, capabilities_json,"
                 " status, error, created_at, started_at, finished_at FROM jobs "
-                + where + " ORDER BY created_at DESC, id DESC LIMIT ?",
+                + where
+                + " ORDER BY created_at DESC, id DESC LIMIT ?",
                 tuple(params),
             ).fetchall()
         )
@@ -327,13 +333,15 @@ class JobStore:
         persisted handle, which is the whole reason that method exists.
         """
         return self._db.run(
-            lambda conn: conn.execute(
-                "UPDATE jobs SET status = 'interrupted',"
-                " error = 'backend restarted before this job finished',"
-                " finished_at = ? WHERE status IN ('queued', 'running',"
-                " 'cancel_requested') AND runtime = 'local'",
-                (time.time(),),
-            ).rowcount
+            lambda conn: (
+                conn.execute(
+                    "UPDATE jobs SET status = 'interrupted',"
+                    " error = 'backend restarted before this job finished',"
+                    " finished_at = ? WHERE status IN ('queued', 'running',"
+                    " 'cancel_requested') AND runtime = 'local'",
+                    (time.time(),),
+                ).rowcount
+            )
         )
 
     def append_event(
@@ -672,16 +680,13 @@ class JobExecutionContext:
             {
                 "tool": tool,
                 "human_description": (
-                    human_description
-                    or human_tool_description(tool, arguments)
+                    human_description or human_tool_description(tool, arguments)
                 )[:HUMAN_DESCRIPTION_CHARS],
             },
         )
 
     def tool_output(self, text: str) -> None:
-        self._emit_raw(
-            "tool_output_chunk", {"text": str(text)[:_RESULT_SUMMARY_CHARS]}
-        )
+        self._emit_raw("tool_output_chunk", {"text": str(text)[:_RESULT_SUMMARY_CHARS]})
 
 
 JobRunner = Callable[[JobRecord, JobExecutionContext], Any]
@@ -740,7 +745,9 @@ class SkillApiRunner:
         name = skill.rsplit("/", 1)[-1]
         found = self._app.skills.get(name)
         if found is None:
-            raise JobFailure("skill " + repr(skill) + " is no longer loaded", phase="setup")
+            raise JobFailure(
+                "skill " + repr(skill) + " is no longer loaded", phase="setup"
+            )
         entry_name, _ = skill_inputs_declaration(found.directory)
         module = await asyncio.to_thread(self._import_module, found.directory, name)
         function = self._entry_function(module, entry_name)
@@ -811,12 +818,14 @@ class SkillApiRunner:
             module_name, skill_directory / "_api.py"
         )
         if spec is None or spec.loader is None:
-            raise JobFailure("skill " + repr(name) + " has no importable _api.py", phase="setup")
+            raise JobFailure(
+                "skill " + repr(name) + " has no importable _api.py", phase="setup"
+            )
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
         try:
             spec.loader.exec_module(module)
-        except Exception as exc:  # noqa: BLE001 - a skill import error is job data
+        except Exception as exc:
             sys.modules.pop(module_name, None)
             raise JobFailure(
                 "importing " + repr(name) + " failed: " + str(exc), phase="setup"
@@ -913,16 +922,19 @@ class SkillApiRunner:
         suffix = path.suffix.lower()
         try:
             if suffix == ".h5ad":
-                import anndata  # noqa: PLC0415 - deliberately lazy: heavy import
+                import anndata
 
                 return anndata.read_h5ad(path)
             if suffix in (".csv", ".txt", ".tsv"):
-                import pandas  # noqa: PLC0415
+                import pandas
 
                 return pandas.read_csv(path, sep=None, engine="python")
         except ImportError as exc:
             raise JobFailure(
-                "reading " + suffix + " needs a library this backend lacks: " + str(exc),
+                "reading "
+                + suffix
+                + " needs a library this backend lacks: "
+                + str(exc),
                 phase="setup",
             ) from exc
         raise JobFailure("unsupported input data format: " + suffix, phase="setup")
@@ -936,7 +948,7 @@ class SkillApiRunner:
             raise JobFailure(
                 "the entry function rejected the inputs: " + str(exc), phase="setup"
             ) from exc
-        except Exception as exc:  # noqa: BLE001 - a skill failure is the job failure
+        except Exception as exc:
             raise JobFailure(type(exc).__name__ + ": " + str(exc), phase="run") from exc
 
 
@@ -990,7 +1002,7 @@ class CodeRunRunner:
         if not isinstance(location, str):
             raise JobError("invalid_location")
         if location != "local" and not (
-            location.startswith("remote:") and valid_host(location[len("remote:"):])
+            location.startswith("remote:") and valid_host(location[len("remote:") :])
         ):
             raise JobError("invalid_location")
         if location != "local" and language != "python":
@@ -1152,7 +1164,11 @@ class CodeRunRunner:
                 session_id, "job:" + record.id, language=language, location=location
             )
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug(
+                "could not release kernel protection for job %s",
+                record.id,
+                exc_info=True,
+            )
 
     async def _scan_artifacts(
         self, record: JobRecord, ctx: JobExecutionContext
@@ -1190,9 +1206,6 @@ class CodeRunRunner:
         self._artifact_store = store
 
 
-
-
-
 class EnvInstallRunner:
     """``kind="env_install"``: provision one local Python environment.
 
@@ -1215,7 +1228,12 @@ class EnvInstallRunner:
     ``remote_runtime_unavailable`` refusal copied for the local plane.
     """
 
-    _STEP_PERCENT: Final = {"python": 20.0, "venv": 40.0, "packages": 75.0, "verify": 95.0}
+    _STEP_PERCENT: Final = {
+        "python": 20.0,
+        "venv": 40.0,
+        "packages": 75.0,
+        "verify": 95.0,
+    }
     """Phase-level percents; the phases between markers are uv's, not ours."""
 
     def __init__(self, env_supply: Any) -> None:
@@ -1277,7 +1295,7 @@ class EnvInstallRunner:
             report = await self._supply.install_environment(
                 env=env, packages=tuple(packages), on_output=on_output
             )
-        except Exception as exc:  # noqa: BLE001 - EnvSupplyError is job data
+        except Exception as exc:
             # The binding's EnvSupplyError carries the manual commands
             # in its message; letting it through to the manager's own
             # failure handling puts them on the ``job.failed`` frame the
@@ -1286,7 +1304,9 @@ class EnvInstallRunner:
         ctx.progress("environment " + env + " ready", 100.0)
         interpreter = str(report.get("interpreter", ""))
         ctx.tool_output(
-            "environment ready: " + interpreter + "; installed: "
+            "environment ready: "
+            + interpreter
+            + "; installed: "
             + ", ".join(str(name) for name in report.get("packages", ()))
         )
         return {
@@ -1300,12 +1320,18 @@ def _summarize_result(result: Any) -> str:
     if result is None:
         return "done"
     try:
-        import anndata  # noqa: PLC0415
+        import anndata
 
         if isinstance(result, anndata.AnnData):
-            return "AnnData: " + str(result.n_obs) + " obs x " + str(result.n_vars) + " vars"
+            return (
+                "AnnData: "
+                + str(result.n_obs)
+                + " obs x "
+                + str(result.n_vars)
+                + " vars"
+            )
     except Exception:  # noqa: BLE001 - summarising must never fail a finished job
-        pass
+        _log.debug("AnnData summary unavailable", exc_info=True)
     return repr(result)[:_RESULT_SUMMARY_CHARS]
 
 
@@ -1430,225 +1456,9 @@ class JobsManager:
     def list_jobs(
         self, *, session_id: str = "", status: str = "", limit: int = 100
     ) -> list[JobRecord]:
-        return self.store.list_jobs(
-            session_id=session_id, status=status, limit=limit
-        )
+        return self.store.list_jobs(session_id=session_id, status=status, limit=limit)
 
     # ---- lifecycle ----
-
-    async def create_job(
-        self,
-        *,
-        kind: str = "skill_run",
-        skill: str = "",
-        inputs: Any = None,
-        session_id: str = "",
-        workspace: str = "",
-        runtime: str = "local",
-    ) -> JobRecord:
-        """Validate, persist and start one job. Returns its record.
-
-        *runtime* is C2's routing field: ``"local"`` (the default, and
-        the only form before the field existed) runs the kind's runner;
-        ``"remote:<alias>"`` runs the remote bridge, which submits
-        ``inputs.command`` on that SSH alias and streams its log back as
-        vocabulary events. A remote runtime with no bridge bound is
-        ``remote_runtime_unavailable`` (409) rather than a silent local
-        fallback — a client that asked for a GPU node and got this
-        process would be worse than a client that got an error.
-
-        :raises JobError: the kind is unknown, the runtime is malformed,
-        no remote bridge is bound, or the runner ``validate`` refused the
-        skill or inputs.
-        """
-        runner = self._runners.get(kind)
-        if runner is None:
-            raise JobError("unknown_kind")
-        if inputs is None:
-            inputs = {}
-        if not isinstance(inputs, dict):
-            raise JobError("inputs_must_be_object")
-        if runtime != "local":
-            alias = runtime[len("remote:"):] if runtime.startswith("remote:") else ""
-            if not alias or not valid_host(alias):
-                raise JobError("invalid_runtime")
-            if self._remote_runtime is None:
-                raise JobError("remote_runtime_unavailable", status_code=409)
-        declared_workspace = str(getattr(self._app.config, "workspace", ""))
-        if workspace and workspace.strip():
-            try:
-                same = Path(workspace.strip()).expanduser().resolve() == Path(
-                    declared_workspace
-                ).expanduser().resolve()
-            except (ValueError, OSError, RuntimeError):
-                same = False
-            if not same:
-                raise JobError(
-                    "workspace_does_not_match_backend_runtime", status_code=409
-                )
-        validate = (
-            self._remote_runtime.validate
-            if runtime != "local" and self._remote_runtime is not None
-            else getattr(runner, "validate", None)
-        )
-        if callable(validate):
-            try:
-                validate(skill, inputs)
-            except JobError:
-                raise
-            except ValueError as exc:
-                # The remote bridge validates with plain ValueErrors —
-                # it cannot import this module's error type without a
-                # dependency pointing the wrong way — so the boundary
-                # where the wire's vocabulary lives is where they become
-                # JobErrors, at 422 like every other refused request.
-                raise JobError(str(exc)) from exc
-        # Resolve the target before inserting the row.  The resolver probes
-        # the selected host once and returns the exact scratch/work directory
-        # and capability set that both the local job row and the remote handle
-        # must carry for the rest of the job's life.
-        target_runtime = runtime
-        if target_runtime == "local" and kind == "code_run":
-            location = inputs.get("location")
-            if isinstance(location, str) and location.startswith("remote:"):
-                target_runtime = location
-        is_remote_target = target_runtime.startswith("remote:")
-        target_caps = (
-            ("remote_kernel",)
-            if kind == "code_run" and is_remote_target
-            else ("remote_exec", "remote_submit") if is_remote_target else ()
-        )
-        target_snapshot = None
-        if is_remote_target:
-            if self._remote_runtime is None:
-                # Keep the existing setup-phase error for deployments with
-                # C3 disabled; no row can be created without a target
-                # snapshot, so there is nothing to resume or execute.
-                if kind == "code_run":
-                    raise JobError("remote_runtime_unavailable", status_code=409)
-                raise JobError("remote_runtime_unavailable", status_code=409)
-            try:
-                target_snapshot = await self._remote_runtime.resolve_target(
-                    target_runtime[len("remote:"):], capabilities=target_caps
-                )
-            except JobError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - map probe failures to wire code
-                _log.debug("target resolution failed", exc_info=True)
-                raise JobError("target_resolution_failed", status_code=409) from exc
-        if runtime != "local":
-            # The query-time half of C2's re-estimation: before adding a
-            # job to the in-flight set, ask the ones already in it what
-            # they are doing, so a backend that was away while jobs ran
-            # catches up on the same request that proves it has a working
-            # remote runtime. Guarded because reconciliation is
-            # housekeeping, not a precondition — a host that will not
-            # answer must not block a submission to a different one.
-            try:
-                await self.reconcile_remote_jobs()
-            except Exception:  # noqa: BLE001 - reconcile is best-effort here
-                _log.debug("pre-create remote reconcile failed", exc_info=True)
-        record = JobRecord(
-            id=secrets.token_hex(16),
-            session_id=str(session_id or ""),
-            kind=kind,
-            skill=str(skill or ""),
-            inputs=inputs,
-            runtime=runtime,
-            target_alias=target_snapshot.alias if target_snapshot is not None else "",
-            target_workdir=target_snapshot.workdir if target_snapshot is not None else "",
-            capabilities=target_snapshot.capabilities if target_snapshot is not None else (),
-            status="queued",
-            created_at=time.time(),
-        )
-        self.store.insert_job(record)
-        plan_id, plan_steps, step_id = plan_snapshot(
-            getattr(self._app, "plans", None), record.session_id
-        )
-        run = Run(
-            session_id=record.session_id,
-            plan_id=plan_id,
-            plan_steps=plan_steps,
-            step_id=step_id,
-            execution_location="remote:" + record.target_alias
-            if record.target_alias
-            else record.runtime,
-        )
-        self.run_store.save(run)
-        self._run_ids[record.id] = run.run_id
-        run_job = RunJob(
-            run_id=run.run_id,
-            host_id=record.target_alias,
-            scheduler=record.runtime,
-            execution_ref=record.id,
-            step_id=step_id,
-            status="created",
-        )
-        self.run_store.save(run_job)
-        self._run_job_ids[record.id] = run_job.job_id
-        self._emit(
-            record.id,
-            "job.created",
-            {
-                "job_id": record.id,
-                "kind": kind,
-                "skill": record.skill,
-                "runtime": runtime,
-            },
-        )
-        live = _LiveJob(task=None, gate=self._make_gate(record.id))
-        self._live[record.id] = live
-        live.task = asyncio.create_task(
-            self._run(record.id), name="omicsclaw-job-" + record.id
-        )
-        return record
-
-    async def reconcile_remote_jobs(self) -> dict[str, int]:
-        """Re-estimate every in-flight remote handle; move local rows with it.
-
-        The start-up/query-time half of C2. The remote rows are asked
-        through the plane (unreachable hosts answer ``unknown`` and keep
-        their rows); a job the desktop started gets its local row settled
-        too, which is what makes "the backend restarted mid-job" mean
-        "the status caught up" instead of "interrupted, and the remote
-        job's eventual finish is never recorded".
-
-        A no-op answer, not an error, when no bridge is bound: there are
-        no remote rows to ask about.
-        """
-        if self._remote_runtime is None:
-            return {"checked": 0, "still_in_flight": 0, "terminal": 0, "unknown": 0}
-
-        def on_status(local_job_id: str, alias: str, state: str) -> None:
-            record = self.store.get_job(local_job_id)
-            if record is None:
-                return
-            status = {"done": "succeeded", "pending": "queued"}.get(state, state)
-            if record.status != status:
-                changes: dict[str, Any] = {"status": status}
-                if status in TERMINAL_JOB_STATUSES:
-                    changes["finished_at"] = time.time()
-                self.store.update_job(local_job_id, **changes)
-            self._sync_run_status(local_job_id, status)
-
-        async with self._reconcile_lock:
-            report = await refresh_in_flight(
-                self._remote_runtime.plane, on_remote_status=on_status
-            )
-            # A previous process may have persisted the remote result before
-            # updating the desktop projection. Repair that window on restart.
-            remote_store = self._remote_runtime.plane.job_store()
-            for record in self.store.list_jobs(limit=10000):
-                if record.runtime.startswith("remote:"):
-                    row = remote_store.by_local_job(record.id)
-                    if row is not None:
-                        on_status(record.id, row.host_alias, row.status)
-                        live = self._live.get(record.id)
-                        if row.status in {"done", "failed", "canceled"} and (
-                            live is None or live.task is None or live.task.done()
-                        ):
-                            await self._recover_remote_evidence(record, row)
-            return report
 
     async def refresh_projections(self) -> None:
         await self.reconcile_remote_jobs()
@@ -1744,6 +1554,227 @@ class JobsManager:
             setattr(result, key, value)
         self.run_store.save(result, event="finished")
         return result
+
+    async def create_job(
+        self,
+        *,
+        kind: str = "skill_run",
+        skill: str = "",
+        inputs: Any = None,
+        session_id: str = "",
+        workspace: str = "",
+        runtime: str = "local",
+    ) -> JobRecord:
+        """Validate, persist and start one job. Returns its record.
+
+        *runtime* is C2's routing field: ``"local"`` (the default, and
+        the only form before the field existed) runs the kind's runner;
+        ``"remote:<alias>"`` runs the remote bridge, which submits
+        ``inputs.command`` on that SSH alias and streams its log back as
+        vocabulary events. A remote runtime with no bridge bound is
+        ``remote_runtime_unavailable`` (409) rather than a silent local
+        fallback — a client that asked for a GPU node and got this
+        process would be worse than a client that got an error.
+
+        :raises JobError: the kind is unknown, the runtime is malformed,
+        no remote bridge is bound, or the runner ``validate`` refused the
+        skill or inputs.
+        """
+        runner = self._runners.get(kind)
+        if runner is None:
+            raise JobError("unknown_kind")
+        if inputs is None:
+            inputs = {}
+        if not isinstance(inputs, dict):
+            raise JobError("inputs_must_be_object")
+        if runtime != "local":
+            alias = runtime[len("remote:") :] if runtime.startswith("remote:") else ""
+            if not alias or not valid_host(alias):
+                raise JobError("invalid_runtime")
+            if self._remote_runtime is None:
+                raise JobError("remote_runtime_unavailable", status_code=409)
+        declared_workspace = str(getattr(self._app.config, "workspace", ""))
+        if workspace and workspace.strip():
+            try:
+                same = (
+                    Path(workspace.strip()).expanduser().resolve()
+                    == Path(declared_workspace).expanduser().resolve()
+                )
+            except (ValueError, OSError, RuntimeError):
+                same = False
+            if not same:
+                raise JobError(
+                    "workspace_does_not_match_backend_runtime", status_code=409
+                )
+        validate = (
+            self._remote_runtime.validate
+            if runtime != "local" and self._remote_runtime is not None
+            else getattr(runner, "validate", None)
+        )
+        if callable(validate):
+            try:
+                validate(skill, inputs)
+            except JobError:
+                raise
+            except ValueError as exc:
+                # The remote bridge validates with plain ValueErrors —
+                # it cannot import this module's error type without a
+                # dependency pointing the wrong way — so the boundary
+                # where the wire's vocabulary lives is where they become
+                # JobErrors, at 422 like every other refused request.
+                raise JobError(str(exc)) from exc
+        # Resolve the target before inserting the row.  The resolver probes
+        # the selected host once and returns the exact scratch/work directory
+        # and capability set that both the local job row and the remote handle
+        # must carry for the rest of the job's life.
+        target_runtime = runtime
+        if target_runtime == "local" and kind == "code_run":
+            location = inputs.get("location")
+            if isinstance(location, str) and location.startswith("remote:"):
+                target_runtime = location
+        is_remote_target = target_runtime.startswith("remote:")
+        target_caps = (
+            ("remote_kernel",)
+            if kind == "code_run" and is_remote_target
+            else ("remote_exec", "remote_submit")
+            if is_remote_target
+            else ()
+        )
+        target_snapshot = None
+        if is_remote_target:
+            if self._remote_runtime is None:
+                # Keep the existing setup-phase error for deployments with
+                # C3 disabled; no row can be created without a target
+                # snapshot, so there is nothing to resume or execute.
+                if kind == "code_run":
+                    raise JobError("remote_runtime_unavailable", status_code=409)
+                raise JobError("remote_runtime_unavailable", status_code=409)
+            try:
+                target_snapshot = await self._remote_runtime.resolve_target(
+                    target_runtime[len("remote:") :], capabilities=target_caps
+                )
+            except JobError:
+                raise
+            except Exception as exc:
+                _log.debug("target resolution failed", exc_info=True)
+                raise JobError("target_resolution_failed", status_code=409) from exc
+        if runtime != "local":
+            # The query-time half of C2's re-estimation: before adding a
+            # job to the in-flight set, ask the ones already in it what
+            # they are doing, so a backend that was away while jobs ran
+            # catches up on the same request that proves it has a working
+            # remote runtime. Guarded because reconciliation is
+            # housekeeping, not a precondition — a host that will not
+            # answer must not block a submission to a different one.
+            try:
+                await self.reconcile_remote_jobs()
+            except Exception:  # noqa: BLE001 - reconcile is best-effort here
+                _log.debug("pre-create remote reconcile failed", exc_info=True)
+        record = JobRecord(
+            id=secrets.token_hex(16),
+            session_id=str(session_id or ""),
+            kind=kind,
+            skill=str(skill or ""),
+            inputs=inputs,
+            runtime=runtime,
+            target_alias=target_snapshot.alias if target_snapshot is not None else "",
+            target_workdir=target_snapshot.workdir
+            if target_snapshot is not None
+            else "",
+            capabilities=target_snapshot.capabilities
+            if target_snapshot is not None
+            else (),
+            status="queued",
+            created_at=time.time(),
+        )
+        self.store.insert_job(record)
+        plan_id, plan_steps, step_id = plan_snapshot(
+            getattr(self._app, "plans", None), record.session_id
+        )
+        run = Run(
+            session_id=record.session_id,
+            plan_id=plan_id,
+            plan_steps=plan_steps,
+            step_id=step_id,
+            execution_location="remote:" + record.target_alias
+            if record.target_alias
+            else record.runtime,
+        )
+        self.run_store.save(run)
+        self._run_ids[record.id] = run.run_id
+        run_job = RunJob(
+            run_id=run.run_id,
+            host_id=record.target_alias,
+            scheduler=record.runtime,
+            execution_ref=record.id,
+            step_id=step_id,
+            status="created",
+        )
+        self.run_store.save(run_job)
+        self._run_job_ids[record.id] = run_job.job_id
+        self._emit(
+            record.id,
+            "job.created",
+            {
+                "job_id": record.id,
+                "kind": kind,
+                "skill": record.skill,
+                "runtime": runtime,
+            },
+        )
+        live = _LiveJob(task=None, gate=self._make_gate(record.id))
+        self._live[record.id] = live
+        live.task = asyncio.create_task(
+            self._run(record.id), name="omicsclaw-job-" + record.id
+        )
+        return record
+
+    async def reconcile_remote_jobs(self) -> dict[str, int]:
+        """Re-estimate every in-flight remote handle; move local rows with it.
+
+        The start-up/query-time half of C2. The remote rows are asked
+        through the plane (unreachable hosts answer ``unknown`` and keep
+        their rows); a job the desktop started gets its local row settled
+        too, which is what makes "the backend restarted mid-job" mean
+        "the status caught up" instead of "interrupted, and the remote
+        job's eventual finish is never recorded".
+
+        A no-op answer, not an error, when no bridge is bound: there are
+        no remote rows to ask about.
+        """
+        if self._remote_runtime is None:
+            return {"checked": 0, "still_in_flight": 0, "terminal": 0, "unknown": 0}
+
+        def on_status(local_job_id: str, alias: str, state: str) -> None:
+            record = self.store.get_job(local_job_id)
+            if record is None:
+                return
+            status = {"done": "succeeded", "pending": "queued"}.get(state, state)
+            if record.status != status:
+                changes: dict[str, Any] = {"status": status}
+                if status in TERMINAL_JOB_STATUSES:
+                    changes["finished_at"] = time.time()
+                self.store.update_job(local_job_id, **changes)
+            self._sync_run_status(local_job_id, status)
+
+        async with self._reconcile_lock:
+            report = await refresh_in_flight(
+                self._remote_runtime.plane, on_remote_status=on_status
+            )
+            # A previous process may have persisted the remote result before
+            # updating the desktop projection. Repair that window on restart.
+            remote_store = self._remote_runtime.plane.job_store()
+            for record in self.store.list_jobs(limit=10000):
+                if record.runtime.startswith("remote:"):
+                    row = remote_store.by_local_job(record.id)
+                    if row is not None:
+                        on_status(record.id, row.host_alias, row.status)
+                        live = self._live.get(record.id)
+                        if row.status in {"done", "failed", "canceled"} and (
+                            live is None or live.task is None or live.task.done()
+                        ):
+                            await self._recover_remote_evidence(record, row)
+            return report
 
     async def _recover_remote_evidence(self, record, row):
         from omicsclaw.remote.bridge import remote_output_payloads
@@ -2152,9 +2183,7 @@ class JobsManager:
                 return
             payload: dict[str, Any] = {"label": label}
             if update.fraction is not None:
-                payload["percent"] = max(
-                    0.0, min(100.0, update.fraction * 100.0)
-                )
+                payload["percent"] = max(0.0, min(100.0, update.fraction * 100.0))
             self._emit(job_id, "progress", payload)
 
         return sink

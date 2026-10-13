@@ -79,6 +79,7 @@ from omicsclaw.tools.builtin.bash import ENGINE_TIMEOUT_MARGIN
 __all__ = [
     "AppConfig",
     "AppConfigError",
+    "ExecutionLocation",
     "mem_total_gib",
     "SandboxMode",
     "SkillEnvMode",
@@ -123,6 +124,12 @@ class SkillEnvMode(StrEnum):
     on this machine: after approval it installs declared packages into an
     overlay environment, from this machine's pip configuration. Refused by
     ``oc desktop``, which has no approval channel."""
+
+
+class ExecutionLocation(StrEnum):
+    REMOTE = 'remote'
+    LOCAL = 'local'
+    UNSET = 'unset'
 
 
 class SandboxMode(StrEnum):
@@ -368,6 +375,7 @@ class AppConfig:
     :attr:`approval_timeout_s`: without either, a question waits until the
     exchange ends."""
 
+    execution_location: ExecutionLocation = ExecutionLocation.UNSET
     remote_execution: bool = False
     """Whether the agent may run work on remote hosts over SSH.
 
@@ -871,6 +879,14 @@ def _as_bool(raw: str) -> bool:
     raise AppConfigError(f"{raw!r} is not a boolean (true/false)")
 
 
+def _as_execution_location(raw: str) -> ExecutionLocation:
+    value = raw.strip().lower()
+    try:
+        return ExecutionLocation(value)
+    except ValueError as exc:
+        raise AppConfigError("must be one of remote, local, unset") from exc
+
+
 def _as_skill_env(raw: str) -> SkillEnvMode:
     try:
         return SkillEnvMode(raw.strip().lower())
@@ -1066,6 +1082,7 @@ _OPTIONS: tuple[_Option, ...] = (
     ),
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
     _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),
+    _Option("execution_location", "--execution-location", ("OMICSCLAW_EXECUTION_LOCATION",), _as_execution_location),
     _Option(
         "remote_execution",
         "--remote-execution",
@@ -1384,6 +1401,10 @@ def resolve_app_config(
     values.update(_from_env(source))
     values.update(_from_argv(arguments))
     values.update(overrides)
+    if "execution_location" not in values:
+        values["execution_location"] = (ExecutionLocation.REMOTE if values.get("remote_execution") is True else ExecutionLocation.UNSET)
+    elif isinstance(values["execution_location"], str):
+        values["execution_location"] = _as_execution_location(values["execution_location"])
 
     chosen = values.get("workspace")
     workspace = chosen if isinstance(chosen, Path) else Path.cwd()
