@@ -6,7 +6,7 @@ A cell key is (notebook_id, cell_id, session_epoch). Writes use optimistic compa
 
 An execution has a stable execution_id and an optional client_command_id. Replaying the exact same record is idempotent. Reusing either identifier with a different notebook, cell, epoch, status, or payload raises ExecutionConflict. A queued execution is completed with update_execution, which increments its revision; calling record_execution again is not a lifecycle update.
 
-output, provenance, and trust_label are stored as data. This layer never evaluates output, turns it into a prompt instruction, or executes a replay. Future live-app adapters must validate an input command, check permission, and create a new idempotent execution before invoking a kernel. App output may be rendered or attached as an artifact only after its schema and provenance are recorded.
+output, provenance, and trust_label are stored as data. This layer never evaluates output, turns it into a prompt instruction, or executes a replay. Live-app interactions publish structured state. Subsequent Agent kernel calls still require tool approval and create a new execution. App output may be rendered or attached as an artifact only after its schema and provenance are recorded.
 
 The schema is additive: opening an older database creates the two notebook tables and indexes without changing existing rows. Prior to Stage 6, P0 did not expose .ipynb import/export or live-app RPC. P1 adds an optional durable event log for TurnStream recovery.
 
@@ -61,7 +61,7 @@ Notebook SSE uses the projected TurnEvent schema with monotonic sequence numbers
 
 Imports preserve code source only, discard saved outputs, skip markdown/raw cells, and mark source `imported_untrusted`. Invalid imports are atomic and importing never runs cells. Exports contain current stored outputs; editing clears old output. This is a code-cell interchange format, not lossless preservation of arbitrary Jupyter metadata, widgets, markdown, or embedded applications.
 
-Feedback is an immutable execution-linked data record labeled `live_app_untrusted`. The UI refreshes notebook state and displays the feedback count; full records are available through the snapshot API. It does not execute feedback, promote it to system instructions, or automatically submit it to a model. This legacy feedback endpoint remains inert. The separate live-state endpoint below is the explicit model-context publishing path. Arbitrary embedded live-app hosting and RPC protocols are outside this implementation. Text uses escaped rendering; only PNG/JPEG figure paths are served through the existing authenticated file boundary.
+Feedback is an immutable execution-linked data record labeled `live_app_untrusted`. The UI refreshes notebook state and displays the feedback count; full records are available through the snapshot API. It does not execute feedback, promote it to system instructions, or automatically submit it to a model. This legacy feedback endpoint remains inert. The separate live-state endpoint below is the explicit model-context publishing path. Text uses escaped rendering; only PNG/JPEG figure paths are served through the existing authenticated file boundary.
 
 The route-baseline test compares declared paths with the actual mounted FastAPI routes. Chat v3 retains its exact two-key SSE envelope for existing clients; `/health` still supplies process identity, and Jobs/Run retain their own epoch handling.
 
@@ -72,7 +72,7 @@ Create a chat and send its first message, then bind a notebook through the UI or
 
 Approved Agent `python` calls and explicit user Run commands use the same kernel, execution admission transaction, notebook records, ownership lease, and durable event stream. Agent calls still pass through the tool permission gate. Denied calls produce no notebook execution. Cancel during admission, kernel startup, or lock waiting prevents code from being sent; cancel targets the matching execution and local Python kernel. Kernel death does not automatically replay notebook code. Process restart restores records and binding, but cannot restore Python variables.
 
-Before each main-Agent model request, a bound notebook contributes a sent-only `Role.USER` reference block. It contains binding, current kernel status, at most eight recent cell previews, and the latest explicitly shared live state. Source previews are limited to 1,024 characters, stdout to 2,048 and errors to 1,024; the entire block is at most 24,000 UTF-8 bytes. Preview truncation is explicit. The block is rebuilt for every request, including after compaction, and is not written into conversation history or long-term memory. Contents are untrusted reference data, with escaped delimiters and a fixed trust notice; they cannot grant tool approval.
+Before each main-Agent model request, a bound notebook contributes a sent-only `Role.USER` reference block. It contains binding, current kernel status, at most eight recent cell previews, the current live-app metadata, and the latest shared live state. Source previews are limited to 1,024 characters, stdout to 2,048 and errors to 1,024; the entire block is at most 24,000 UTF-8 bytes. Preview truncation is explicit. The block is rebuilt for every request, including after compaction, and is not written into conversation history or long-term memory. Contents are untrusted reference data, with escaped delimiters and a fixed trust notice; they cannot grant tool approval.
 
 `POST /notebooks/{id}/live-state` accepts:
 
@@ -86,8 +86,39 @@ A SQLite transaction compares `expected_revision` and appends one immutable vers
 
 The App preserves the active runtime identity through Chat→Notebook→Chat navigation. It rejects a stale target before persisting a chat message. Live-state drafts retain their source execution and event ID across retries. The UI displays legacy feedback history read-only; publishing to Agent context uses the separate explicit action.
 
+## Hosted live apps
+
+A bound Notebook hosts one current HTML app. The Agent uses `live_app` with `action: "publish"`, a title, self-contained `html`, the Notebook's completed `execution_id`, and `expected_revision` (zero initially). Publication passes through the existing tool approval gate. The `read` action returns the current document and live state so the Agent can revise the app. It takes its chat session from the turn context; the model cannot choose another chat. HTML returned by the tool remains untrusted data.
+
+Each publication retains an immutable revision in `.omicsclaw/notebooks.db`. The title is at most 120 characters and the UTF-8 HTML document at most 256 KiB. The referenced execution must belong to the Notebook, have completed successfully, and have flushed its event stream. Stale publication revisions return 409. After an uncertain response, read the current app before retrying a publication. The Notebook snapshot and model context contain app metadata; HTML is fetched separately.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/notebooks/{id}/live-app` | `{live_app: document or null}` |
+| PUT | `/notebooks/{id}/live-app` | `{title, html, execution_id, expected_revision}` |
+| POST | `/notebooks/{id}/live-app/state` | `{app_revision, client_event_id, expected_revision, kind, payload}` |
+
+The App renders the document in an iframe with `sandbox="allow-scripts"`. Its content security policy blocks fetch and external assets. The parent supplies a small browser API:
+
+```javascript
+const context = window.omicsclaw.context();
+const receipt = await window.omicsclaw.publishState("view", {
+  view_id: "scatter",
+  parameters: { threshold: 0.5 },
+  selected_ids: ["sample-1"]
+});
+```
+
+`context()` returns bounded Notebook cell previews and state belonging to the current app. `publishState` accepts the same note, selection and view shapes as `/live-state`; its promise resolves after persistence. The parent routes messages from the current iframe through the authenticated backend. An app never receives credentials or a kernel execution function. State becomes reference data in the next model request; a user sends the next chat message and approves any resulting Python call.
+
+The state transaction checks that `app_revision` is current, resolves the execution from that app, checks the state revision, and records server provenance including `app_revision`. Every event from an older app revision returns 409. Repeating an exact event from the current app returns its original receipt without replacing newer state. App changes survive reload and backend restart; the Python namespace follows the kernel lifetime described above.
+
+### Limitations
+
+Apps contain their own HTML, CSS, JavaScript and data. Server processes, package installation and arbitrary web application hosting are not provided. Iframe sandboxing isolates the parent and its credentials; it is not a complete network isolation mechanism. The tool's existing mutable policy also blocks `live_app` in read-only permission mode.
+
 ## Verification
 
-The acceptance suite covers shared real-kernel state, permission denial, cancellation during admission/startup/lock waiting, exact cancellation scope, binding persistence, CAS conflicts, idempotent replay, untrusted-state escaping and per-request context injection. The deterministic model fixture in `tests/entry/notebook_closed_loop_server.py` runs the production Desktop API and real Python kernel for browser acceptance; it logs the actual model request. It does not call an external model.
+`tests/entry/test_notebook_apps.py` covers document persistence, publication and state revisions, execution ownership, authenticated routes and Agent approval. The acceptance suite also covers shared real-kernel state, permission denial, cancellation during admission/startup/lock waiting, exact cancellation scope, binding persistence, CAS conflicts, idempotent replay, untrusted-state escaping and per-request context injection. The deterministic model fixture in `tests/entry/notebook_closed_loop_server.py` runs the production Desktop API and real Python kernel for browser acceptance; it logs the actual model request. It does not call an external model.
 
 Final immutable source identifiers, commands, counts, logs and any environment limitations are recorded in `docs/NOTEBOOK_DELIVERY.md`. Historical partial regression results are not evidence for that final source snapshot.

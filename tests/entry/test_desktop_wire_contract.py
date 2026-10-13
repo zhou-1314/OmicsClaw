@@ -150,6 +150,8 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/notebooks/{notebook_id}/feedback",
         "/notebooks/{notebook_id}/binding",
         "/notebooks/{notebook_id}/live-state",
+        "/notebooks/{notebook_id}/live-app",
+        "/notebooks/{notebook_id}/live-app/state",
    )
 
 

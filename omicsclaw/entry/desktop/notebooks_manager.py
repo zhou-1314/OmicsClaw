@@ -63,6 +63,9 @@ class NotebookAnalysis:
         from omicsclaw.entry.notebook_context import NotebookLiveState
 
         self.context = NotebookLiveState(self)
+        from omicsclaw.entry.notebook_apps import NotebookApps
+
+        self.apps = NotebookApps(self)
         self.closed = False
         self.admissions: set[asyncio.Task] = set()
         self.cancelling: set[str] = set()
@@ -336,6 +339,7 @@ class NotebookAnalysis:
             "executions": [asdict(x) for x in executions],
             "kernel": kernel,
             "feedback": feedback,
+            "live_app": await self.apps.read(nid, metadata=True),
             **(await self.context.snapshot(nid)),
         }
 

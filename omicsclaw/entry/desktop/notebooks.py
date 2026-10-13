@@ -21,6 +21,8 @@ NOTEBOOK_PATHS = (
     "/notebooks/{notebook_id}/feedback",
     "/notebooks/{notebook_id}/binding",
     "/notebooks/{notebook_id}/live-state",
+    "/notebooks/{notebook_id}/live-app",
+    "/notebooks/{notebook_id}/live-app/state",
 )
 
 
@@ -189,6 +191,27 @@ def mount_notebook_routes(
     async def live_state(request: Request, notebook_id: str):
         async def run(d):
             return {"live_state": await analysis.context.publish(notebook_id, d)}
+
+        return await dispatch(request, notebook_id, run, write=True)
+
+    @api.get("/notebooks/{notebook_id}/live-app")
+    async def app_read(request: Request, notebook_id: str):
+        async def run(_):
+            return {"live_app": await analysis.apps.read(notebook_id)}
+
+        return await dispatch(request, notebook_id, run)
+
+    @api.put("/notebooks/{notebook_id}/live-app")
+    async def app_publish(request: Request, notebook_id: str):
+        async def run(d):
+            return {"live_app": await analysis.apps.publish(notebook_id, d)}
+
+        return await dispatch(request, notebook_id, run, write=True)
+
+    @api.post("/notebooks/{notebook_id}/live-app/state")
+    async def app_state(request: Request, notebook_id: str):
+        async def run(d):
+            return {"live_state": await analysis.apps.publish_state(notebook_id, d)}
 
         return await dispatch(request, notebook_id, run, write=True)
 

@@ -56,7 +56,7 @@ class NotebookLiveState:
 
         return await self.analysis.db.arun(read)
 
-    async def publish(self, nid, document):
+    async def publish(self, nid, document, *, app_revision=None):
         from .desktop.notebooks_manager import (
             TERMINAL,
             NotebookError,
@@ -126,7 +126,11 @@ class NotebookLiveState:
             valid = False
         if not valid:
             invalid()
-        request = encoded(document)
+        request = encoded(
+            {**document, "app_revision": app_revision}
+            if app_revision is not None
+            else document
+        )
         if len(request.encode()) > 16384:
             invalid()
 
@@ -135,6 +139,13 @@ class NotebookLiveState:
                 "SELECT 1 FROM notebook_bindings WHERE notebook_id=?", (nid,)
             ).fetchone():
                 raise NotebookError("notebook_not_bound", 409)
+            if app_revision is not None:
+                app = c.execute(
+                    "SELECT revision,execution_id FROM notebook_apps WHERE notebook_id=? ORDER BY revision DESC LIMIT 1",
+                    (nid,),
+                ).fetchone()
+                if app is None or app[0] != app_revision or app[1] != eid:
+                    raise NotebookError("app_revision_conflict", 409)
             old = c.execute(
                 "SELECT request_json,state_json FROM notebook_live_events WHERE notebook_id=? AND event_id=?",
                 (nid, event),
@@ -173,6 +184,8 @@ class NotebookLiveState:
                     "client_event_id": event,
                 },
             }
+            if app_revision is not None:
+                state["provenance"]["app_revision"] = app_revision
             c.execute(
                 "INSERT INTO notebook_live_events VALUES(?,?,?,?,?)",
                 (nid, event, current + 1, request, encoded(state)),
@@ -225,6 +238,7 @@ class NotebookContext:
             "kernel": kernel,
             "recent_cells": cells,
             "live_state": state,
+            "live_app": await self.analysis.apps.read(nid, metadata=True),
             "previews_may_be_truncated": True,
         }
 

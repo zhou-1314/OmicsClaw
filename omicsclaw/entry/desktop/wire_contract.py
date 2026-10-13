@@ -129,6 +129,8 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/notebooks/{notebook_id}/feedback",
     "/notebooks/{notebook_id}/binding",
     "/notebooks/{notebook_id}/live-state",
+    "/notebooks/{notebook_id}/live-app",
+    "/notebooks/{notebook_id}/live-app/state",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``

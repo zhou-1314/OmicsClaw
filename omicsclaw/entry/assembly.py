@@ -174,6 +174,8 @@ from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
 from omicsclaw.tools.builtin.bash import BashEnvironment
 from omicsclaw.tools.builtin.manage_env import ManageEnvironmentsTool
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
+from omicsclaw.tools.builtin.live_app import LiveAppTool
+from omicsclaw.entry.notebook_apps import NotebookAppBridge
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
@@ -1982,6 +1984,7 @@ def build_app(
                     runner=kernels,
                     allow_remote=remote_kernels is not None,
                 ),
+                LiveAppTool(NotebookAppBridge(kernels)),
             )
             if env_supply is not None:
                 # Appended in the one slot the wiring tests allow: after
