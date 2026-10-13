@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -14,7 +15,7 @@ from omicsclaw.entry.config import resolve_app_config
 from omicsclaw.entry.desktop import create_desktop_app
 from omicsclaw.entry.session import attach_sessions
 from omicsclaw.observability import Telemetry
-from tests.entry.test_desktop_http import body, frames_of
+from tests.entry.test_desktop_http import body
 from tests.entry.test_turn_runner import Scripted
 
 
@@ -58,7 +59,16 @@ def test_environment_switch_matches_bound_plane_and_health_without_disabling_des
             )
             stream = client.post("/chat/stream", json=body(), headers=headers)
             assert stream.status_code == 200
-            assert frames_of(stream.text)[-1] == {"type": "done", "data": ""}
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in stream.text.splitlines()
+                if line.startswith("data: ")
+            ]
+            terminal = frames[-1]
+            assert terminal["type"] == "done"
+            assert terminal["data"] == ""
+            if "epoch" in terminal:
+                assert type(terminal["epoch"]) is int
             assert provider.calls == 1
     finally:
         asyncio.run(app.aclose())
