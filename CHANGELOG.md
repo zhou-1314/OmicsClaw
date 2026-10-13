@@ -1,6 +1,6 @@
 ## 2026-10-13 — Main integration acceptance
 
-CI provisions the R kernel used by Desktop code execution. Compaction acceptance explicitly checks EMERGENCY history write-back, and the process-entry inventory includes the offline remote-target migration command.
+CI provisions the R kernel used by Desktop code execution. Compaction acceptance explicitly checks EMERGENCY history write-back, and the process-entry inventory includes the offline remote-target migration command. The scripted memory check requires the next exchange to receive the précis in its user context and keeps it out of the system prompt.
 
 ## 2026-10-13 — Hosted Notebook live apps
 
