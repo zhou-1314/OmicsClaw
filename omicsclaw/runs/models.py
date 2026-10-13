@@ -81,6 +81,9 @@ class Run:
     plan_id: str = ""
     status: str = "created"
     execution_location: str = "unset"
+    step_id: str = ""
+    plan_steps: list[dict] = field(default_factory=list)
+    origin: str = "job"
     root_artifact_id: str | None = None
     created_at: str = field(default_factory=_now)
 
@@ -94,6 +97,8 @@ class Job:
     execution_ref: str = ""
     status: str = "created"
     command_digest: str = ""
+    step_id: str = ""
+    kernel_id: str = ""
 
 
 @dataclass
@@ -104,6 +109,11 @@ class Kernel:
     host_id: str = ""
     status: str = "created"
     last_heartbeat: str = ""
+    run_ids: list[str] = field(default_factory=list)
+    session_id: str = ""
+    environment: str = ""
+    pid: int | None = None
+    started_at: float = 0.0
 
 
 @dataclass
@@ -126,6 +136,7 @@ class Artifact:
     job_id: str = ""
     kernel_id: str = ""
     input_artifact_ids: list[str] = field(default_factory=list)
+    lineage_key: str = ""
 
 
 @dataclass
@@ -138,3 +149,19 @@ class Verification:
     created_at: str = field(default_factory=_now)
     artifact_version: int = 1
     details: str = ""
+    run_id: str = ""
+    job_id: str = ""
+    reviewer: str = ""
+
+
+KERNEL_STATES = frozenset({"created", "ready", "busy", "unknown", "lost", "stopped"})
+
+
+@dataclass
+class Activity:
+    activity_id: str = field(default_factory=lambda: _id("activity"))
+    run_id: str = ""
+    job_id: str = ""
+    event_type: str = ""
+    payload: dict = field(default_factory=dict)
+    created_at: str = field(default_factory=_now)
