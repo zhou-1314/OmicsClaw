@@ -24,7 +24,8 @@ hands it a callback so a restarted desktop backend can move the
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .ssh import RemoteHostUnreachable
 
@@ -55,7 +56,7 @@ async def refresh_in_flight(
     """
     store = plane.job_store()
     report: Report = {"checked": 0, "still_in_flight": 0, "terminal": 0, "unknown": 0}
-    for row in store.in_flight():
+    for row in store.in_flight(include_unknown=True):
         report["checked"] += 1
         try:
             executor = plane.executor_for(row.host_alias)
@@ -63,6 +64,8 @@ async def refresh_in_flight(
         except (RemoteHostUnreachable, OSError):
             store.update_status(row.id, "unknown", last_seen=now())
             report["unknown"] += 1
+            if on_remote_status is not None and row.local_job_id:
+                on_remote_status(row.local_job_id, row.host_alias, "unknown")
             continue
         store.update_status(row.id, outcome.state, last_seen=now())
         if outcome.state in ("pending", "running"):

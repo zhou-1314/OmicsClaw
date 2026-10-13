@@ -77,7 +77,7 @@ on start, which is correct: a work directory belongs to one job."""
 NOHUP_WRAPPER = (
     "#!/usr/bin/env bash\n"
     "bash ./cmd.sh\n"
-    'status=$?\n'
+    "status=$?\n"
     f"printf '%s' \"$status\" > ./{_EXIT_FILE}\n"
     'exit "$status"\n'
 )
@@ -133,7 +133,7 @@ class RemoteJobHandle:
         )
 
     @classmethod
-    def from_json(cls, text: str) -> "RemoteJobHandle":
+    def from_json(cls, text: str) -> RemoteJobHandle:
         decoded = json.loads(text) if text.strip() else {}
         return cls(
             kind=str(decoded.get("kind") or KIND_NOHUP),
@@ -145,12 +145,18 @@ class RemoteJobHandle:
             local_job_id=str(decoded.get("local_job_id") or ""),
             target_alias=str(decoded.get("target_alias") or ""),
             target_workdir=str(decoded.get("target_workdir") or ""),
-            capabilities=tuple(str(item) for item in decoded.get("capabilities", ()) if item),
+            capabilities=tuple(
+                str(item) for item in decoded.get("capabilities", ()) if item
+            ),
         )
 
     def identity(self) -> str:
         """The host-side number, whichever kind this is."""
         return self.job_id if self.kind == KIND_SLURM else str(self.pgid)
+
+
+# Stable scheduler-neutral wire name.
+JobHandle = RemoteJobHandle
 
 
 def detect_scheduler(command: str, scheduler: str = "auto") -> str:
@@ -172,8 +178,7 @@ def detect_scheduler(command: str, scheduler: str = "auto") -> str:
             f"scheduler must be one of {', '.join(SCHEDULERS)}; got {scheduler!r}"
         )
     promoted = any(
-        line.lstrip().startswith(SBATCH_DIRECTIVE)
-        for line in command.splitlines()
+        line.lstrip().startswith(SBATCH_DIRECTIVE) for line in command.splitlines()
     )
     return KIND_SLURM if promoted else KIND_NOHUP
 
@@ -191,13 +196,13 @@ def build_job_scripts(command: str, kind: str) -> dict[str, str]:
     ``_omicsclaw_launch.sh`` the session leader that records the pgid.
     """
     if kind == KIND_SLURM:
-        script = command if command.startswith("#!") else (
-            "#!/usr/bin/env bash\n" + command
+        script = (
+            command if command.startswith("#!") else ("#!/usr/bin/env bash\n" + command)
         )
         return {"job.sh": script if script.endswith("\n") else script + "\n"}
     if kind == KIND_NOHUP:
-        cmd = command if command.startswith("#!") else (
-            "#!/usr/bin/env bash\n" + command
+        cmd = (
+            command if command.startswith("#!") else ("#!/usr/bin/env bash\n" + command)
         )
         return {
             "cmd.sh": cmd if cmd.endswith("\n") else cmd + "\n",
@@ -282,8 +287,7 @@ def build_status_command(handle: RemoteJobHandle) -> str:
 
     SLURM: the queue first, then accounting — a job that left the queue
     and has no accounting row yet (or a cluster without ``sacct``) reads
-    as gone, which the parser maps to ``done``; that is the standard
-    poller's trade and it is stated here rather than hidden.
+    as unknown and remains eligible for reconciliation.
 
     nohup: ``kill -0`` on the group, then the exit-code file. A group
     that is gone with no file is ``unknown`` — reaped by a rebooting node
@@ -295,10 +299,10 @@ def build_status_command(handle: RemoteJobHandle) -> str:
         return (
             f"cd -- {quoted} && "
             f"q=$(squeue -h -j {job_id} -o %T 2>/dev/null); "
-            "if [ -n \"$q\" ]; then echo \"$q\"; exit 0; fi; "
+            'if [ -n "$q" ]; then echo "$q"; exit 0; fi; '
             f"a=$(sacct -n -X -j {job_id} -o State 2>/dev/null "
             "| head -n 1 | tr -d ' '); "
-            "if [ -n \"$a\" ]; then echo \"$a\"; else "
+            'if [ -n "$a" ]; then echo "$a"; else '
             f"echo {_LOST_MARK}; fi"
         )
     return (
@@ -327,15 +331,16 @@ def parse_status(kind: str, output: str) -> tuple[str, int | None]:
             return RUNNING, None
         if upper.startswith("CANCELLED"):
             return CANCELED, None
-        if upper.startswith(("COMPLETED", "BOOT_FAIL")):
+        if upper.startswith("COMPLETED"):
             return DONE, None
-        if upper.startswith(("FAILED", "NODE_FAIL", "OUT_OF_MEMORY", "TIMEOUT")):
+        if upper.startswith(
+            ("FAILED", "BOOT_FAIL", "NODE_FAIL", "OUT_OF_MEMORY", "TIMEOUT")
+        ):
             return FAILED, None
         if word == _LOST_MARK:
-            # Gone from the queue and from accounting: the poller's
-            # standard trade reads this as finished (a cluster without
-            # sacct would otherwise have every job unknown forever).
-            return DONE, None
+            # Accounting can lag behind the queue; retain the handle until
+            # the scheduler provides an explicit terminal status.
+            return UNKNOWN, None
         return UNKNOWN, None
     if kind == KIND_NOHUP:
         line = text.splitlines()[-1].strip() if text else ""
@@ -417,11 +422,12 @@ __all__ = [
     "NOHUP_LAUNCHER",
     "NOHUP_WRAPPER",
     "PENDING",
-    "RemoteJobHandle",
     "RUNNING",
     "SCHEDULERS",
     "STATES",
     "UNKNOWN",
+    "JobHandle",
+    "RemoteJobHandle",
     "build_cancel_command",
     "build_job_scripts",
     "build_log_tail_command",
