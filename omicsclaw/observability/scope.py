@@ -87,7 +87,7 @@ from __future__ import annotations
 
 import logging
 from contextvars import ContextVar, Token
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Self, runtime_checkable
 
 from omicsclaw.engine import EngineEvent, EngineEventType, RunResult
 from omicsclaw.schema import Usage
@@ -99,6 +99,7 @@ from .attributes import (
     ATTR_LANGFUSE_TRACE_INPUT,
     ATTR_LANGFUSE_TRACE_OUTPUT,
     ATTR_OUTPUT_TOKENS,
+    ATTR_RUN_ID,
     ATTR_SESSION_ID,
     ATTR_STOP_REASON,
     ATTR_TURN_HAS_TOOL_CALLS,
@@ -287,7 +288,7 @@ class TurnScope:
                 parent=self._parent,
                 attributes={ATTR_TURN_NUMBER: self._turn},
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional telemetry must not interrupt execution
             self._failed = True
             _log.exception("telemetry could not open a span for turn %d", self._turn)
             return self._parent if self._parent is not None else NOOP_SPAN
@@ -348,6 +349,7 @@ class RunScope:
         "_meter",
         "_prompt",
         "_result",
+        "_run_id",
         "_saw_turn_end",
         "_session_id",
         "_token",
@@ -362,6 +364,7 @@ class RunScope:
         meter: Meter,
         *,
         session_id: str = "",
+        run_id: str = "",
         prompt: str = "",
         capture_content: bool = False,
         agent_type: str = "main",
@@ -371,6 +374,7 @@ class RunScope:
         self._tracer = tracer
         self._meter = meter
         self._session_id = session_id
+        self._run_id = run_id
         self._prompt = prompt
         self._capture = capture_content
         self._agent_type = agent_type
@@ -403,7 +407,7 @@ class RunScope:
         """The turn currently open, including one never materialised."""
         return self._turn
 
-    async def __aenter__(self) -> RunScope:
+    async def __aenter__(self) -> Self:
         """Open the interaction span, and the scope for turn 1 if there is one.
 
         Turn 1 is staged without the hesitation the later turns get,
@@ -430,6 +434,8 @@ class RunScope:
                 ATTR_SESSION_ID: self._session_id,
                 ATTR_AGENT_TYPE: self._agent_type,
             }
+            if self._run_id:
+                attributes[ATTR_RUN_ID] = self._run_id
             if self._capture and self._prompt:
                 attributes[ATTR_LANGFUSE_TRACE_INPUT] = truncate_attr(self._prompt)
             self._interaction = self._tracer.start_span(
@@ -440,7 +446,7 @@ class RunScope:
                 self._token = push_parent(self._turn)
             else:
                 self._token = push_parent(fixed(self._interaction))
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional telemetry must not interrupt execution
             _log.exception("telemetry could not open an interaction span")
             self._interaction = None
             self._turn = None
@@ -483,7 +489,7 @@ class RunScope:
                     self._interaction.record_error(exc)
                 self._interaction.set_attributes(self._final_attributes())
                 self._interaction.end()
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional telemetry must not interrupt execution
             _log.exception("telemetry could not close an interaction span")
         finally:
             if self._token is not None:
@@ -546,7 +552,7 @@ class RunScope:
         """
         try:
             self._observe(event)
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional telemetry must not interrupt execution
             _log.exception("telemetry could not record a %s event", event.type)
 
     def _observe(self, event: EngineEvent) -> None:
@@ -620,4 +626,3 @@ def _usage_attributes(usage: Usage | None) -> dict[str, AttributeValue]:
     if usage.cache_read_tokens:
         attributes[ATTR_CACHE_READ_TOKENS] = usage.cache_read_tokens
     return attributes
-

@@ -27,8 +27,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Callable, Sequence
 
 from omicsclaw.hooks import ToolHook
 from omicsclaw.provider import LLMProvider
@@ -39,6 +39,7 @@ from .contract import NOOP_METER, NOOP_TRACER, Meter, Tracer
 from .hook import TracingHook
 from .otel import build_otel_backend
 from .provider import TracedProvider
+from .run_events import RunEventObserver
 from .scope import RunScope
 
 _log = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class Telemetry:
         self,
         *,
         session_id: str = "",
+        run_id: str = "",
         prompt: str = "",
         agent_type: str = "main",
         turn_events: bool = True,
@@ -106,12 +108,17 @@ class Telemetry:
             self.tracer,
             self.meter,
             session_id=session_id,
+            run_id=run_id,
             prompt=prompt,
             capture_content=self.config.capture_content,
             agent_type=agent_type,
             turn_events=turn_events,
             flush=self.force_flush if self.on_flush is not None else None,
         )
+
+    def run_event_sink(self) -> RunEventObserver | None:
+        """Observe committed domain events when telemetry is enabled."""
+        return RunEventObserver(self.tracer, self.meter) if self.active else None
 
     def trace_provider(self, inner: LLMProvider, *, model: str = "") -> LLMProvider:
         """Wrap *inner*, or hand it back unchanged when inactive.
@@ -169,7 +176,7 @@ class Telemetry:
             return
         try:
             await asyncio.to_thread(self.on_flush)
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional telemetry must not interrupt execution
             _log.warning("telemetry could not be flushed", exc_info=True)
 
     async def aclose(self) -> None:
@@ -185,7 +192,7 @@ class Telemetry:
             return
         try:
             await asyncio.to_thread(self.on_shutdown)
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional telemetry must not interrupt execution
             _log.warning("telemetry could not be shut down cleanly", exc_info=True)
 
 
