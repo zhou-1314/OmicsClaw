@@ -175,13 +175,13 @@ def test_health_publishes_jobs_contract_and_connection_epoch(tmp_path):
         assert path in payload["served_paths"]
 
 
-def test_chat_stream_frames_carry_epoch(tmp_path):
+def test_chat_stream_preserves_the_v3_two_key_envelope(tmp_path):
     _, http = jobs_client(tmp_path)
     with http as client:
         frames = drain_sse_post(client)
     assert frames, "the scripted exchange produced no frames"
     for _, envelope in frames:
-        assert envelope["epoch"] == CONNECTION_EPOCH
+        assert set(envelope) == {"type", "data"}
 
 
 def drain_sse_post(client) -> list[tuple[int | None, dict]]:
@@ -769,28 +769,34 @@ def test_code_run_refuses_malformed_or_incompatible_locations(tmp_path):
             assert refused.json()["detail"] == detail, document
 
 
-def test_code_run_remote_location_on_a_local_deployment_fails_at_setup(tmp_path):
-    """The route folds the field, the runner validates it, and the
-    manager refuses it — a deployment that never bound a remote kernel
-    runtime must fail the job with the reason rather than run the cell
-    locally (a caller that asked for the remote host and got this
-    process would be worse than an error)."""
+def test_remote_code_is_refused_before_creating_a_local_job(tmp_path):
+    """A missing remote runtime cannot produce an immutable target snapshot."""
     manager, http = code_run_client(tmp_path)
-    assert manager.kernels.manager.remote_runtime is None  # the off pin
+    assert manager.kernels.manager.remote_runtime is None
     with http as client:
-        created = client.post(
-            "/jobs",
-            json={
-                "kind": "code_run",
-                "code": "x = 1",
-                "session_id": "c3-loc",
-                "location": "remote:gpu-lab",
-            },
+        response = client.post(
+            "/jobs", json={"kind": "code_run", "code": "x = 1",
+                           "session_id": "c3-loc", "location": "remote:gpu-lab"},
         )
-        assert created.status_code == 200, created.text
-        record = wait_terminal(client, created.json()["job_id"])
-        assert record["status"] == "failed"
-        assert "remote kernel locations are not enabled" in record["error"]
-        frames = drain_sse(client, "/jobs/" + created.json()["job_id"] + "/events")
-        failed = frames[-1][1]
-        assert failed["data"]["phase"] == "setup"
+        assert response.status_code == 409
+        assert response.json() == {"detail": "remote_runtime_unavailable"}
+        assert client.get("/jobs").json()["jobs"] == []
+
+
+def test_run_event_stream_replays_and_closes(tmp_path):
+    _, http = jobs_client(tmp_path)
+    with http as client:
+        job_id = client.post(
+            "/jobs", json={"kind": "skill_run", "skill": "demo/hello-skill", "inputs": {"name": "sse"}}
+        ).json()["job_id"]
+        assert wait_for(lambda: client.get("/jobs/" + job_id).json()["job"]["status"] == "succeeded")
+        runs = client.get("/runs").json()["runs"]
+        assert runs
+        run_id = runs[0]["run"]["run_id"]
+        frames = drain_sse(client, "/runs/" + run_id + "/events/stream")
+        ids = [frame[0] for frame in frames if frame[0] is not None]
+        assert ids == sorted(set(ids))
+        assert any(frame[1]["type"] == "run.event" for frame in frames)
+        assert frames[-1][1]["type"] == "run.done"
+        resumed = drain_sse(client, "/runs/" + run_id + "/events/stream", headers={"Last-Event-ID": str(ids[-1])})
+        assert resumed[-1][1]["type"] == "run.done"

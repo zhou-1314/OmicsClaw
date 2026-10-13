@@ -471,3 +471,31 @@ def test_a_non_integer_discovery_ceiling_is_refused_by_name():
 
     assert "OMICSCLAW_SKILLS_DISCOVERY_TOP_K" in str(caught.value)
     assert "not an integer" in str(caught.value)
+
+
+# Durable stream rollout is resolved once with the other deployment values.
+def test_durable_turn_events_defaults_off_and_uses_only_supplied_environment(
+    monkeypatch,
+):
+    monkeypatch.setenv("OMICSCLAW_DURABLE_TURN_EVENTS", "1")
+    assert resolve_app_config([], {}).durable_turn_events is False
+
+
+@pytest.mark.parametrize(
+    "raw,expected", [("1", True), ("0", False), ("true", True), ("false", False)]
+)
+def test_durable_turn_events_uses_existing_boolean_parser(raw, expected):
+    config = resolve_app_config([], {"OMICSCLAW_DURABLE_TURN_EVENTS": raw})
+    assert config.durable_turn_events is expected
+
+
+def test_durable_turn_events_respects_cli_and_explicit_override_precedence():
+    env = {"OMICSCLAW_DURABLE_TURN_EVENTS": "1"}
+    args = ["--durable-turn-events", "false"]
+    assert resolve_app_config(args, env).durable_turn_events is False
+    assert resolve_app_config(args, env, durable_turn_events=True).durable_turn_events
+
+
+def test_durable_turn_events_rejects_invalid_boolean():
+    with pytest.raises(AppConfigError, match="OMICSCLAW_DURABLE_TURN_EVENTS"):
+        resolve_app_config([], {"OMICSCLAW_DURABLE_TURN_EVENTS": "sometimes"})

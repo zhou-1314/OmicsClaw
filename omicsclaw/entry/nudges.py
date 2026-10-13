@@ -107,6 +107,7 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
         _scratch_block(app, session_id=session_id),
         _skill_discovery(app),
         _shadow_review_nudge(app, session_id),
+        _notebook_context(app, session_id),
         build_injector(app, session_id=session_id),
     )
 
@@ -252,3 +253,16 @@ def _memory_nudge(app: "AgentApp") -> MemoryNudge | None:
     if app.memory is None or every <= 0:
         return None
     return MemoryNudge(write_tool=MEMORY_WRITE_TOOL_NAME, every=every)
+
+
+def _notebook_context(app, session_id):
+    from .notebook_context import NotebookContext
+
+    kernels = getattr(app, "kernels", None)
+    if kernels is None or not session_id:
+        return None
+    analysis = kernels.notebooks
+    # Binding changes are refused while a chat turn is active.
+    if analysis.binding(session_id=session_id) is None:
+        return None
+    return NotebookContext(analysis, session_id)

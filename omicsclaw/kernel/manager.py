@@ -100,6 +100,7 @@ def normalize_location(location: str) -> str:
         " dashes, underscores)"
     )
 
+
 DEFAULT_CELL_TIMEOUT_S = 1800.0
 """The retained default cell ceiling — 30 min, per the plan's explicit
 refusal of CS's "no default timeout" gap."""
@@ -166,6 +167,7 @@ class SessionState:
     lives. Part of the state key, so the same session may hold one
     kernel per (language, location) combination."""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    cancel_guard: asyncio.Lock = field(default_factory=asyncio.Lock)
     kernel: SessionKernel | None = None
     obituary: str = ""
     obituary_pending: bool = False
@@ -177,6 +179,7 @@ class SessionState:
     protected: set[str] = field(default_factory=set)
     executing: bool = False
     current_job: str = ""
+    current_execution_token: str = ""
     last_error: str = ""
     target_workdir: str = ""
     """The immutable remote target work directory bound to this state.
@@ -275,9 +278,9 @@ class PersistentKernelManager:
     ) -> None:
         """Add *session_id*'s kernel to the reaper's protection set (e.g.
         a pending approval). Idempotent per reason."""
-        self.state_for(
-            session_id, language=language, location=location
-        ).protected.add(reason)
+        self.state_for(session_id, language=language, location=location).protected.add(
+            reason
+        )
 
     def unprotect(
         self,
@@ -287,9 +290,7 @@ class PersistentKernelManager:
         language: str = "python",
         location: str = "local",
     ) -> None:
-        state = self.states.get(
-            (session_id, language, normalize_location(location))
-        )
+        state = self.states.get((session_id, language, normalize_location(location)))
         if state is not None:
             state.protected.discard(reason)
 
@@ -309,6 +310,9 @@ class PersistentKernelManager:
         adata_binding: str = "adata",
         job_id: str = "",
         target_workdir: str = "",
+        retry_on_death: bool = True,
+        cancelled: Callable[[], bool] | None = None,
+        execution_token: str = "",
     ) -> CellResult:
         """Run *code* on *session_id*'s kernel, starting one if needed.
 
@@ -351,6 +355,8 @@ class PersistentKernelManager:
         self._ensure_reaper()
         state = self.state_for(session_id, language=language, location=location)
         async with state.lock:
+            if cancelled is not None and cancelled():
+                return CellResult(status="interrupted")
             if location != "local":
                 candidate_workdir = str(target_workdir or "").strip()
                 if state.target_workdir:
@@ -370,9 +376,11 @@ class PersistentKernelManager:
                     )
                 elif candidate_workdir:
                     state.target_workdir = candidate_workdir
-            state.executing = True
-            state.protected.add("executing")
-            state.current_job = str(job_id)
+            async with state.cancel_guard:
+                state.executing = True
+                state.protected.add("executing")
+                state.current_job = str(job_id)
+                state.current_execution_token = execution_token
             try:
                 if state.restart_needed and state.kernel is not None:
                     await self._recycle_locked(
@@ -407,14 +415,24 @@ class PersistentKernelManager:
                         sync_info, prefix = await asyncio.to_thread(
                             self._sync_input, state, adata_in, adata_binding
                         )
-                    result = await asyncio.to_thread(
-                        state.kernel.execute,
-                        prefix + code,
-                        timeout_s=float(timeout_s or self.cell_timeout_s),
-                        callbacks=callbacks,
-                    )
+
+                    def execute_cell(source=prefix + code):
+                        # Cancellation during startup or a lock wait must not
+                        # become a new command after the caller has stopped.
+                        if cancelled is not None and cancelled():
+                            return CellResult(status="interrupted")
+                        return state.kernel.execute(
+                            source,
+                            timeout_s=float(timeout_s or self.cell_timeout_s),
+                            callbacks=callbacks,
+                        )
+
+                    if cancelled is not None and cancelled():
+                        return CellResult(status="interrupted")
+                    result = await asyncio.to_thread(execute_cell)
                     if (
                         result.status == "dead"
+                        and retry_on_death
                         and attempt == 1
                         and not state.resetting
                     ):
@@ -466,10 +484,12 @@ class PersistentKernelManager:
                         )
                     return result
             finally:
-                state.executing = False
-                state.protected.discard("executing")
-                state.current_job = ""
-                state.last_activity = time.time()
+                async with state.cancel_guard:
+                    state.executing = False
+                    state.protected.discard("executing")
+                    state.current_job = ""
+                    state.current_execution_token = ""
+                    state.last_activity = time.time()
 
     def _sync_input(
         self, state: SessionState, adata_in: str, binding: str
@@ -503,18 +523,21 @@ class PersistentKernelManager:
                 f"{self._reaper.restart_rss_kb} kB) plus cell count "
                 f"({state.cells} over {self._reaper.restart_after_cells})"
             )
-            _log.info("session %s marked for kernel restart: %s", state.session_id,
-                      state.restart_needed)
+            _log.info(
+                "session %s marked for kernel restart: %s",
+                state.session_id,
+                state.restart_needed,
+            )
 
-    async def _start_locked(self, state: SessionState, *, target_workdir: str = "") -> None:
+    async def _start_locked(
+        self, state: SessionState, *, target_workdir: str = ""
+    ) -> None:
         def _on_figure(path: Path, mime: str) -> tuple[str, str]:
             artifact_id = ""
             if self._on_figure is not None:
                 try:
                     artifact_id = str(
-                        self._on_figure(
-                            path, mime, state.session_id, state.current_job
-                        )
+                        self._on_figure(path, mime, state.session_id, state.current_job)
                         or ""
                     )
                 except Exception:  # noqa: BLE001 - registration is never a cell fault
@@ -527,7 +550,7 @@ class PersistentKernelManager:
             # raises on a host that refuses; a refusal here is a failed
             # cell, never a quiet fallback to a local kernel.
             start_kwargs = {
-                "host": state.location[len("remote:"):],
+                "host": state.location[len("remote:") :],
                 "workspace": self.workspace,
                 "limits": self.limits,
                 "on_figure": _on_figure,
@@ -535,9 +558,7 @@ class PersistentKernelManager:
             }
             if target_workdir:
                 start_kwargs["target_workdir"] = target_workdir
-            kernel = await self.remote_runtime.start(
-                state.session_id, **start_kwargs
-            )
+            kernel = await self.remote_runtime.start(state.session_id, **start_kwargs)
         else:
             kernel = SessionKernel(
                 state.session_id,
@@ -556,7 +577,35 @@ class PersistentKernelManager:
 
     # ---- the cancel ladder ----
 
-    async def cancel(self, session_id: str) -> str:
+    async def cancel(
+        self,
+        session_id: str,
+        *,
+        job_id: str | None = None,
+        language: str | None = None,
+        location: str | None = None,
+        execution_token: str | None = None,
+    ) -> str:
+        """Finish interruption and cleanup before propagating caller cancellation."""
+        return await _finish_before_cancelling(
+            self._cancel(
+                session_id,
+                job_id=job_id,
+                language=language,
+                location=location,
+                execution_token=execution_token,
+            )
+        )
+
+    async def _cancel(
+        self,
+        session_id: str,
+        *,
+        job_id: str | None = None,
+        language: str | None = None,
+        location: str | None = None,
+        execution_token: str | None = None,
+    ) -> str:
         """Interrupt what *session_id* is running. Answers the tier reached.
 
         ``"interrupted"`` — tier 1/2: the executing task observed the
@@ -571,17 +620,48 @@ class PersistentKernelManager:
         live = [
             s
             for s in self.states.values()
-            if s.session_id == session_id and s.kernel is not None
+            if s.session_id == session_id
+            and s.kernel is not None
+            and (job_id is None or s.current_job == job_id)
+            and (language is None or s.language == language)
+            and (location is None or s.location == location)
+            and (
+                execution_token is None or s.current_execution_token == execution_token
+            )
         ]
         if not live:
             return "idle"
         live.sort(key=lambda s: not s.executing)  # an executing kernel first
         state = live[0]
         kernel = state.kernel
-        await asyncio.to_thread(kernel.interrupt)
+        scoped = job_id is not None or execution_token is not None
+
+        def owns_execution():
+            return (
+                state.kernel is kernel
+                and (job_id is None or state.current_job == job_id)
+                and (
+                    execution_token is None
+                    or state.current_execution_token == execution_token
+                )
+            )
+
+        if not scoped:
+            await asyncio.to_thread(kernel.interrupt)
+        else:
+            # Keep ownership fixed until the signal is sent. The old execution
+            # cannot release its session lock and admit another cell meanwhile.
+            async with state.cancel_guard:
+                if not owns_execution():
+                    return "idle"
+                await asyncio.to_thread(kernel.interrupt)
         deadline = time.monotonic() + CANCEL_GRACE_S
         while state.executing and time.monotonic() < deadline:
+            if scoped and not owns_execution():
+                return "interrupted"
             await asyncio.sleep(0.1)
+        if scoped and not owns_execution():
+            return "interrupted"
         if not state.executing:
             if not await asyncio.to_thread(kernel.is_alive):
                 return "dead"
@@ -595,8 +675,11 @@ class PersistentKernelManager:
         # button) hostage until the cell timeout. The ``resetting`` flag
         # keeps the in-flight execute from retrying the cell on the
         # replacement kernel.
-        state.resetting = True
-        await asyncio.to_thread(kernel.kill)
+        async with state.cancel_guard:
+            if scoped and not owns_execution():
+                return "interrupted"
+            state.resetting = True
+            await asyncio.to_thread(kernel.kill)
         async with state.lock:
             # The lock is free only once the in-flight execute has
             # returned, which is exactly when the flag has done its job.
@@ -615,9 +698,7 @@ class PersistentKernelManager:
         if kernel is None:
             return False
         try:
-            outcome = await asyncio.to_thread(
-                kernel.execute, "pass\n", timeout_s=15.0
-            )
+            outcome = await asyncio.to_thread(kernel.execute, "pass\n", timeout_s=15.0)
         except Exception:  # noqa: BLE001 - a probe that raises is a dead kernel
             return False
         return outcome.status == "ok"
@@ -641,9 +722,7 @@ class PersistentKernelManager:
             finally:
                 state.kernel = None
         dropped = self.handles.drop_session(state.session_id)
-        handle_note = (
-            ", ".join(dropped) if dropped else "no registered adata handles"
-        )
+        handle_note = ", ".join(dropped) if dropped else "no registered adata handles"
         if summary is None:
             body = "no namespace summary could be captured (" + reason + ")"
         else:
@@ -708,6 +787,23 @@ class PersistentKernelManager:
         return self._reaper
 
 
+async def _finish_before_cancelling(operation):
+    """Keep a cancellation operation alive until its thread work and cleanup finish."""
+    task = asyncio.create_task(operation)
+    cancellation = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                raise
+            cancellation = exc
+    result = task.result()
+    if cancellation is not None:
+        raise cancellation
+    return result
+
+
 def format_cell_summary(result: CellResult) -> str:
     """The text a caller shows: stdout tail first, then the diagnostics.
 
@@ -751,5 +847,5 @@ def _tail(text: str, limit: int) -> str:
     return (
         text[:head]
         + f"\n...[{len(text) - limit} characters elided]...\n"
-        + text[-(limit - head):]
+        + text[-(limit - head) :]
     )

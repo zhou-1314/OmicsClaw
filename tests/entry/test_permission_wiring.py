@@ -63,6 +63,7 @@ MOUNTED = (
     "ask_user",
     "save_artifact",
     "python",
+    "live_app",
     "task",
 )
 

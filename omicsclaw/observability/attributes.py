@@ -31,11 +31,12 @@ whether observability is switched on at all.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Mapping
 
 __all__ = [
     "ATTR_AGENT_TYPE",
+    "ATTR_CACHE_READ_TOKENS",
     "ATTR_ERROR_MESSAGE",
     "ATTR_ERROR_STATUS",
     "ATTR_ERROR_TYPE",
@@ -48,9 +49,9 @@ __all__ = [
     "ATTR_LANGFUSE_OBSERVATION_OUTPUT",
     "ATTR_LANGFUSE_TRACE_INPUT",
     "ATTR_LANGFUSE_TRACE_OUTPUT",
-    "ATTR_OUTPUT_TOKENS",
-    "ATTR_CACHE_READ_TOKENS",
     "ATTR_MODEL",
+    "ATTR_OUTPUT_TOKENS",
+    "ATTR_RUN_ID",
     "ATTR_SESSION_ID",
     "ATTR_STOP_REASON",
     "ATTR_TOOL_NAME",
@@ -61,8 +62,8 @@ __all__ = [
     "ATTR_TURN_NUMBER",
     "DEFAULT_SERVICE_NAME",
     "INSTRUMENTS",
-    "InstrumentKind",
     "METRIC_LLM_DURATION",
+    "METRIC_RUN_EVENTS",
     "METRIC_TOKENS_INPUT",
     "METRIC_TOKENS_OUTPUT",
     "METRIC_TOOL_CALLS",
@@ -70,8 +71,10 @@ __all__ = [
     "METRIC_TURNS_TOTAL",
     "SPAN_INTERACTION",
     "SPAN_LLM_REQUEST",
+    "SPAN_RUN_EVENT",
     "SPAN_TOOL",
     "SPAN_TURN",
+    "InstrumentKind",
 ]
 
 DEFAULT_SERVICE_NAME = "omicsclaw"
@@ -249,6 +252,7 @@ METRIC_TOKENS_INPUT = "omicsclaw.llm.tokens.input"
 METRIC_TOKENS_OUTPUT = "omicsclaw.llm.tokens.output"
 METRIC_TOOL_CALLS = "omicsclaw.tool.calls.total"
 METRIC_TOOL_DURATION = "omicsclaw.tool.execution.duration"
+METRIC_RUN_EVENTS = "omicsclaw.run.events.total"
 METRIC_TURNS_TOTAL = "omicsclaw.agent.turns.total"
 
 
@@ -291,6 +295,11 @@ INSTRUMENTS: Mapping[str, tuple[str, str, str]] = MappingProxyType(
             InstrumentKind.HISTOGRAM,
             "s",
             "Wall-clock seconds one tool execution took",
+        ),
+        METRIC_RUN_EVENTS: (
+            InstrumentKind.COUNTER,
+            "{event}",
+            "Committed Run domain events",
         ),
         METRIC_TURNS_TOTAL: (
             InstrumentKind.COUNTER,
@@ -339,3 +348,7 @@ switched on**; see
 They are the only keys in this module that carry a payload rather than a
 measurement, which is exactly why they are the ones gated.
 """
+
+
+ATTR_RUN_ID = "run.id"
+SPAN_RUN_EVENT = "omicsclaw.run.event"

@@ -29,7 +29,8 @@ an unobserved deployment gets a scope whose spans are the shared no-op.
 observer seam instead.
 
 The history belongs to the caller. Nothing here is stored between calls
-except what a caller chooses to carry: :class:`TurnOutcome` gives back
+except a named session's durable Run projection and what a caller chooses
+to carry: :class:`TurnOutcome` gives back
 the conversation to keep and the compaction state to pass in next time.
 """
 
@@ -39,15 +40,11 @@ import asyncio
 import itertools
 import logging
 from collections import Counter
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import (
-    AsyncIterator,
-    Callable,
-    Iterator,
     Literal,
-    Mapping,
-    Sequence,
     cast,
 )
 
@@ -86,6 +83,7 @@ from .compaction import PINNED_SYSTEM_MESSAGES, build_compactor
 from .events import Terminal, TurnEvent
 from .nudges import build_augmentor
 from .question import QuestionBroker
+from .run_projection import project_session_run
 from .stream import DEFAULT_RING_SIZE, TurnObservation, TurnStream
 from .subagent import DelegatedUsage
 from .suggestions import SuggestionSplitter, strip_suggestions
@@ -386,9 +384,7 @@ def _outcome(result: RunResult, exchange: _Exchange) -> TurnOutcome:
         # suggestion block: a Channel posts this string verbatim, and its
         # users have no chips to render. History keeps the bytes the model
         # wrote — prompt-prefix caches and replay evidence match on them.
-        reply=strip_suggestions(
-            _reply(result.messages, exchange.conversation.history)
-        ),
+        reply=strip_suggestions(_reply(result.messages, exchange.conversation.history)),
         state=compactor.state,
         compaction=compactor.last_record,
         compactions=compactor.records,
@@ -485,7 +481,10 @@ async def run_turn(
     timeout = app.config.turn_timeout_s
     with _session_bound(session_id):
         async with app.telemetry.run(
-            session_id=session_id, prompt=user_text, turn_events=False
+            session_id=session_id,
+            prompt=user_text,
+            turn_events=False,
+            run_id=project_session_run(app, session_id),
         ) as scope:
             if timeout is None:
                 result = await _run(app, exchange, user_text)
@@ -526,7 +525,9 @@ async def stream_turn(
     exchange = _assemble(app, history, session_id=session_id, state=state)
     with _session_bound(session_id):
         async with app.telemetry.run(
-            session_id=session_id, prompt=user_text
+            session_id=session_id,
+            prompt=user_text,
+            run_id=project_session_run(app, session_id),
         ) as scope:
             async for event in _stream(app, exchange, user_text):
                 scope.observe(event)
@@ -670,19 +671,18 @@ class TurnRunner:
         :attr:`terminal` says.
         """
         self._publish(
-            TurnEvent.exchange_start(
-                session_id=self.session_id, turn_id=self.turn_id
-            )
+            TurnEvent.exchange_start(session_id=self.session_id, turn_id=self.turn_id)
         )
-        _log.info(
-            "exchange started: session=%s turn=%s", self.session_id, self.turn_id
-        )
+        _log.info("exchange started: session=%s turn=%s", self.session_id, self.turn_id)
         try:
-            with use_usage_sink(self.delegated.add), use_tool_context(
-                approval=self._approval,
-                progress=self._on_progress,
-                values=self.turn_values(),
-                question=self._questions if self._app.config.ask_user else None,
+            with (
+                use_usage_sink(self.delegated.add),
+                use_tool_context(
+                    approval=self._approval,
+                    progress=self._on_progress,
+                    values=self.turn_values(),
+                    question=self._questions if self._app.config.ask_user else None,
+                ),
             ):
                 outcome = await self._deadline()
             self.outcome = outcome
@@ -791,7 +791,9 @@ class TurnRunner:
         splitter = SuggestionSplitter()
         last_delta: EngineEvent | None = None
         async with app.telemetry.run(
-            session_id=self.session_id, prompt=user_text
+            session_id=self.session_id,
+            prompt=user_text,
+            run_id=project_session_run(app, self.session_id),
         ) as scope:
             async for event in _stream(app, exchange, user_text):
                 scope.observe(event)
@@ -955,6 +957,7 @@ class TurnHandle:
         approval_timeout_s: float | None = None,
         abandon_grace_s: float | None = None,
         compaction_only: bool = False,
+        durable_log=None,
     ) -> None:
         """``abandon_grace_s=None`` means an unwatched exchange keeps running.
 
@@ -1007,6 +1010,7 @@ class TurnHandle:
                 ring_size if observer_queue_size is None else observer_queue_size
             ),
             on_observer_change=self._observers_changed,
+            durable_log=durable_log,
         )
         # The ``n`` of every ``<turn id>#<n>`` request id of this exchange,
         # shared by everything that asks the person something.
@@ -1104,6 +1108,7 @@ class TurnHandle:
         one question and prints one answer is that caller.
         """
         await self._settled.wait()
+        await self.stream.flush_durable()
         return self.outcome
 
     @property
@@ -1116,9 +1121,7 @@ class TurnHandle:
     def _publish_queued(self, ahead: int) -> None:
         """Announce the queue depth this exchange arrived behind (Q7)."""
         self.stream.publish(
-            TurnEvent.queued(
-                ahead, session_id=self.session_id, turn_id=self.turn_id
-            )
+            TurnEvent.queued(ahead, session_id=self.session_id, turn_id=self.turn_id)
         )
 
     def _start(self, task: asyncio.Task[TurnOutcome]) -> None:
@@ -1138,6 +1141,13 @@ class TurnHandle:
         self.terminal = terminal
         self.error = error
         self.outcome = outcome
+        if self.stream._durable_tasks:
+            asyncio.create_task(self._settle_after_durable_flush())
+        else:
+            self._settled.set()
+
+    async def _settle_after_durable_flush(self) -> None:
+        await self.stream.flush_durable()
         self._settled.set()
 
     def _publish_terminal(self, terminal: Terminal) -> None:

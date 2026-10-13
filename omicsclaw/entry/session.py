@@ -64,6 +64,7 @@ from typing import Mapping, Protocol, Sequence
 
 from omicsclaw.context import CompactionState
 from omicsclaw.schema import Message
+from omicsclaw.memory.turn_events import DurableTurnEventLog
 
 from .assembly import AgentApp
 from .events import Terminal
@@ -329,6 +330,7 @@ class SessionRegistry:
         "_closed",
         "_grace_s",
         "_handles",
+        "_event_log",
         "_lanes",
         "_sessions",
         "_store",
@@ -356,6 +358,12 @@ class SessionRegistry:
         self._sessions: OrderedDict[str, Session] = OrderedDict()
         self._lanes: dict[str, _Lane] = {}
         self._handles: OrderedDict[str, TurnHandle] = OrderedDict()
+        memory = getattr(app, "memory", None)
+        self._event_log = (
+            DurableTurnEventLog(memory.database)
+            if memory is not None and app.config.durable_turn_events
+            else None
+        )
         self._by_request: dict[tuple[str, str], TurnHandle] = {}
         self._closed = False
 
@@ -464,6 +472,7 @@ class SessionRegistry:
             approval_timeout_s=self._app.config.approval_timeout_s,
             abandon_grace_s=self._grace_s,
             compaction_only=compaction_only,
+            durable_log=self._event_log,
         )
         ahead = (1 if lane.running is not None else 0) + len(lane.waiting)
         lane.waiting.append(handle)
@@ -527,6 +536,10 @@ class SessionRegistry:
     def session(self, session_id: str) -> Session | None:
         """The in-memory session, or ``None`` if none has been loaded."""
         return self._sessions.get(session_id)
+
+    def is_busy(self, session_id: str) -> bool:
+        lane = self._lanes.get(session_id)
+        return lane is not None and lane.busy()
 
     async def load_session(self, session_id: str) -> Session | None:
         """The conversation named *session_id*, from memory or the store.

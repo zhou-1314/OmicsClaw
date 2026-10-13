@@ -183,9 +183,7 @@ class RemoteHostStore:
         """
         record = self.get(alias)
         notes = record.notes() if record is not None else []
-        notes.append(
-            {"question": question, "answer": answer, "at": time.time()}
-        )
+        notes.append({"question": question, "answer": answer, "at": time.time()})
         payload = json.dumps(notes, ensure_ascii=False)
         now = time.time()
         self._db.run(
@@ -258,16 +256,16 @@ class RemoteJobStore:
         )
         return self._row(rows[0]) if rows else None
 
-    def in_flight(self) -> list[RemoteJobRow]:
+    def in_flight(self, *, include_unknown: bool = False) -> list[RemoteJobRow]:
         """Every row not yet terminal — the reconciler's work list."""
         rows = self._db.run(
             lambda conn: conn.execute(
                 "SELECT id, host_alias, kind, job_id, pgid, workdir,"
                 " submitted_at, last_seen, status, local_job_id,"
                 " target_alias, target_workdir, capabilities_json"
-                " FROM remote_jobs WHERE status IN (?, ?)"
+                " FROM remote_jobs WHERE status IN (?, ?, ?)"
                 " ORDER BY submitted_at",
-                IN_FLIGHT_STATES,
+                (*IN_FLIGHT_STATES, "unknown" if include_unknown else "pending"),
             ).fetchall()
         )
         return [self._row(row) for row in rows]

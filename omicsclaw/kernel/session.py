@@ -330,6 +330,9 @@ class SessionKernel:
             for folder in isolated.values():
                 Path(folder).mkdir(parents=True, exist_ok=True)
             env.update(isolated)
+            # A headless host may use Agg; notebook kernels must emit display_data.
+            # This startup default still allows cells to select another backend.
+            env["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
             spec_manager = KernelSpecManager(
                 kernel_dirs=[str(scratch / "kernels")], ensure_native_kernel=False
             )

@@ -209,7 +209,10 @@ def test_an_explicit_hook_list_replaces_the_whole_chain(tmp_path, offline):
 
 def test_the_registry_itself_is_never_wrapped(tmp_path, offline):
     """Defect R3: the engine probes it with ``isinstance`` for two Protocols."""
-    from omicsclaw.engine.executor import ConcurrencyAwareExecutor, DeadlineAwareExecutor
+    from omicsclaw.engine.executor import (
+        ConcurrencyAwareExecutor,
+        DeadlineAwareExecutor,
+    )
 
     app = build_app(_config(tmp_path), telemetry=_active())
 
@@ -264,7 +267,6 @@ def test_the_blocking_exchange_really_produces_a_two_level_tree(tmp_path, offlin
     ``agent.turn=1``.
     """
     from omicsclaw.entry.turn import run_turn
-
     from tests.observability._support import Echo, RecordingMeter, RecordingTracer
 
     tracer, meter = RecordingTracer(), RecordingMeter()
@@ -285,14 +287,22 @@ def test_the_blocking_exchange_really_produces_a_two_level_tree(tmp_path, offlin
     )
     root = tracer.named("omicsclaw.interaction")[0]
     assert root.attributes["session.id"] == "sess-blocking"
+    assert root.attributes["run.id"] == "legacy:sess-blocking"
+    domain_events = tracer.named("omicsclaw.run.event")
+    assert len(domain_events) == 1
+    assert domain_events[0].attributes["run.id"] == root.attributes["run.id"]
+    assert domain_events[0].attributes["event.name"] == "run.created"
     assert root.attributes["agent.turns"] == 2, "the turn count still arrives"
     requests = tracer.named("omicsclaw.llm_request")
     assert len(requests) == 2, "one request span per model call"
-    assert all(span.chain == ["omicsclaw.llm_request", "omicsclaw.interaction"] for span in requests)
+    assert all(
+        span.chain == ["omicsclaw.llm_request", "omicsclaw.interaction"]
+        for span in requests
+    )
     assert all(
         span.chain == [span.name, "omicsclaw.interaction"]
         for span in tracer.spans
-        if span.name != "omicsclaw.interaction"
+        if span.name not in {"omicsclaw.interaction", "omicsclaw.run.event"}
     )
     assert all(span.ended == 1 for span in tracer.spans)
 
@@ -335,9 +345,9 @@ def test_the_blocking_exchange_says_it_reports_no_turns():
     model call of the run — and the only place the flag can be set is the
     call site.
     """
-    source = (
-        pathlib.Path(assembly.__file__).parent / "turn.py"
-    ).read_text(encoding="utf-8")
+    source = (pathlib.Path(assembly.__file__).parent / "turn.py").read_text(
+        encoding="utf-8"
+    )
 
     assert source.count("telemetry.run(") == 3, "three exchange paths, three scopes"
     assert source.count("turn_events=False") == 1
@@ -345,9 +355,9 @@ def test_the_blocking_exchange_says_it_reports_no_turns():
 
 
 def test_every_streaming_exchange_feeds_the_scope_its_events():
-    source = (
-        pathlib.Path(assembly.__file__).parent / "turn.py"
-    ).read_text(encoding="utf-8")
+    source = (pathlib.Path(assembly.__file__).parent / "turn.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "scope.observe(event)" in source
     assert "scope.observe(EngineEvent.done(result))" in source

@@ -1800,3 +1800,27 @@ def test_the_registry_is_the_one_mutable_thing_on_an_app(tmp_path):
     assert isinstance(sessions, SessionRegistry)
     assert app.sessions is sessions
     assert sessions._app is app, "the registry holds the attached app"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_durable_stream_follows_resolved_config_not_later_environment(
+    tmp_path, monkeypatch, enabled,
+):
+    # A changed process environment must not change the already-resolved app.
+    monkeypatch.setenv("OMICSCLAW_DURABLE_TURN_EVENTS", "0" if enabled else "1")
+    app, sessions = registry_for(tmp_path, Scripted(), durable_turn_events=enabled)
+
+    async def drive():
+        try:
+            handle = await sessions.submit("durable-config", "hello")
+            await drain(handle)
+            count = await app.memory.database.arun(
+                lambda connection: connection.execute(
+                    "SELECT COUNT(*) FROM turn_events"
+                ).fetchone()[0]
+            )
+            assert (count > 0) is enabled
+        finally:
+            await app.aclose()
+
+    asyncio.run(drive())
