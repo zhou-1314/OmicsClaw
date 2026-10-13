@@ -94,7 +94,7 @@ class RemoteJobsBridge:
         desktop shows).
         """
         if not isinstance(inputs, dict):
-            raise ValueError("inputs_must_be_object")
+            raise ValueError("inputs_must_be_object")  # noqa: TRY004 - public ingress error contract
         command = inputs.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ValueError(
@@ -124,7 +124,7 @@ class RemoteJobsBridge:
         ):
             raise ValueError("invalid_outputs: expected a list of file names")
 
-    async def __call__(self, record: Any, ctx: Any) -> None:
+    async def __call__(self, record: Any, ctx: Any) -> dict | None:
         """Submit, poll, stream the log, and land on the remote verdict.
 
         :raises RemoteJobFailed: the remote job finished non-zero.
@@ -139,9 +139,7 @@ class RemoteJobsBridge:
             raise RemoteJobFailed("remote job has no target snapshot")
         target_workdir = str(record.target_workdir or "").strip()
         if not target_workdir:
-            raise RemoteJobFailed(
-                "remote job has no immutable target workdir snapshot"
-            )
+            raise RemoteJobFailed("remote job has no immutable target workdir snapshot")
         command = str(record.inputs.get("command") or "")
         outcome = await self._plane.submit(
             alias,
@@ -158,15 +156,14 @@ class RemoteJobsBridge:
             target_workdir=target_workdir,
         )
         ctx.tool_started(
-            "remote_submit", command, human_description=(
-                f"submit on {outcome.host} ({outcome.kind})"
-            ),
+            "remote_submit",
+            command,
+            human_description=(f"submit on {outcome.host} ({outcome.kind})"),
         )
         ctx.progress(
             f"submitted on {outcome.host} as {outcome.kind} job "
             f"{outcome.job_id or outcome.pgid}",
         )
-        from .jobs import LOG_FILE  # local import keeps the module head light
 
         sent = 0
         try:
@@ -182,15 +179,27 @@ class RemoteJobsBridge:
                     sent += len(tail)
                 if report.state in ("pending", "running"):
                     continue
+                if report.state in {"done", "failed", "canceled"}:
+                    ctx.emit(
+                        "execution.finished",
+                        {
+                            "exit_code": report.exit_code,
+                            "evidence_ref": outcome.job_ref,
+                        },
+                    )
                 if report.state == "failed":
                     raise RemoteJobFailed(
                         f"remote job {outcome.job_ref} failed with exit code "
                         f"{report.exit_code}"
                     )
                 if report.state == "canceled":
-                    return
+                    return {"status": "canceled"}
                 if report.state == "done":
-                    return
+                    for payload in remote_output_payloads(
+                        outcome.host, outcome.workdir, record.inputs.get("outputs", [])
+                    ):
+                        ctx.emit("artifact.created", payload)
+                    return None
                 # unknown: the host went quiet mid-poll. Say so and keep
                 # the loop — the handle is durable and the reconciler
                 # will settle it even if this process dies waiting.
@@ -209,7 +218,19 @@ def _alias_from_runtime(runtime: str) -> str:
     """
     if not runtime.startswith("remote:") or len(runtime) <= len("remote:"):
         raise ValueError(f"not a remote runtime: {runtime!r}")
-    return runtime[len("remote:"):]
+    return runtime[len("remote:") :]
 
 
 __all__ = ["LOG_CHUNK_CHARS", "POLL_INTERVAL_S", "RemoteJobFailed", "RemoteJobsBridge"]
+
+
+def remote_output_payloads(host, workdir, names):
+    """Declared remote references only; no fetch and no success claim for the file."""
+    from pathlib import PurePosixPath
+
+    for name in names:
+        relative = PurePosixPath(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        uri = f"remote://{host}{workdir.rstrip('/')}/{relative}"
+        yield {"remote_ref": uri, "host_id": host, "logical_output": str(relative)}

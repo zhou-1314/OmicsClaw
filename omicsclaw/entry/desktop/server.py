@@ -277,7 +277,6 @@ async def open_chat_stream(
 
     known = interactions.turn_for(request.session_id, request.source_request_id)
     compacting = request.content.strip() == COMPACT_COMMAND
-    handle: TurnHandle
     if compacting:
         handle = await _compaction(registry, request.session_id, known)
     else:
@@ -578,7 +577,14 @@ def create_desktop_app(
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, StreamingResponse
 
-    api = FastAPI(title="OmicsClaw Desktop", version=__version__)
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(_api):
+        await jobs.reconcile_remote_jobs()
+        yield
+
+    api = FastAPI(title="OmicsClaw Desktop", version=__version__, lifespan=lifespan)
     shared = interactions if interactions is not None else DesktopInteractions(app)
     jobs = jobs_manager if jobs_manager is not None else JobsManager(
         app, remote_runtime=_remote_runtime_bridge(app)

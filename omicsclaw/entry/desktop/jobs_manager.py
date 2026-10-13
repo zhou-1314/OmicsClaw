@@ -68,6 +68,18 @@ from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.schema.env_names import ENV_NAME_PATTERN, PACKAGE_NAME_PATTERN
 from omicsclaw.memory.database import Database
 from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
+from omicsclaw.runs.manifest import build_manifest
+from omicsclaw.runs.models import Activity, Kernel, Run, Verification
+from omicsclaw.runs.models import Job as RunJob
+from omicsclaw.runs.projections import (
+    belongs_to_run,
+    bind_kernel,
+    ensure_session_run,
+    observe_kernel,
+    plan_snapshot,
+)
+from omicsclaw.runs.store import RunStore
+from omicsclaw.runs.verification import verify_artifact, verify_exit_code, verify_file
 from omicsclaw.skills.frontmatter import parse_frontmatter
 from omicsclaw.tools.builtin.remote import valid_host
 from omicsclaw.tools.context import (
@@ -577,16 +589,24 @@ class JobApprovalGate:
             asyncio.get_running_loop().create_future()
         )
         self._pending[call_id] = future
+        outcome = "abandoned"
         try:
-            if self._timeout_s is None:
-                return await future
-            return await asyncio.wait_for(future, self._timeout_s)
+            decision = (
+                await future
+                if self._timeout_s is None
+                else await asyncio.wait_for(future, self._timeout_s)
+            )
+            outcome = "approve" if decision.approved else "deny"
+            return decision
         except TimeoutError:
-            _log.info("job approval expired: job=%s call=%s", self._job_id, call_id)
+            outcome = "expired"
             return ApprovalDecision(
                 approved=False, reason="no answer before the approval deadline"
             )
         finally:
+            self._emit(
+                "tool_approval_resolved", {"call_id": call_id, "decision": outcome}
+            )
             self._pending.pop(call_id, None)
 
     def settle(self, call_id: str, decision: ApprovalDecision) -> bool:
@@ -1004,7 +1024,9 @@ class CodeRunRunner:
             # as local execution after a restart.  The input is inspected
             # only to identify that legacy state; it never selects a target.
             requested_location = record.inputs.get("location")
-            if isinstance(requested_location, str) and requested_location.startswith("remote:"):
+            if isinstance(requested_location, str) and requested_location.startswith(
+                "remote:"
+            ):
                 raise JobFailure(
                     "remote code job has no immutable target snapshot",
                     phase="setup",
@@ -1023,9 +1045,7 @@ class CodeRunRunner:
         session_id = record.session_id or ("job-" + record.id[:12])
         ctx.tool_started(
             "python" if language == "python" else "r",
-            json.dumps(
-                {"code": code[:400], "location": location}, ensure_ascii=False
-            ),
+            json.dumps({"code": code[:400], "location": location}, ensure_ascii=False),
         )
         self._protect(manager, session_id, record, language=language, location=location)
 
@@ -1062,6 +1082,12 @@ class CodeRunRunner:
             self._unprotect(
                 manager, session_id, record, language=language, location=location
             )
+        state = manager.state_for(session_id, language=language, location=location)
+        observed = await asyncio.to_thread(observe_kernel, state)
+        if observed is not None:
+            from dataclasses import asdict
+
+            ctx.emit("kernel.observed", asdict(observed))
         for ref in result.figures:
             if ref.artifact_id:
                 ctx.emit(
@@ -1088,7 +1114,9 @@ class CodeRunRunner:
         if result.status == "timeout":
             raise JobFailure("the cell exceeded its wall-clock limit", phase="run")
         if result.status == "dead":
-            raise JobFailure("the kernel died mid-cell; retry to cold-start", phase="run")
+            raise JobFailure(
+                "the kernel died mid-cell; retry to cold-start", phase="run"
+            )
         ctx.tool_output(summary)
         await self._scan_artifacts(record, ctx)
         return summary
@@ -1316,12 +1344,33 @@ class JobsManager:
         remote_runtime: RemoteJobsBridge | None = None,
         kernels: Any = None,
         env_supply: Any = None,
+        run_event_sink: Any = None,
     ) -> None:
         self._app = app
         if store is None:
             workspace = Path(app.config.workspace)
             store = JobStore(Database(workspace / ".omicsclaw" / "jobs.db"))
         self.store = store
+        run_db = Path(app.config.workspace) / ".omicsclaw" / "runs.db"
+        run_db.parent.mkdir(parents=True, exist_ok=True)
+        telemetry = getattr(app, "telemetry", None)
+        sink_factory = getattr(telemetry, "run_event_sink", None)
+        sink = (
+            run_event_sink
+            if run_event_sink is not None
+            else (sink_factory() if callable(sink_factory) else None)
+        )
+        self.run_store = RunStore(str(run_db), on_event=sink)
+        self._run_ids: dict[str, str] = {}
+        self._run_job_ids: dict[str, str] = {}
+        for persisted in self.run_store.list("job"):
+            if (
+                persisted.execution_ref
+                and persisted.run_id
+                and persisted.execution_ref not in self._run_ids
+            ):
+                self._run_ids[persisted.execution_ref] = persisted.run_id
+                self._run_job_ids[persisted.execution_ref] = persisted.job_id
         self.artifacts = artifact_store or ArtifactStore(store.database)
         self.default_timeout_s = float(default_timeout_s)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
@@ -1329,6 +1378,7 @@ class JobsManager:
         self._live: dict[str, _LiveJob] = {}
         self._seq: dict[str, int] = {}
         self._remote_runtime = remote_runtime
+        self._reconcile_lock = asyncio.Lock()
         self._approval_timeout_s = getattr(app.config, "approval_timeout_s", None)
         try:
             interrupted = self.store.interrupt_orphans()
@@ -1336,9 +1386,10 @@ class JobsManager:
             interrupted = 0
         if interrupted:
             _log.info("marked %d orphaned job(s) interrupted at start-up", interrupted)
-        self.register_runner(
-            "skill_run", SkillApiRunner(app, artifacts=self.artifacts)
-        )
+        for record in self.store.list_jobs(limit=10000):
+            if record.runtime == "local" and record.status in TERMINAL_JOB_STATUSES:
+                self._sync_run_status(record.id, record.status)
+        self.register_runner("skill_run", SkillApiRunner(app, artifacts=self.artifacts))
         # P4's code_run rides the same lifecycle on the deployment's
         # persistent kernels: the binding build_app mounted behind the
         # ``python`` tool when there is one (one manager, shared session
@@ -1437,7 +1488,7 @@ class JobsManager:
                 )
         validate = (
             self._remote_runtime.validate
-            if runtime != "local"
+            if runtime != "local" and self._remote_runtime is not None
             else getattr(runner, "validate", None)
         )
         if callable(validate):
@@ -1511,6 +1562,30 @@ class JobsManager:
             created_at=time.time(),
         )
         self.store.insert_job(record)
+        plan_id, plan_steps, step_id = plan_snapshot(
+            getattr(self._app, "plans", None), record.session_id
+        )
+        run = Run(
+            session_id=record.session_id,
+            plan_id=plan_id,
+            plan_steps=plan_steps,
+            step_id=step_id,
+            execution_location="remote:" + record.target_alias
+            if record.target_alias
+            else record.runtime,
+        )
+        self.run_store.save(run)
+        self._run_ids[record.id] = run.run_id
+        run_job = RunJob(
+            run_id=run.run_id,
+            host_id=record.target_alias,
+            scheduler=record.runtime,
+            execution_ref=record.id,
+            step_id=step_id,
+            status="created",
+        )
+        self.run_store.save(run_job)
+        self._run_job_ids[record.id] = run_job.job_id
         self._emit(
             record.id,
             "job.created",
@@ -1545,19 +1620,216 @@ class JobsManager:
             return {"checked": 0, "still_in_flight": 0, "terminal": 0, "unknown": 0}
 
         def on_status(local_job_id: str, alias: str, state: str) -> None:
-            settled = {
-                "done": "succeeded",
-                "failed": "failed",
-                "canceled": "canceled",
-            }.get(state)
-            if settled is not None:
-                self.store.update_job(
-                    local_job_id, status=settled, finished_at=time.time()
+            record = self.store.get_job(local_job_id)
+            if record is None:
+                return
+            status = {"done": "succeeded", "pending": "queued"}.get(state, state)
+            if record.status != status:
+                changes: dict[str, Any] = {"status": status}
+                if status in TERMINAL_JOB_STATUSES:
+                    changes["finished_at"] = time.time()
+                self.store.update_job(local_job_id, **changes)
+            self._sync_run_status(local_job_id, status)
+
+        async with self._reconcile_lock:
+            report = await refresh_in_flight(
+                self._remote_runtime.plane, on_remote_status=on_status
+            )
+            # A previous process may have persisted the remote result before
+            # updating the desktop projection. Repair that window on restart.
+            remote_store = self._remote_runtime.plane.job_store()
+            for record in self.store.list_jobs(limit=10000):
+                if record.runtime.startswith("remote:"):
+                    row = remote_store.by_local_job(record.id)
+                    if row is not None:
+                        on_status(record.id, row.host_alias, row.status)
+                        live = self._live.get(record.id)
+                        if row.status in {"done", "failed", "canceled"} and (
+                            live is None or live.task is None or live.task.done()
+                        ):
+                            await self._recover_remote_evidence(record, row)
+            return report
+
+    async def refresh_projections(self) -> None:
+        await self.reconcile_remote_jobs()
+        sessions = getattr(self._app, "sessions", None)
+        plans = getattr(self._app, "plans", None)
+        if sessions is not None:
+            for session in await sessions.list_sessions(limit=500):
+                ensure_session_run(self.run_store, session.session_id, plans=plans)
+        for run in self.run_store.list("run"):
+            plan_id, steps, active = plan_snapshot(plans, run.session_id)
+            run.plan_id, run.plan_steps = plan_id, steps
+            if run.origin == "legacy":
+                run.step_id = active
+            self.run_store.save(run)
+        manager = getattr(self.kernels, "manager", None)
+        observed = set()
+        observations = {}
+        if manager is not None and hasattr(manager, "state_for"):
+            for record in self.store.list_jobs(limit=10000):
+                if record.kind != "code_run" or record.id not in self._run_ids:
+                    continue
+                session_id = record.session_id or ("job-" + record.id[:12])
+                language = str(record.inputs.get("language", "python"))
+                location = (
+                    "remote:" + record.target_alias if record.target_alias else "local"
+                )
+                state = manager.state_for(
+                    session_id, language=language, location=location
+                )
+                key = (session_id, language, location)
+                if key not in observations:
+                    observations[key] = await asyncio.to_thread(observe_kernel, state)
+                kernel = observations[key]
+                if kernel is not None:
+                    projected_job = self.run_store.load(
+                        self._run_job_ids.get(record.id, "")
+                    )
+                    if projected_job is None or (
+                        projected_job.kernel_id
+                        and projected_job.kernel_id != kernel.kernel_id
+                    ):
+                        continue
+                    if not projected_job.kernel_id and record.id not in self._live:
+                        continue
+                    bind_kernel(
+                        self.run_store, kernel, self._run_ids[record.id], record.id
+                    )
+                    observed.add(kernel.kernel_id)
+        for kernel in self.run_store.list("kernel"):
+            if kernel.kernel_id not in observed and kernel.status != "lost":
+                # Lost describes our control handle, not proof the process died.
+                kernel.status = "lost"
+                self.run_store.save(kernel)
+        resolved = {
+            a.payload.get("call_id")
+            for a in self.run_store.list("activity")
+            if a.event_type == "tool_approval_resolved"
+        }
+        for activity in self.run_store.list("activity"):
+            if (
+                activity.event_type != "tool_approval_request"
+                or activity.payload.get("call_id") in resolved
+            ):
+                continue
+            live = self._live.get(activity.job_id)
+            if live is None or live.task is None or live.task.done():
+                self._emit(
+                    activity.job_id,
+                    "tool_approval_resolved",
+                    {
+                        "call_id": activity.payload.get("call_id"),
+                        "decision": "unavailable",
+                        "reason": "backend no longer owns this approval",
+                    },
                 )
 
-        return await refresh_in_flight(
-            self._remote_runtime.plane, on_remote_status=on_status
+    def _save_verification(self, result: Verification) -> None:
+        """Record a supplied reviewer verdict; this is not a machine check."""
+        self.run_store.save(result, event="finished")
+
+    def _run_verification(self, check, verify, **refs):
+        """Persist the attempt before invoking the verifier, even if it crashes."""
+        started = Verification(check=check, **refs)
+        self.run_store.save(started, event="started")
+        try:
+            result = verify()
+        except Exception as exc:  # noqa: BLE001 - verifier failure is persisted evidence
+            _log.exception("verification failed to execute: check=%s", check)
+            result = Verification(check=check, verdict="inconclusive", details=str(exc))
+        result.verification_id = started.verification_id
+        result.created_at = started.created_at
+        for key, value in refs.items():
+            setattr(result, key, value)
+        self.run_store.save(result, event="finished")
+        return result
+
+    async def _recover_remote_evidence(self, record, row):
+        from omicsclaw.remote.bridge import remote_output_payloads
+
+        verification = self.run_store.load("verification:exit:" + record.id)
+        if verification is None or verification.verdict == "inconclusive":
+            try:
+                result = await self._remote_runtime.plane.executor_for(
+                    row.host_alias
+                ).status(row.handle())
+                code = getattr(result, "exit_code", None)
+            except OSError:
+                code = None
+            if verification is None or code is not None:
+                self._emit(
+                    record.id,
+                    "execution.finished",
+                    {"exit_code": code, "evidence_ref": "remote-job:" + str(row.id)},
+                )
+        if row.status == "done":
+            for payload in remote_output_payloads(
+                row.host_alias, row.workdir, record.inputs.get("outputs", [])
+            ):
+                self._emit(record.id, "artifact.created", payload)
+
+    def _sync_run_status(self, job_id: str, status: str) -> None:
+        run_id = self._run_ids.get(job_id)
+        if not run_id:
+            return
+        status = {"canceled": "cancelled", "cancel_requested": "running"}.get(
+            status, status
         )
+        ids = [self._run_job_ids.get(job_id)]
+
+        ids.append(run_id)
+        for ident in ids:
+            obj = self.run_store.load(ident) if ident else None
+            if obj is None or obj.status == status:
+                continue
+            # Recovery can observe a terminal result without seeing running.
+            if obj.status in {
+                "created",
+                "queued",
+                "unknown",
+                "lost",
+                "interrupted",
+            } and status in {
+                "succeeded",
+                "failed",
+                "cancelled",
+                "interrupted",
+                "unknown",
+            }:
+                obj.status = "running"
+                self.run_store.save(obj)
+            if obj.status in {"succeeded", "failed", "cancelled"}:
+                continue
+            obj.status = status
+            self.run_store.save(obj)
+
+    async def cancel_job(self, job_id: str) -> str:
+        """Cancel a live task or a remote handle recovered after restart."""
+        record = self.store.get_job(job_id)
+        live = self._live.get(job_id)
+        if (
+            record is None
+            or not record.runtime.startswith("remote:")
+            or (live is not None and live.task is not None and not live.task.done())
+        ):
+            return self.cancel(job_id)
+        if record.status in TERMINAL_JOB_STATUSES:
+            return "finished"
+        if self._remote_runtime is None:
+            raise JobError("remote_runtime_unavailable", status_code=409)
+        async with self._reconcile_lock:
+            plane = self._remote_runtime.plane
+            row = plane.job_store().by_local_job(job_id)
+            if row is None:
+                raise JobError("remote_handle_unavailable", status_code=409)
+            report = await plane.cancel(str(row.id))
+            if report.state != "canceled":
+                raise JobError("remote_cancel_unconfirmed", status_code=409)
+            self.store.update_job(job_id, status="canceled", finished_at=time.time())
+            self._sync_run_status(job_id, "canceled")
+            self._emit(job_id, "job.done", {"status": "canceled"})
+            return "canceled"
 
     def cancel(self, job_id: str) -> str:
         """Cancel one job. Answers ``"canceled"``, ``"unknown"`` or ``"finished"``.
@@ -1619,9 +1891,134 @@ class JobsManager:
         return self.store.events_after(job_id, after_seq)
 
     def _emit(self, job_id: str, event_type: str, payload: dict[str, Any]) -> int:
+        run_id = self._run_ids.get(job_id)
+        if run_id and event_type == "kernel.observed":
+            bind_kernel(self.run_store, Kernel(**payload), run_id, job_id)
+        if run_id and event_type == "execution.finished":
+            self._run_verification(
+                "exit_code",
+                lambda: verify_exit_code(payload.get("exit_code")),
+                verification_id="verification:exit:" + job_id,
+                run_id=run_id,
+                job_id=job_id,
+                details=str(payload.get("evidence_ref", "")),
+            )
+        if run_id and event_type == "artifact.created":
+            path = str(payload.get("path") or payload.get("remote_ref") or "")
+            if any(
+                a.job_id == job_id and a.uri == path
+                for a in self.run_store.list("artifact")
+            ):
+                return self.store.latest_seq(job_id)
+            record = self.store.get_job(job_id)
+            inputs = dict(record.inputs) if record else {}
+            code = str(inputs.get("code") or inputs.get("command") or "")
+            import hashlib
+
+            code_ref = str(
+                payload.get("code_ref")
+                or (
+                    "sha256:" + hashlib.sha256(code.encode()).hexdigest()
+                    if code
+                    else ""
+                )
+            )
+            host_id = str(
+                payload.get("host_id") or (record.target_alias if record else "")
+            )
+            kernels = [
+                k for k in self.run_store.list("kernel") if belongs_to_run(k, run_id)
+            ]
+            kernel_id = str(
+                payload.get("kernel_id") or (kernels[0].kernel_id if kernels else "")
+            )
+            artifact_id = str(payload.get("artifact_id", "")) or None
+            logical_output = str(payload.get("logical_output") or path)
+            scope = (
+                record.session_id
+                if record and record.session_id
+                else json.dumps(
+                    [
+                        record.kind if record else "",
+                        code_ref,
+                        str(self._app.config.workspace),
+                        inputs.get("inputs", []),
+                    ],
+                    sort_keys=True,
+                )
+            )
+            lineage_key = hashlib.sha256(
+                json.dumps(
+                    [scope, host_id, logical_output], separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            prior = [
+                a
+                for a in self.run_store.list("artifact")
+                if a.lineage_key == lineage_key
+            ]
+            prior.sort(key=lambda a: a.version)
+            version = max((a.version for a in prior), default=0) + 1
+            parent_id = prior[-1].artifact_id if prior else None
+            versioned_id = (
+                (artifact_id if version == 1 else f"{artifact_id}:v{version}")
+                if artifact_id
+                else None
+            )
+            artifact = build_manifest(
+                path,
+                run_id=run_id,
+                artifact_id=versioned_id,
+                version=version,
+                parent_artifact_id=parent_id,
+                job_id=job_id,
+                host_id=host_id,
+                kernel_id=kernel_id,
+                code_ref=code_ref,
+                environment_ref=str(
+                    payload.get("environment_ref")
+                    or inputs.get("environment_ref")
+                    or inputs.get("env")
+                    or (kernels[0].environment if kernels else "")
+                ),
+                input_artifact_ids=payload.get("input_artifact_ids")
+                or inputs.get("input_artifact_ids", []),
+            )
+            artifact.lineage_key = lineage_key
+            artifact.execution_ref = job_id
+            self.run_store.save(artifact)
+            if path:
+                refs = {
+                    "artifact_id": artifact.artifact_id,
+                    "artifact_version": artifact.version,
+                    "run_id": run_id,
+                    "job_id": job_id,
+                }
+                self._run_verification(
+                    "checksum" if artifact.checksum else "file_exists",
+                    lambda: verify_file(path, artifact.checksum or None),
+                    **refs,
+                )
+                if Path(path).suffix.lower() in {".json", ".csv", ".h5ad"}:
+                    schema = payload.get("schema") or inputs.get("output_schema", {})
+                    self._run_verification(
+                        Path(path).suffix.lower()[1:] + "_schema",
+                        lambda: verify_artifact(path, schema=schema),
+                        **refs,
+                    )
         seq = self._seq.get(job_id, self.store.latest_seq(job_id)) + 1
         self._seq[job_id] = seq
         self.store.append_event(job_id, seq, event_type, payload)
+        if run_id:
+            self.run_store.save(
+                Activity(
+                    activity_id=f"activity:{job_id}:{seq}",
+                    run_id=run_id,
+                    job_id=job_id,
+                    event_type=event_type,
+                    payload=dict(payload),
+                )
+            )
         live = self._live.get(job_id)
         if live is not None:
             frame = (seq, event_type, payload)
@@ -1652,9 +2049,7 @@ class JobsManager:
         # says, because "where" outranks "what" — the same body carries
         # either. Everything after the choice is shared: the semaphore,
         # the timeout, the vocabulary, the gate.
-        runner: Any = (
-            self._remote_runtime if record.runtime != "local" else None
-        )
+        runner: Any = self._remote_runtime if record.runtime != "local" else None
         if runner is None:
             runner = self._runners.get(record.kind)
         gate = live.gate
@@ -1668,6 +2063,7 @@ class JobsManager:
         try:
             async with self._semaphore:
                 self.store.update_job(job_id, status="running", started_at=time.time())
+                self._sync_run_status(job_id, "running")
                 self._emit(job_id, "job.started", {"job_id": job_id})
                 with use_tool_context(
                     approval=gate,
@@ -1680,12 +2076,18 @@ class JobsManager:
                 ):
                     async with asyncio.timeout(self.default_timeout_s):
                         if runner is None:
-                            raise JobFailure("no runner for kind " + record.kind, phase="setup")
-                        await runner(record, ctx)
-                terminal = ("job.done", {"status": "succeeded"})
-                self.store.update_job(
-                    job_id, status="succeeded", finished_at=time.time()
+                            raise JobFailure(
+                                "no runner for kind " + record.kind, phase="setup"
+                            )
+                        outcome = await runner(record, ctx)
+                status = (
+                    "canceled"
+                    if isinstance(outcome, Mapping)
+                    and outcome.get("status") == "canceled"
+                    else "succeeded"
                 )
+                terminal = ("job.done", {"status": status})
+                self.store.update_job(job_id, status=status, finished_at=time.time())
         except TimeoutError:
             terminal = (
                 "job.failed",
@@ -1706,7 +2108,10 @@ class JobsManager:
             if exc.terminal_status == "interrupted":
                 terminal = ("job.done", {"status": "interrupted"})
                 self.store.update_job(
-                    job_id, status="interrupted", error=exc.error, finished_at=time.time()
+                    job_id,
+                    status="interrupted",
+                    error=exc.error,
+                    finished_at=time.time(),
                 )
             else:
                 terminal = ("job.failed", {"error": exc.error, "phase": exc.phase})
@@ -1722,6 +2127,18 @@ class JobsManager:
             )
         finally:
             gate.abandon()
+            final = self.store.get_job(job_id)
+            if final:
+                self._sync_run_status(job_id, final.status)
+                if self.run_store.load("verification:exit:" + job_id) is None:
+                    self._emit(
+                        job_id,
+                        "execution.finished",
+                        {
+                            "exit_code": None,
+                            "evidence_ref": "runner did not report a process exit code",
+                        },
+                    )
         if terminal is not None:
             self._emit(job_id, terminal[0], terminal[1])
             live = self._live.get(job_id)

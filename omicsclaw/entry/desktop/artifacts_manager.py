@@ -2,7 +2,7 @@
 
 The curated skills already declare what they write in
 ``references/output_contract.md`` — free-form prose a person reads, built
-from backticked relative paths (``​`tables/program_usage.csv`​``) and,
+from backticked relative paths (``\u200b`tables/program_usage.csv`\u200b``) and,
 in the auto-generated contracts, a fenced ``output_directory/`` tree.
 That file is the raw material the plan named: after a ``skill_run`` job
 reaches a good end, this module parses the contract of the skill that
@@ -13,7 +13,7 @@ capture channel.
 The parser is deliberately a tokenizer, not a markdown parser. Three
 shapes carry the declarations this repository's 88 contracts use:
 
-* backtick spans anywhere in the text — ``​`figures/mean_program_usage.png`​``;
+* backtick spans anywhere in the text — ``\u200b`figures/mean_program_usage.png`\u200b``;
 * fenced code blocks holding a directory tree, whose ``├──`` /
   ``└──`` lines name one file each;
 * bare path-shaped words — list items (``- tables/Summary.csv: counts``)
@@ -57,8 +57,9 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Final
+from typing import Final
 
 from omicsclaw.memory.artifacts import (
     ArtifactRecord,
@@ -83,9 +84,7 @@ _log = logging.getLogger(__name__)
 CONTRACT_FILENAME: Final = "output_contract.md"
 """Where a skill declares its outputs, relative to the skill directory."""
 
-FALLBACK_DIRECTORIES: Final = frozenset(
-    {"figures", "tables", "figure_data", "results"}
-)
+FALLBACK_DIRECTORIES: Final = frozenset({"figures", "tables", "figure_data", "results"})
 """Conventional output directory names the safety-net scan accepts.
 
 Confirmed against the curated skills: ``write_output`` writes under
@@ -97,9 +96,27 @@ results, and the CLI contracts speak of ``figures/``, ``tables/`` and
 
 OUTPUT_CONTRACT_SUFFIXES: Final = frozenset(
     {
-        ".png", ".svg", ".jpg", ".jpeg", ".csv", ".tsv", ".h5ad", ".rds",
-        ".html", ".htm", ".md", ".pdf", ".json", ".txt",
-        ".parquet", ".xlsx", ".bam", ".h5", ".npz", ".rdata", ".gz",
+        ".png",
+        ".svg",
+        ".jpg",
+        ".jpeg",
+        ".csv",
+        ".tsv",
+        ".h5ad",
+        ".rds",
+        ".html",
+        ".htm",
+        ".md",
+        ".pdf",
+        ".json",
+        ".txt",
+        ".parquet",
+        ".xlsx",
+        ".bam",
+        ".h5",
+        ".npz",
+        ".rdata",
+        ".gz",
     }
 )
 """Extensions a declared token may carry. Deliberately wider than the
@@ -177,6 +194,7 @@ def _mask_tree_blocks(text: str) -> str:
     ``tables/`` prefix. A fenced block without tree markers is left in —
     a plain fenced list of paths is prose-shaped and fair game.
     """
+
     def _mask(match: re.Match[str]) -> str:
         block = match.group(0)
         if "├" in block or "└" in block:
@@ -221,9 +239,7 @@ def _looks_like_file_path(token: str) -> bool:
         return False
     name = token.rsplit("/", 1)[-1]
     suffix = Path(name).suffix.lower()
-    if not _SUFFIX.search(name) or suffix not in OUTPUT_CONTRACT_SUFFIXES:
-        return False
-    return True
+    return bool(_SUFFIX.search(name)) and suffix in OUTPUT_CONTRACT_SUFFIXES
 
 
 def scan_workspace_files(workspace: Path) -> dict[str, Path]:
@@ -313,12 +329,10 @@ def register_job_artifacts(
     if since is not None:
         floor = since - 1.0
         files = {
-            relative: path
-            for relative, path in files.items()
-            if _mtime(path) >= floor
+            relative: path for relative, path in files.items() if _mtime(path) >= floor
         }
     declared = _read_contract(skill_directory)
-    matches = _match_declarations(declared, files)
+    matches: list[tuple[str | None, Path]] = list(_match_declarations(declared, files))
     if matches:
         capture = "contract"
     else:
@@ -359,9 +373,7 @@ def register_job_artifacts(
     return registered
 
 
-def _belongs_to_an_earlier_job(
-    store: ArtifactStore, job_id: str, path: Path
-) -> bool:
+def _belongs_to_an_earlier_job(store: ArtifactStore, job_id: str, path: Path) -> bool:
     """Whether *path* was already claimed by another job and not changed
     since — the ledger half of attribution.
 
@@ -375,7 +387,12 @@ def _belongs_to_an_earlier_job(
     existing = store.latest_for_path(str(path))
     if existing is None or existing.job_id == job_id:
         return False
-    return _mtime(path) <= existing.created_at + 1.0
+    if _mtime(path) > existing.created_at:
+        return False
+    # Filesystems may round mtimes within one clock tick. Changed bytes still
+    # belong to the new run, even when the timestamp cannot distinguish it.
+    digest, _size = hash_and_size(path)
+    return digest == existing.sha256
 
 
 def _mtime(path: Path) -> float:
@@ -428,7 +445,10 @@ def _is_fallback_output(relative: str) -> bool:
         return False
     kind, _ = kind_and_mime_for(relative)
     return kind != "other" or Path(relative).suffix.lower() in {
-        ".json", ".txt", ".parquet", ".xlsx",
+        ".json",
+        ".txt",
+        ".parquet",
+        ".xlsx",
     }
 
 
