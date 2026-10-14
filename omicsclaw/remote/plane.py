@@ -203,9 +203,11 @@ class RemoteExecutor:
                     f"directory {workdir!r}; dst is relative to that "
                     "directory and may not climb out of it"
                 )
-            if posixpath.basename(remote).startswith(
-                "_omicsclaw_"
-            ) or posixpath.basename(remote) in {"cmd.sh", "job.sh"}:
+            relative_parts = posixpath.relpath(remote, workdir).split("/")
+            if any(
+                part.startswith("_omicsclaw_") or part in {"cmd.sh", "job.sh"}
+                for part in relative_parts
+            ):
                 raise RemotePathRefused("job inputs cannot replace execution evidence")
         await self.run(build_mkdir_command(workdir), timeout=UPLOAD_TIMEOUT_S)
         intent = json.dumps(
@@ -591,6 +593,38 @@ class RemoteExecutor:
         """Write *files* locally, then push them — and *uploads* — in one
         SFTP batch. A batch that does not exit zero is a failed upload,
         not a silent one."""
+        directories = set()
+        for _, remote in uploads or ():
+            parts = posixpath.relpath(remote, workdir).split("/")[:-1]
+            for depth in range(1, len(parts) + 1):
+                directories.add("/".join(parts[:depth]))
+        if len(directories) > 256:
+            raise RemotePathRefused("input_directory_budget")
+        if directories:
+            commands = [
+                f"cd -- {shell_quote(workdir)} || exit 1",
+                "umask 077",
+                "_root=$(pwd -P)",
+                "_uid=$(id -u)",
+            ]
+            for directory in sorted(
+                directories, key=lambda value: (value.count("/"), value)
+            ):
+                quoted = shell_quote("./" + directory)
+                commands.append(
+                    f"if [ ! -e {quoted} ]; then mkdir -m 700 -- {quoted} || exit 1; fi"
+                )
+                commands.append(
+                    f"[ -d {quoted} ] && [ ! -L {quoted} ] && "
+                    f'[ "$(stat -c %u -- {quoted})" = "$_uid" ] && '
+                    f'[ "$(realpath -- {quoted})" = "$_root/"{shell_quote(directory)} ] || exit 1'
+                )
+            command = "; ".join(commands)
+            if len(command.encode()) > 128 * 1024:
+                raise RemotePathRefused("input_directory_command_budget")
+            result = await self.run(command, timeout=UPLOAD_TIMEOUT_S)
+            if result.exit_code:
+                raise RemotePathRefused("input_directory_identity_unconfirmed")
         pairs: list[tuple[str, str]] = []
         with tempfile.TemporaryDirectory(
             prefix=f"omicsclaw-upload-{secrets.token_hex(4)}-",

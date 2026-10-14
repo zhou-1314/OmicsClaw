@@ -52,6 +52,30 @@ def test_local_executor_reuses_real_process_claim_without_ssh_credentials(tmp_pa
     asyncio.run(scenario())
 
 
+def test_owned_nested_inputs_are_staged_before_one_launch(tmp_path):
+    from omicsclaw.remote.local import LocalTargetSpawner
+
+    source = tmp_path / "input.txt"
+    source.write_text("owned nested input")
+
+    async def scenario():
+        executor = RemoteExecutor("controller", LocalTargetSpawner(tmp_path))
+        workdir = tmp_path / "job"
+        handle = await executor.submit_in(
+            str(workdir),
+            "cat data/nested/input.txt > output.txt",
+            uploads=[(str(source), str(workdir / "data/nested/input.txt"))],
+        )
+        deadline = time.monotonic() + 5
+        while (await executor.status(handle)).state not in {"done", "failed"}:
+            if time.monotonic() > deadline:
+                raise TimeoutError("owned nested input job")
+            await asyncio.sleep(0.02)
+        assert (workdir / "output.txt").read_text() == "owned nested input"
+
+    asyncio.run(scenario())
+
+
 def test_local_binding_refuses_another_target_before_process_start(tmp_path):
     from omicsclaw.remote.local import LocalTargetSpawner
 

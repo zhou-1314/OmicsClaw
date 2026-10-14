@@ -152,6 +152,19 @@ class ScienceJobRunner:
         if "_science" in inputs:
             raise JobError("reserved_science_inputs")
         SkillApiRunner(self._app).validate(skill, inputs)
+        files = []
+        for value in inputs.values():
+            if isinstance(value, dict) and "$file" in value:
+                from .science_payload import _copy_hash
+
+                path, _ = SkillApiRunner.file_marker(
+                    value, Path(self._app.config.workspace)
+                )
+                digest, size = _copy_hash(path)
+                item = {"path": value["$file"], "sha256": digest, "bytes": size}
+                if item not in files:
+                    files.append(item)
+        files.sort(key=lambda item: item["path"])
         return {
             **inputs,
             "_science": {
@@ -163,6 +176,7 @@ class ScienceJobRunner:
                 "componentRoot": str(self.component_root),
                 "rscript": str(self.rscript) if self.rscript else "",
                 "rLibrary": str(self.r_library) if self.r_library else "",
+                "dataFiles": files,
             },
         }
 
@@ -199,6 +213,7 @@ class ScienceJobRunner:
             "workspace": record.target_workdir,
             "payloadManifest": self.manifest,
             "payloadDigest": snapshot["payloadDigest"],
+            "dataFiles": snapshot["dataFiles"],
         }
         content = json.dumps(
             request, sort_keys=True, ensure_ascii=False, allow_nan=False
@@ -228,6 +243,18 @@ class ScienceJobRunner:
             self.manifest,
             expected_digest=self.payload_digest,
         )
+        if (
+            self.canonical_inputs(
+                record.skill,
+                {
+                    key: value
+                    for key, value in record.inputs.items()
+                    if key != "_science"
+                },
+            )["_science"]
+            != snapshot
+        ):
+            raise JobError("science_inputs_changed_after_approval")
         environment = {
             "PATH": str(self.interpreter.parent) + ":/usr/bin:/bin",
             "PYTHONNOUSERSITE": "1",
@@ -262,6 +289,9 @@ class ScienceJobRunner:
             local_job_id=record.id,
             target_workdir=record.target_workdir,
             supplied_files={"science-request.json": content},
+            inputs=tuple(
+                (item["path"], item["path"]) for item in snapshot["dataFiles"]
+            ),
         )
         result = await self._bridge.observe(outcome, record, ctx, command=approval)
         if result is None:

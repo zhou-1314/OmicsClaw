@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,50 @@ from .science_payload import verify_payload
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_EVENTS_BYTES = 4 * 1024 * 1024
 MAX_EVENT_BYTES = 64 * 1024
+
+
+def persist_result(result, workspace):
+    """Reuse the SDK serializer for an API return, inside the worker only."""
+    if hasattr(result, "write_h5ad"):
+        suffix = ".h5ad"
+    elif hasattr(result, "to_csv"):
+        suffix = ".csv"
+    elif hasattr(result, "savefig"):
+        suffix = ".png"
+    elif isinstance(result, (dict, list)):
+        suffix = ".json"
+    elif isinstance(result, str):
+        suffix = ".txt"
+    else:
+        return
+    from skills._sdk.notebook._io import _default_writer
+
+    directory = workspace / "tables"
+    if directory.is_symlink():
+        raise ValueError("science_result_boundary")
+    directory.mkdir(exist_ok=True)
+    if directory.resolve(strict=True).parent != workspace:
+        raise ValueError("science_result_boundary")
+    values = [("omicsclaw-result" + suffix, result, suffix)]
+    attributes = getattr(result, "attrs", {})
+    if isinstance(attributes, dict) and attributes.get("run_info"):
+        values.append(("omicsclaw-result-info.json", attributes["run_info"], ".json"))
+    for name, value, extension in values:
+        target = directory / name
+        if target.exists() or target.is_symlink():
+            raise ValueError("science_result_conflict")
+        descriptor, temporary = tempfile.mkstemp(prefix=".result-", dir=directory)
+        os.close(descriptor)
+        path = Path(temporary)
+        try:
+            _default_writer(value, path, extension)
+            if path.stat().st_size > 1024 * 1024 * 1024:
+                raise ValueError("science_result_quota")
+            with path.open("rb") as source:
+                os.fsync(source.fileno())
+            os.replace(path, target)
+        finally:
+            path.unlink(missing_ok=True)
 
 
 async def execute(request_path: Path):
@@ -42,10 +87,17 @@ async def execute(request_path: Path):
         payload, request["payloadManifest"], expected_digest=request["payloadDigest"]
     )
     sys.dont_write_bytecode = True
+    from .science_payload import _copy_hash
+
+    for item in request.get("dataFiles", []):
+        path, _ = SkillApiRunner.file_marker({"$file": item["path"]}, workspace)
+        digest, size = _copy_hash(path)
+        if digest != item["sha256"] or size != item["bytes"]:
+            raise ValueError("science_input_integrity")
     # Scientific imports happen inside SkillApiRunner in this process only.
     sys.path.insert(0, str(payload))
     app = SimpleNamespace(skills=load_skills(payload / "skills"))
-    runner = SkillApiRunner(app)
+    runner = SkillApiRunner(app, result_writer=persist_result)
     runner.validate(request["skill"], request["inputs"])
     record = JobRecord(
         id=request["jobId"], skill=request["skill"], inputs=request["inputs"]

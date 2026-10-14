@@ -824,10 +824,17 @@ class SkillApiRunner:
     staring at a generated form.
     """
 
-    def __init__(self, app: Any, *, artifacts: ArtifactStore | None = None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        *,
+        artifacts: ArtifactStore | None = None,
+        result_writer: Callable[[Any, Path], None] | None = None,
+    ) -> None:
         self._app = app
         self._artifacts = artifacts
         self._modules: dict[str, Any] = {}
+        self._result_writer = result_writer
 
     def validate(self, skill: str, inputs: Any) -> None:
         """Refuse a job the runner cannot even start, before any row is written.
@@ -873,6 +880,8 @@ class SkillApiRunner:
         )
         started = time.time()
         result = await asyncio.to_thread(self._call_entry, function, arguments)
+        if self._result_writer is not None:
+            await asyncio.to_thread(self._result_writer, result, ctx.workspace)
         ctx.progress(skill + " finished in " + f"{time.time() - started:.1f}s", 100.0)
         ctx.tool_output(_summarize_result(result))
         await self._register_artifacts(record, ctx, found.directory)
@@ -988,6 +997,12 @@ class SkillApiRunner:
         except (TypeError, ValueError):
             return dict(inputs)
         kwargs = dict(inputs)
+        for name, value in tuple(kwargs.items()):
+            if isinstance(value, dict) and "$file" in value:
+                path, index_column = self.file_marker(value, workspace)
+                kwargs[name] = self._load_data(
+                    str(path), workspace, index_column=index_column
+                )
         positional = [
             p
             for p in parameters
@@ -1024,7 +1039,44 @@ class SkillApiRunner:
             )
         return kwargs
 
-    def _load_data(self, declared: str, workspace: Path) -> Any:
+    @staticmethod
+    def file_marker(
+        value: Mapping[str, Any], workspace: Path
+    ) -> tuple[Path, int | str | None]:
+        declared = value.get("$file")
+        index = value.get("indexColumn")
+        if (
+            not isinstance(declared, str)
+            or not declared
+            or len(declared.encode()) > 4096
+            or set(value) - {"$file", "indexColumn"}
+        ):
+            raise JobFailure("invalid file marker", phase="setup")
+        relative = Path(declared)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise JobFailure("file marker outside workspace", phase="setup")
+        if index is not None and not (
+            type(index) is int
+            and 0 <= index < 64
+            or isinstance(index, str)
+            and 0 < len(index) <= 256
+        ):
+            raise JobFailure("invalid file marker indexColumn", phase="setup")
+        root = workspace.resolve(strict=True)
+        path = root
+        for part in relative.parts:
+            path = path / part
+            if path.is_symlink():
+                raise JobFailure("file marker symlink refused", phase="setup")
+        if not path.is_file() or not path.resolve(strict=True).is_relative_to(root):
+            raise JobFailure("file marker not found in workspace", phase="setup")
+        if index is not None and path.suffix.lower() not in {".csv", ".tsv", ".txt"}:
+            raise JobFailure("file marker indexColumn requires a table", phase="setup")
+        return path, index
+
+    def _load_data(
+        self, declared: str, workspace: Path, *, index_column: int | str | None = None
+    ) -> Any:
         path = Path(declared).expanduser()
         if not path.is_absolute():
             path = workspace / path
@@ -1040,7 +1092,9 @@ class SkillApiRunner:
             if suffix in (".csv", ".txt", ".tsv"):
                 import pandas
 
-                return pandas.read_csv(path, sep=None, engine="python")
+                return pandas.read_csv(
+                    path, sep=None, engine="python", index_col=index_column
+                )
         except ImportError as exc:
             raise JobFailure(
                 "reading "

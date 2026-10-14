@@ -9,7 +9,59 @@ from pathlib import Path
 import pytest
 
 
+def test_file_markers_bind_both_matrix_and_metadata_without_scientific_algorithm_copy(
+    tmp_path,
+):
+    from types import SimpleNamespace
+
+    from omicsclaw.entry.desktop.jobs_manager import SkillApiRunner
+
+    (tmp_path / "expression.csv").write_text("gene,s1,s2\ng1,1,2\ng2,3,4\n")
+    (tmp_path / "metadata.csv").write_text("sample,batch\ns1,a\ns2,b\n")
+
+    def entry(data, *, batches):
+        return data, batches
+
+    values = SkillApiRunner(SimpleNamespace())._bind_arguments(
+        entry,
+        {
+            "data": {"$file": "expression.csv", "indexColumn": 0},
+            "batches": {"$file": "metadata.csv"},
+        },
+        tmp_path,
+    )
+    assert list(values["data"].index) == ["g1", "g2"] and list(
+        values["batches"]["sample"]
+    ) == ["s1", "s2"]
+
+
+def test_file_marker_refuses_a_workspace_escape_before_loading(tmp_path):
+    from types import SimpleNamespace
+
+    from omicsclaw.entry.desktop.jobs_manager import JobFailure, SkillApiRunner
+
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    (tmp_path / "outside.csv").write_text("value\n1\n")
+
+    def entry(data):
+        return data
+
+    with pytest.raises(JobFailure, match="file marker"):
+        SkillApiRunner(SimpleNamespace())._bind_arguments(
+            entry, {"data": {"$file": "../outside.csv"}}, workspace
+        )
+
+
 def make_skill(root):
+    import shutil
+
+    shutil.copytree(
+        Path(__file__).parents[2] / "skills/_sdk",
+        root / "skills/_sdk",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        dirs_exist_ok=True,
+    )
     directory = root / "skills" / "fixture" / "resource"
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
@@ -230,7 +282,12 @@ def test_form_job_uses_canonical_science_worker_and_original_approval(tmp_path, 
         await manager.reconcile_remote_jobs()
         assert manager.replay_events(first.id, 0) == before
         artifacts = manager.run_store.list("artifact")
-        assert len(artifacts) == 1 and artifacts[0].checksum and artifacts[0].size > 0
+        assert len(artifacts) == 2 and all(
+            item.checksum and item.size > 0 for item in artifacts
+        )
+        assert any(
+            item.uri.endswith("/tables/omicsclaw-result.json") for item in artifacts
+        )
         result = json.loads(
             (Path(first.target_workdir) / "results" / "value.json").read_text()
         )
@@ -261,7 +318,7 @@ def test_worker_reuses_public_scientific_sdk_and_real_r_in_owned_library(
     directory = make_skill(source)
     original = Path(__file__).parents[2] / "skills" / "_sdk"
     sdk = source / "skills" / "_sdk"
-    sdk.mkdir()
+    sdk.mkdir(exist_ok=True)
     for name in ("__init__.py", "result.py", "r_script_runner.py"):
         shutil.copyfile(original / name, sdk / name)
     body = "from skills._sdk.result import write_result_json\nfrom pathlib import Path\n__all__=['run']\ndef run():\n"
