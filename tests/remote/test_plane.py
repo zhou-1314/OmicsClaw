@@ -8,19 +8,25 @@ persist the handle, and re-estimate on demand.
 
 from __future__ import annotations
 
+import asyncio
 import shlex
+from pathlib import Path
 
 import pytest
 
 from omicsclaw.memory.database import Database
-from omicsclaw.remote.plane import OUTPUTS_FILE, REMOTE_FILE_PREVIEW_MAX_BYTES, RemoteExecutor, RemotePlaneBinding
+from omicsclaw.remote.plane import (
+    OUTPUTS_FILE,
+    REMOTE_FILE_PREVIEW_MAX_BYTES,
+    RemoteExecutor,
+    RemotePlaneBinding,
+)
 from omicsclaw.remote.ssh import (
     RemoteHostUnreachable,
     RemotePathRefused,
     RemoteTransferError,
 )
 from omicsclaw.tools.builtin.remote import ExecOutcome
-
 from tests.remote._fakes import PROBE_OK, FakeSpawner, run
 
 
@@ -40,7 +46,9 @@ class ReadOnlySftpSpawner:
         if "ls -ldn" in batch:
             mode = "-rw-r--r--" if "note.txt" in batch else "drwxr-xr-x"
             size = str(self.size) if "note.txt" in batch else "0"
-            return ExecOutcome(output=f"{mode} 2 1000 1000 {size} Jan 01 2026 /work\n", exit_code=0)
+            return ExecOutcome(
+                output=f"{mode} 2 1000 1000 {size} Jan 01 2026 /work\n", exit_code=0
+            )
         if "ls -ln" in batch:
             return ExecOutcome(
                 output="-rw-r--r-- 1 1000 1000 5 Jan 01 2026 note.txt\n",
@@ -48,8 +56,7 @@ class ReadOnlySftpSpawner:
             )
         if "get --" in batch:
             local = shlex.split(batch.splitlines()[0])[-1]
-            with open(local, "wb") as handle:
-                handle.write(b"hello")
+            await asyncio.to_thread(Path(local).write_bytes, b"hello")
             return ExecOutcome(output="", exit_code=0)
         return ExecOutcome(output="", exit_code=0)
 
@@ -64,7 +71,14 @@ def test_remote_file_metadata_uses_read_only_sftp():
 def test_remote_file_range_uses_sftp_get_and_local_slice():
     spawner = ReadOnlySftpSpawner()
     executor = RemoteExecutor("hpc1", spawner)
-    assert run(executor.read_bytes("/work/note.txt", boundary="/work", start=1, max_bytes=3)) == b"ell"
+    assert (
+        run(
+            executor.read_bytes(
+                "/work/note.txt", boundary="/work", start=1, max_bytes=3
+            )
+        )
+        == b"ell"
+    )
     assert all(argv[0] == "sftp" for argv, _ in spawner.calls)
 
 
@@ -72,7 +86,11 @@ def test_remote_file_range_rejects_large_files_before_sftp_get():
     spawner = ReadOnlySftpSpawner(size=REMOTE_FILE_PREVIEW_MAX_BYTES + 1)
     executor = RemoteExecutor("hpc1", spawner)
     with pytest.raises(ValueError, match="preview_too_large"):
-        run(executor.read_bytes("/work/note.txt", boundary="/work", start=0, max_bytes=3))
+        run(
+            executor.read_bytes(
+                "/work/note.txt", boundary="/work", start=0, max_bytes=3
+            )
+        )
     assert not any("get --" in batch for _, batch in spawner.calls)
 
 
@@ -92,9 +110,7 @@ def spawner() -> FakeSpawner:
 
 @pytest.fixture()
 def plane(spawner: FakeSpawner, tmp_path) -> RemotePlaneBinding:
-    return RemotePlaneBinding(
-        Database(":memory:"), spawner=spawner, workspace=tmp_path
-    )
+    return RemotePlaneBinding(Database(":memory:"), spawner=spawner, workspace=tmp_path)
 
 
 def test_submit_probes_then_lands_under_the_scratch(plane, spawner):
@@ -157,6 +173,7 @@ def test_failed_exit_code_flows_through(plane, spawner):
 
 def test_cancel_asks_the_host(plane, spawner):
     outcome = run(plane.submit("hpc1", "sleep 100"))
+    spawner.on("kill -0", "__OMICSCLAW_CANCELED__")
     report = run(plane.cancel(outcome.job_ref))
     assert report.state == "canceled"
     assert any("kill -TERM -- -4242" in c for c in spawner.ssh_commands())
@@ -172,7 +189,7 @@ def test_fetch_by_job_ref_brings_declared_outputs(plane, spawner, tmp_path):
         if line.startswith("get")
     ]
     assert len(get_lines) == 1
-    assert get_lines[0].endswith(f"out.txt\" \"{tmp_path / 'out.txt'}\"")
+    assert get_lines[0].endswith(f'out.txt" "{tmp_path / "out.txt"}"')
 
 
 def test_fetch_over_the_threshold_stays_remote(plane, spawner, tmp_path):
@@ -233,11 +250,13 @@ class TestInputUploads:
     def test_declared_inputs_appear_in_the_sftp_batch(self, plane, spawner, tmp_path):
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "counts.csv").write_text("a,b\n1,2\n")
-        outcome = run(plane.submit(
-            "hpc1",
-            "python train.py",
-            inputs=(("data/counts.csv", "counts.csv"),),
-        ))
+        outcome = run(
+            plane.submit(
+                "hpc1",
+                "python train.py",
+                inputs=(("data/counts.csv", "counts.csv"),),
+            )
+        )
         batch = spawner.sftp_batches()[-1]
         assert (
             f'put -- "{tmp_path / "data" / "counts.csv"}" '
@@ -248,31 +267,23 @@ class TestInputUploads:
         self, plane, spawner
     ):
         with pytest.raises(RemotePathRefused, match="outside the workspace"):
-            run(plane.submit(
-                "hpc1", "x", inputs=(("../../etc/passwd", "passwd"),)
-            ))
+            run(plane.submit("hpc1", "x", inputs=(("../../etc/passwd", "passwd"),)))
         # Refused before even the probe ran: zero remote side effects.
         assert spawner.calls == []
 
     def test_an_absolute_src_outside_the_workspace_is_refused(self, plane):
         with pytest.raises(RemotePathRefused, match="outside the workspace"):
-            run(plane.submit(
-                "hpc1", "x", inputs=(("/etc/passwd", "passwd"),)
-            ))
+            run(plane.submit("hpc1", "x", inputs=(("/etc/passwd", "passwd"),)))
 
     def test_a_missing_src_is_refused(self, plane):
         with pytest.raises(RemotePathRefused, match="not a file"):
-            run(plane.submit(
-                "hpc1", "x", inputs=(("data/not-there.csv", "x.csv"),)
-            ))
+            run(plane.submit("hpc1", "x", inputs=(("data/not-there.csv", "x.csv"),)))
 
     def test_a_dst_that_escapes_the_workdir_is_refused(self, plane, spawner, tmp_path):
         (tmp_path / "ok.txt").write_text("x")
         for bad in ("../evil", "a/../../evil", "/etc/evil"):
             with pytest.raises(RemotePathRefused, match="work directory"):
-                run(plane.submit(
-                    "hpc1", "x", inputs=(("ok.txt", bad),)
-                ))
+                run(plane.submit("hpc1", "x", inputs=(("ok.txt", bad),)))
         # Nothing was created or uploaded for the refused attempts.
         assert not any("mkdir" in c for c in spawner.ssh_commands())
         assert spawner.sftp_batches() == []
@@ -287,31 +298,27 @@ class TestInputUploads:
     ):
         # The ceiling is read at call time from the module, so a test
         # lowers it instead of writing a gigabyte.
-        monkeypatch.setattr(
-            "omicsclaw.remote.plane.MAX_INPUT_FILE_BYTES", 4
-        )
+        monkeypatch.setattr("omicsclaw.remote.plane.MAX_INPUT_FILE_BYTES", 4)
         (tmp_path / "big.csv").write_text("12345678")  # 8 bytes
         with pytest.raises(RemotePathRefused) as caught:
-            run(plane.submit(
-                "hpc1", "x", inputs=(("big.csv", "big.csv"),)
-            ))
+            run(plane.submit("hpc1", "x", inputs=(("big.csv", "big.csv"),)))
         assert "8 bytes" in str(caught.value)  # the actual size travels
         assert spawner.calls == []  # refused before any remote side effect
 
     def test_inputs_over_the_total_ceiling_are_refused(
         self, plane, spawner, tmp_path, monkeypatch
     ):
-        monkeypatch.setattr(
-            "omicsclaw.remote.plane.MAX_INPUT_TOTAL_BYTES", 4
-        )
+        monkeypatch.setattr("omicsclaw.remote.plane.MAX_INPUT_TOTAL_BYTES", 4)
         (tmp_path / "a.csv").write_text("1234")
         (tmp_path / "b.csv").write_text("5678")
         with pytest.raises(RemotePathRefused, match="total"):
-            run(plane.submit(
-                "hpc1",
-                "x",
-                inputs=(("a.csv", "a.csv"), ("b.csv", "b.csv")),
-            ))
+            run(
+                plane.submit(
+                    "hpc1",
+                    "x",
+                    inputs=(("a.csv", "a.csv"), ("b.csv", "b.csv")),
+                )
+            )
         assert spawner.calls == []
 
 

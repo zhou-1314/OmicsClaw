@@ -79,6 +79,25 @@ class TestJobScripts:
         assert files["job.sh"].startswith("#!/usr/bin/env bash\n")
 
 
+def _verified_nohup(pgid):
+    return RemoteJobHandle(
+        kind=KIND_NOHUP,
+        host="h",
+        workdir="/w",
+        pgid=pgid,
+        process_identity={
+            "uid": 1000,
+            "host_id": "fixture",
+            "boot_id": "b" * 32,
+            "pid": pgid,
+            "start_ticks": 123,
+            "pgid": pgid,
+            "sid": pgid,
+            "nonce": "c" * 32,
+        },
+    )
+
+
 class TestCommands:
     def test_mkdir_is_700_and_refuses_odd_arguments(self):
         command = build_mkdir_command("/scratch/my dir")
@@ -99,7 +118,7 @@ class TestCommands:
         assert command.rstrip().endswith("echo 0")
 
     def test_nohup_status_probes_the_group_then_the_exit_file(self):
-        handle = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=4242)
+        handle = _verified_nohup(4242)
         command = build_status_command(handle)
         assert "kill -0 -- -4242" in command
         assert "_omicsclaw_exit_code" in command
@@ -113,9 +132,10 @@ class TestCommands:
 
     def test_cancel_matches_the_kind(self):
         slurm = RemoteJobHandle(kind=KIND_SLURM, host="h", workdir="/w", job_id="7")
-        nohup = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=77)
+        nohup = _verified_nohup(77)
         assert build_cancel_command(slurm) == "scancel 7"
-        assert build_cancel_command(nohup) == "kill -TERM -- -77"
+        assert "kill -TERM -- -77" in build_cancel_command(nohup)
+        assert "/proc/77/stat" in build_cancel_command(nohup)
 
     def test_size_command_falls_back_to_wc(self):
         command = build_size_command(["/w/a", "/w/b"])
@@ -219,9 +239,10 @@ def test_group_signal_commands_refuse_a_nonpositive_pgid(bad):
 
 
 def test_a_positive_pgid_still_builds_the_group_commands():
-    handle = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=4242)
+    handle = _verified_nohup(4242)
     assert "kill -0 -- -4242" in build_status_command(handle)
-    assert build_cancel_command(handle) == "kill -TERM -- -4242"
+    assert "kill -TERM -- -4242" in build_cancel_command(handle)
+    assert "/proc/4242/stat" in build_cancel_command(handle)
     # slurm handles never take the group path, whatever their pgid says
     slurm = RemoteJobHandle(
         kind=KIND_SLURM, host="h", workdir="/w", job_id="7", pgid=None

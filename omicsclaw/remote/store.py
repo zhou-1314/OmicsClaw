@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from omicsclaw.memory.database import Database
@@ -95,6 +95,7 @@ class RemoteJobRow:
     source_request_id: str = ""
     payload_hash: str = ""
     proof_json: str = "{}"
+    newly_claimed: bool = False
 
     def handle(self) -> RemoteJobHandle:
         proof = json.loads(self.proof_json)
@@ -278,9 +279,8 @@ class RemoteJobStore:
                 + " FROM remote_jobs WHERE source_request_id=?",
                 (request_id,),
             ).fetchone()
+            newly_claimed = row is None
             if row is None:
-                from dataclasses import replace
-
                 identifier = self._insert_handle(
                     conn,
                     replace(handle, request_id=request_id, payload_hash=payload_hash),
@@ -309,9 +309,21 @@ class RemoteJobStore:
                 handle.capabilities,
             ):
                 raise ValueError("submission_payload_conflict")
-            return current
+            return replace(current, newly_claimed=newly_claimed)
 
         return self._db.run(write)
+
+    def by_request(self, request_id: str) -> RemoteJobRow | None:
+        """Find the original durable submission before resolving a new workdir."""
+        row = self._db.run(
+            lambda conn: conn.execute(
+                "SELECT "
+                + _JOB_COLUMNS
+                + " FROM remote_jobs WHERE source_request_id=?",
+                (request_id,),
+            ).fetchone()
+        )
+        return self._row(row) if row is not None else None
 
     def get(self, job_ref: str) -> RemoteJobRow | None:
         key = job_ref.strip()
@@ -324,6 +336,80 @@ class RemoteJobStore:
             ).fetchall()
         )
         return self._row(rows[0]) if rows else None
+
+    def bind_submission(self, row_id: int, handle: RemoteJobHandle) -> RemoteJobRow:
+        """Attach proven launch identity once; repeated observation keeps it."""
+        if (
+            (handle.kind == "nohup" and handle.process_identity is None)
+            or (
+                handle.kind == "slurm"
+                and not re.fullmatch(r"[1-9][0-9]*", handle.job_id or "")
+            )
+            or handle.kind not in {"nohup", "slurm"}
+        ):
+            raise ValueError("unverified_submission_handle")
+
+        def write(conn):
+            conn.execute("BEGIN IMMEDIATE")
+            raw = conn.execute(
+                "SELECT " + _JOB_COLUMNS + " FROM remote_jobs WHERE id=?", (row_id,)
+            ).fetchone()
+            if raw is None:
+                raise ValueError("submission_claim_missing")
+            current = self._row(raw)
+            expected = current.handle()
+            fields = (
+                "host",
+                "kind",
+                "workdir",
+                "local_job_id",
+                "target_alias",
+                "target_workdir",
+                "capabilities",
+                "request_id",
+                "payload_hash",
+            )
+            if not current.source_request_id or any(
+                getattr(expected, name) != getattr(handle, name) for name in fields
+            ):
+                raise ValueError("submission_payload_conflict")
+            if current.pgid is not None or current.job_id is not None:
+                if (
+                    current.pgid != handle.pgid
+                    or current.job_id != handle.job_id
+                    or expected.process_identity != handle.process_identity
+                    or expected.cluster != handle.cluster
+                ):
+                    raise ValueError("submission_handle_conflict")
+                return current
+            proof = json.dumps(
+                {
+                    "process_identity": dict(handle.process_identity)
+                    if handle.process_identity
+                    else None,
+                    "cluster": handle.cluster,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            conn.execute(
+                "UPDATE remote_jobs SET pgid=?,job_id=?,proof_json=?,submitted_at=?,status=? WHERE id=?",
+                (
+                    handle.pgid,
+                    handle.job_id,
+                    proof,
+                    handle.submitted_at or current.submitted_at,
+                    "pending" if current.status == "unknown" else current.status,
+                    row_id,
+                ),
+            )
+            return self._row(
+                conn.execute(
+                    "SELECT " + _JOB_COLUMNS + " FROM remote_jobs WHERE id=?", (row_id,)
+                ).fetchone()
+            )
+
+        return self._db.run(write)
 
     def by_local_job(self, local_job_id: str) -> RemoteJobRow | None:
         rows = self._db.run(
@@ -354,7 +440,8 @@ class RemoteJobStore:
         """Record what the host said; never deletes, whatever *status* is."""
         self._db.run(
             lambda conn: conn.execute(
-                "UPDATE remote_jobs SET status = ?, last_seen = ? WHERE id = ?",
+                "UPDATE remote_jobs SET status = CASE WHEN status IN ('done','failed','canceled') "
+                "THEN status ELSE ? END, last_seen = ? WHERE id = ?",
                 (status, time.time() if last_seen is None else last_seen, row_id),
             )
         )

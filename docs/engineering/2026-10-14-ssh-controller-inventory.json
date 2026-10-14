@@ -45,7 +45,7 @@
       "transaction": "additive fields; BEGIN IMMEDIATE canonical source_request_id claim and partial unique index in original remote_jobs; no launch or terminal decision in the store",
       "identity": "original workspace/local_job_id/immutable target; process proof UID/host/boot/PID birth/PGID/session/nonce; request/hash binds the pre-launch intent",
       "retention": "existing workspace DB backup/migration/archival lifecycle; uncertain claims are retained, never TTL-deleted to permit relaunch",
-      "recovery": "repeated same request/hash returns the original unknown row; different hash/target refuses; actual launch/reconcile/signal fencing remain Stage3 implementation work",
+      "recovery": "RemotePlane persists complete canonical intent before upload/launch; exclusive remote request/launch sentinels prevent overwrite or second launch; ACK loss reads request/hash/process proof and binds the original row once; absent evidence stays unknown; missing or mismatched process identity never signals; cancel ACK queries status; terminal requires UID/host/boot/nonce and group departure. JobsManager shutdown/same-host external dispatch and full Slurm identity remain Stage3 work",
       "migration": "additive jobs.lifetime and remote_jobs.source_request_id/payload_hash/proof_json; empty legacy lifetime keeps runtime-derived meaning; missing identity stays absent"
     }
   ],

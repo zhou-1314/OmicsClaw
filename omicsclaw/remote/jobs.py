@@ -68,6 +68,14 @@ _LOG_FILE = "job.log"
 
 NOHUP_LAUNCHER = (
     "#!/usr/bin/env bash\n"
+    "umask 077\nset -f\n"
+    "uid=$(id -u); host=$(hostname); boot=$(cat /proc/sys/kernel/random/boot_id)\n"
+    "nonce=$(cat ./_omicsclaw_nonce) || exit 1\n"
+    "case $host in (*[!A-Za-z0-9._-]*|'') exit 1;; esac\n"
+    "proc=$(cat /proc/$$/stat) || exit 1\nproc=${proc##*) }; set -- $proc\n"
+    'printf \'{"uid":%s,"host_id":"%s","boot_id":"%s","pid":%s,"start_ticks":%s,"pgid":%s,"sid":%s,"nonce":"%s"}\\n\' '
+    '"$uid" "$host" "$boot" "$$" "${20}" "$3" "$4" "$nonce" > ./_omicsclaw_process.json.tmp || exit 1\n'
+    "mv -- ./_omicsclaw_process.json.tmp ./_omicsclaw_process.json || exit 1\n"
     f"printf '%s' \"$$\" > ./{_PGID_FILE}\n"
     f"exec bash ./job.sh > ./{_LOG_FILE} 2>&1\n"
 )
@@ -79,15 +87,18 @@ on start, which is correct: a work directory belongs to one job."""
 
 NOHUP_WRAPPER = (
     "#!/usr/bin/env bash\n"
-    "bash ./cmd.sh\n"
-    "status=$?\n"
+    "cancel_requested=0\ntrap 'cancel_requested=1' TERM INT\n"
+    "bash ./cmd.sh &\nchild=$!\n"
+    'while true; do\nwait "$child"; status=$?\n'
+    'if [ "$cancel_requested" = 1 ] && kill -0 "$child" 2>/dev/null; then sleep 0.05; continue; fi\n'
+    "break\ndone\n"
+    'if [ "$cancel_requested" = 1 ]; then '
+    f"printf '%s' '__OMICSCLAW_CANCELED__' > ./{_EXIT_FILE}; exit 143; fi\n"
     f"printf '%s' \"$status\" > ./{_EXIT_FILE}\n"
     'exit "$status"\n'
 )
-"""Runs the model's command and records its fate. No ``set -e`` and no
-traps: the two lines after the command must run whether it succeeded,
-failed or was signalled, or the exit-code file — the only record of how
-a finished nohup job ended — would never exist."""
+"""Record the command's observed exit. A signal request becomes terminal
+only after the child exits; acknowledging the signal does not end the job."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +284,9 @@ def build_submit_command(workdir: str, kind: str) -> str:
     if kind == KIND_NOHUP:
         return (
             f"cd -- {shell_quote(workdir)} || exit 1; "
+            "if mkdir ./_omicsclaw_launch_claim 2>/dev/null; then "
             "setsid nohup bash ./_omicsclaw_launch.sh >/dev/null 2>&1 </dev/null & "
+            "fi; "
             "for _ in 1 2 3 4 5 6 7 8 9 10 "
             "11 12 13 14 15 16 17 18 19 20 "
             "21 22 23 24 25 26 27 28 29 30 "
@@ -338,12 +351,47 @@ def build_status_command(handle: RemoteJobHandle) -> str:
             'if [ -n "$a" ]; then echo "$a"; else '
             f"echo {_LOST_MARK}; fi"
         )
+    pgid = _nohup_pgid(handle)
+    if handle.process_identity is None:
+        return f"printf '%s\\n' {_LOST_MARK}"
     return (
         f"cd -- {quoted} && "
-        f"if kill -0 -- -{_nohup_pgid(handle)} 2>/dev/null;"
+        f"if {_process_identity_guard(handle)} && kill -0 -- -{_nohup_pgid(handle)} 2>/dev/null;"
         f" then echo {_RUNNING_MARK}; "
-        f"elif [ -f ./{_EXIT_FILE} ]; then cat ./{_EXIT_FILE}; "
+        f"elif {_job_identity_guard(handle)} "
+        f"&& ! kill -0 -- -{pgid} 2>/dev/null "
+        f"&& [ -f ./{_EXIT_FILE} ]; then cat ./{_EXIT_FILE}; "
         f"else echo {_LOST_MARK}; fi"
+    )
+
+
+def _process_identity_guard(handle: RemoteJobHandle) -> str:
+    """Verify the recorded Linux process birth before status or signaling."""
+    proof = handle.process_identity
+    if proof is None:
+        return "false"
+    pid = proof["pid"]
+    return (
+        _job_identity_guard(handle) + " && "
+        f'[ "$(stat -c %u /proc/{pid} 2>/dev/null)" = {proof["uid"]} ] && '
+        f"_proc=$(cat /proc/{pid}/stat 2>/dev/null) && "
+        "_proc=${_proc##*) } && set -f && set -- $_proc && "
+        f'[ "$3" = {proof["pgid"]} ] && [ "$4" = {proof["sid"]} ] && '
+        f'[ "${{20}}" = {proof["start_ticks"]} ]'
+    )
+
+
+def _job_identity_guard(handle: RemoteJobHandle) -> str:
+    """Bind terminal files to the submitted user's host boot and nonce."""
+    proof = handle.process_identity
+    if proof is None:
+        return "false"
+    return (
+        f'[ "$(id -u)" = {proof["uid"]} ] && '
+        f'[ "$(stat -c %u . 2>/dev/null)" = {proof["uid"]} ] && '
+        f'[ "$(hostname)" = {shell_quote(str(proof["host_id"]))} ] && '
+        f'[ "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" = {shell_quote(str(proof["boot_id"]))} ] && '
+        f'[ "$(cat ./_omicsclaw_nonce 2>/dev/null)" = {shell_quote(str(proof["nonce"]))} ]'
     )
 
 
@@ -377,6 +425,8 @@ def parse_status(kind: str, output: str) -> tuple[str, int | None]:
         return UNKNOWN, None
     if kind == KIND_NOHUP:
         line = text.splitlines()[-1].strip() if text else ""
+        if line == "__OMICSCLAW_CANCELED__":
+            return CANCELED, 143
         if line == _RUNNING_MARK:
             return RUNNING, None
         if line == _LOST_MARK:
@@ -411,7 +461,13 @@ def build_cancel_command(handle: RemoteJobHandle) -> str:
     """Stop the job the way its kind stops: ``scancel`` or group SIGTERM."""
     if handle.kind == KIND_SLURM:
         return f"scancel {handle.job_id}"
-    return f"kill -TERM -- -{_nohup_pgid(handle)}"
+    pgid = _nohup_pgid(handle)
+    if handle.process_identity is None:
+        return f"printf '%s\\n' {_LOST_MARK}; exit 1"
+    return (
+        f"cd -- {shell_quote(handle.workdir)} && "
+        f"{_process_identity_guard(handle)} && kill -TERM -- -{pgid}"
+    )
 
 
 def build_size_command(paths: list[str]) -> str:

@@ -1,3 +1,7 @@
+## 2026-10-15: Canonical external submission and process fencing
+
+RemotePlane persists complete canonical submission intent before staging or launch. Exclusive remote sentinels and immutable process evidence let duplicate requests and lost acknowledgements observe the original handle without rewriting or submitting again. Stable input hashes and staged-byte verification precede launch. Missing or mismatched process identity cannot signal a group, cancellation acknowledgements query actual status, and terminal files require the original user, host boot and nonce. Full JobsManager lifetime/restart behavior and scientific supply remain Stage3 work.
+
 ## 2026-10-15: Persistent external job metadata
 
 Job records now distinguish execution location from in-process or external lifetime, so an explicitly external job on the controller host is excluded from the old local-orphan sweep. RemoteJobStore can atomically claim a canonical submission request in its existing table, preserving the original unknown handle on repetition and refusing conflicting intent. Handles retain immutable process birth/UID/boot/group/session/nonce evidence across serialization. These are the first Stage3 storage seams; verified launch, recovery, cancellation and scientific supply remain in progress.
