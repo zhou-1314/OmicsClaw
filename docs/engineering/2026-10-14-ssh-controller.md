@@ -60,6 +60,10 @@ The first measured Linux x86_64 profiles used an independent CPython 3.11.17 dis
 
 ## Lifecycle and authority
 
+Stage3 begins by extending the original jobs and remote_jobs records. `jobs.lifetime` separates local in-process observations from same-host external work; old empty values retain their previous runtime-derived interpretation. Only local in-process rows enter the existing orphan sweep. `remote_jobs.source_request_id/payload_hash/proof_json` hold a pre-launch claim and process/scheduler evidence in the original store. A partial unique request index and BEGIN IMMEDIATE make repeated claims return the same unknown row and reject different canonical hashes or targets. These columns add no scheduler, terminal authority or retry permission.
+
+The metadata migration is additive, and legacy records receive no invented identity. Claims and handles retain the original workspace database backup/archival lifetime, including uncertain outcomes. Process proof binds UID, host/boot, PID birth, process group, session and nonce; handle metadata is immutable in memory and survives JSON round trips. Verified launch/ACK-loss reconciliation, signal fencing, observer shutdown and scientific environment/payload integration are subsequent Stage3 work; the metadata slice alone is not their acceptance.
+
 Stage 1 selects EOF shutdown. A kernel-held workspace file lock prevents another controller writer and releases on process death. No daemon, attach broker, systemd or tmux process is required. Existing session, approval and Notebook ownership logic remains in charge of those resources. The controller lock adds workspace ownership; it does not replace their state machines.
 
 EOF closes model capabilities, stops admission, cancels observations and drains shared state. Reconnection starts a new process and inspects receipts and durable events before any new turn. In-flight model output, approval or uncertain tool work is not replayed automatically. Background science jobs, persistent kernel rehydration, leases and process-identity-aware cleanup require later stages.

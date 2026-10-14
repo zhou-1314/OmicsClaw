@@ -13,7 +13,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Self, TypeVar
 
 T = TypeVar("T")
 
@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     skill       TEXT NOT NULL DEFAULT '',
     inputs_json TEXT NOT NULL DEFAULT '{}',
     runtime     TEXT NOT NULL DEFAULT 'local',
+    lifetime    TEXT NOT NULL DEFAULT '',
     target_alias TEXT NOT NULL DEFAULT '',
     target_workdir TEXT NOT NULL DEFAULT '',
     capabilities_json TEXT NOT NULL DEFAULT '[]',
@@ -218,7 +219,10 @@ CREATE TABLE IF NOT EXISTS remote_jobs (
     local_job_id TEXT NOT NULL DEFAULT '',
     target_alias TEXT NOT NULL DEFAULT '',
     target_workdir TEXT NOT NULL DEFAULT '',
-    capabilities_json TEXT NOT NULL DEFAULT '[]'
+    capabilities_json TEXT NOT NULL DEFAULT '[]',
+    source_request_id TEXT NOT NULL DEFAULT '',
+    payload_hash TEXT NOT NULL DEFAULT '',
+    proof_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_jobs_local
@@ -423,7 +427,7 @@ class Database:
         with self._lock:
             self._conn.close()
 
-    def __enter__(self) -> Database:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -454,11 +458,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 raise
     for table, additions in {
         "jobs": {
+            "lifetime": "TEXT NOT NULL DEFAULT ''",
             "target_alias": "TEXT NOT NULL DEFAULT ''",
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
         },
         "remote_jobs": {
+            "source_request_id": "TEXT NOT NULL DEFAULT ''",
+            "payload_hash": "TEXT NOT NULL DEFAULT ''",
+            "proof_json": "TEXT NOT NULL DEFAULT '{}'",
             "target_alias": "TEXT NOT NULL DEFAULT ''",
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -477,6 +485,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
                     raise
     # Row backfills belong to migrate_remote_targets; dry-run reports
     # candidates without mutating user data.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_job_request "
+        "ON remote_jobs(source_request_id) WHERE source_request_id != ''"
+    )
     conn.commit()
 
 

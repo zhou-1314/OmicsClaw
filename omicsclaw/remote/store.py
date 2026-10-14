@@ -35,6 +35,7 @@ own busy handling, and the callers that can block off-loop use
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -42,6 +43,12 @@ from typing import Any
 from omicsclaw.memory.database import Database
 
 from .jobs import IN_FLIGHT_STATES, RemoteJobHandle
+
+_JOB_COLUMNS = (
+    "id,host_alias,kind,job_id,pgid,workdir,submitted_at,last_seen,status,"
+    "local_job_id,target_alias,target_workdir,capabilities_json,source_request_id,"
+    "payload_hash,proof_json"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +92,14 @@ class RemoteJobRow:
     target_alias: str = ""
     target_workdir: str = ""
     capabilities: tuple[str, ...] = ()
+    source_request_id: str = ""
+    payload_hash: str = ""
+    proof_json: str = "{}"
 
     def handle(self) -> RemoteJobHandle:
+        proof = json.loads(self.proof_json)
+        if not isinstance(proof, dict) or set(proof) - {"process_identity", "cluster"}:
+            raise ValueError("invalid_handle_proof")
         return RemoteJobHandle(
             kind=self.kind,
             host=self.host_alias,
@@ -98,6 +111,10 @@ class RemoteJobRow:
             target_alias=self.target_alias or self.host_alias,
             target_workdir=self.target_workdir or self.workdir,
             capabilities=self.capabilities,
+            process_identity=proof.get("process_identity"),
+            cluster=str(proof.get("cluster") or ""),
+            request_id=self.source_request_id,
+            payload_hash=self.payload_hash,
         )
 
 
@@ -204,29 +221,97 @@ class RemoteJobStore:
 
     def record(self, handle: RemoteJobHandle, *, status: str = "pending") -> int:
         """Persist a fresh handle; returns the row id that becomes the job_ref."""
-        cursor = self._db.run(
-            lambda conn: conn.execute(
-                "INSERT INTO remote_jobs (host_alias, kind, job_id, pgid,"
-                " workdir, submitted_at, last_seen, status, local_job_id,"
-                " target_alias, target_workdir, capabilities_json)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    handle.host,
-                    handle.kind,
-                    handle.job_id,
-                    handle.pgid,
-                    handle.workdir,
-                    handle.submitted_at,
-                    time.time(),
-                    status,
-                    handle.local_job_id,
-                    handle.target_alias or handle.host,
-                    handle.target_workdir or handle.workdir,
-                    json.dumps(list(handle.capabilities), ensure_ascii=False),
+        return self._db.run(lambda conn: self._insert_handle(conn, handle, status))
+
+    @staticmethod
+    def _insert_handle(conn, handle, status):
+        cursor = conn.execute(
+            "INSERT INTO remote_jobs (host_alias,kind,job_id,pgid,workdir,submitted_at,"
+            "last_seen,status,local_job_id,target_alias,target_workdir,capabilities_json,"
+            "source_request_id,payload_hash,proof_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                handle.host,
+                handle.kind,
+                handle.job_id,
+                handle.pgid,
+                handle.workdir,
+                handle.submitted_at,
+                time.time(),
+                status,
+                handle.local_job_id,
+                handle.target_alias,
+                handle.target_workdir,
+                json.dumps(list(handle.capabilities), ensure_ascii=False),
+                handle.request_id,
+                handle.payload_hash,
+                json.dumps(
+                    {
+                        "process_identity": dict(handle.process_identity)
+                        if handle.process_identity
+                        else None,
+                        "cluster": handle.cluster,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
                 ),
-            )
+            ),
         )
         return int(cursor.lastrowid or 0)
+
+    def claim_submission(
+        self, request_id: str, payload_hash: str, handle: RemoteJobHandle
+    ) -> RemoteJobRow:
+        """Persist an unlaunched intent; duplicate callers only observe its row."""
+        if (
+            not re.fullmatch(r"[A-Za-z0-9:._-]{1,256}", request_id)
+            or not re.fullmatch(r"[0-9a-f]{64}", payload_hash)
+            or handle.pgid is not None
+            or handle.job_id is not None
+        ):
+            raise ValueError("invalid_submission_claim")
+
+        def write(conn):
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT "
+                + _JOB_COLUMNS
+                + " FROM remote_jobs WHERE source_request_id=?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                from dataclasses import replace
+
+                identifier = self._insert_handle(
+                    conn,
+                    replace(handle, request_id=request_id, payload_hash=payload_hash),
+                    "unknown",
+                )
+                row = conn.execute(
+                    "SELECT " + _JOB_COLUMNS + " FROM remote_jobs WHERE id=?",
+                    (identifier,),
+                ).fetchone()
+            current = self._row(row)
+            if current.payload_hash != payload_hash or (
+                current.host_alias,
+                current.kind,
+                current.workdir,
+                current.local_job_id,
+                current.target_alias,
+                current.target_workdir,
+                current.capabilities,
+            ) != (
+                handle.host,
+                handle.kind,
+                handle.workdir,
+                handle.local_job_id,
+                handle.target_alias,
+                handle.target_workdir,
+                handle.capabilities,
+            ):
+                raise ValueError("submission_payload_conflict")
+            return current
+
+        return self._db.run(write)
 
     def get(self, job_ref: str) -> RemoteJobRow | None:
         key = job_ref.strip()
@@ -234,10 +319,7 @@ class RemoteJobStore:
             return None
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, host_alias, kind, job_id, pgid, workdir,"
-                " submitted_at, last_seen, status, local_job_id,"
-                " target_alias, target_workdir, capabilities_json"
-                " FROM remote_jobs WHERE id = ?",
+                "SELECT " + _JOB_COLUMNS + " FROM remote_jobs WHERE id = ?",
                 (int(key),),
             ).fetchall()
         )
@@ -246,10 +328,9 @@ class RemoteJobStore:
     def by_local_job(self, local_job_id: str) -> RemoteJobRow | None:
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, host_alias, kind, job_id, pgid, workdir,"
-                " submitted_at, last_seen, status, local_job_id,"
-                " target_alias, target_workdir, capabilities_json"
-                " FROM remote_jobs WHERE local_job_id = ? ORDER BY id DESC"
+                "SELECT "
+                + _JOB_COLUMNS
+                + " FROM remote_jobs WHERE local_job_id = ? ORDER BY id DESC"
                 " LIMIT 1",
                 (local_job_id,),
             ).fetchall()
@@ -260,10 +341,7 @@ class RemoteJobStore:
         """Every row not yet terminal — the reconciler's work list."""
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, host_alias, kind, job_id, pgid, workdir,"
-                " submitted_at, last_seen, status, local_job_id,"
-                " target_alias, target_workdir, capabilities_json"
-                " FROM remote_jobs WHERE status IN (?, ?, ?)"
+                "SELECT " + _JOB_COLUMNS + " FROM remote_jobs WHERE status IN (?, ?, ?)"
                 " ORDER BY submitted_at",
                 (*IN_FLIGHT_STATES, "unknown" if include_unknown else "pending"),
             ).fetchall()
@@ -297,6 +375,9 @@ class RemoteJobStore:
             target_alias=row["target_alias"] or row["host_alias"],
             target_workdir=row["target_workdir"] or row["workdir"],
             capabilities=tuple(json.loads(row["capabilities_json"] or "[]")),
+            source_request_id=row["source_request_id"] or "",
+            payload_hash=row["payload_hash"] or "",
+            proof_json=row["proof_json"] or "{}",
         )
 
 

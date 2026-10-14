@@ -39,7 +39,10 @@ still exist (``kill -0``), and if not, what code did it leave behind.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from .ssh import shell_quote
 
@@ -107,6 +110,10 @@ class RemoteJobHandle:
     target_alias: str = ""
     target_workdir: str = ""
     capabilities: tuple[str, ...] = ()
+    process_identity: Mapping[str, object] | None = None
+    request_id: str = ""
+    payload_hash: str = ""
+    cluster: str = ""
 
     def __post_init__(self) -> None:
         if not self.target_alias:
@@ -114,6 +121,22 @@ class RemoteJobHandle:
         if not self.target_workdir:
             object.__setattr__(self, "target_workdir", self.workdir)
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        if self.process_identity is not None:
+            identity = dict(self.process_identity)
+            integers = ("uid", "pid", "start_ticks", "pgid", "sid")
+            if (
+                set(identity) != {*integers, "host_id", "boot_id", "nonce"}
+                or any(type(identity[key]) is not int for key in integers)
+                or identity["uid"] < 0
+                or any(identity[key] <= 0 for key in integers[1:])
+                or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", str(identity["host_id"]))
+                or not re.fullmatch(r"[0-9a-f-]{32,36}", str(identity["boot_id"]))
+                or not re.fullmatch(r"[0-9a-f]{32}", str(identity["nonce"]))
+                or self.pgid is not None
+                and identity["pgid"] != self.pgid
+            ):
+                raise ValueError("invalid_process_identity")
+            object.__setattr__(self, "process_identity", MappingProxyType(identity))
 
     def to_json(self) -> str:
         return json.dumps(
@@ -128,6 +151,12 @@ class RemoteJobHandle:
                 "target_alias": self.target_alias,
                 "target_workdir": self.target_workdir,
                 "capabilities": list(self.capabilities),
+                "process_identity": dict(self.process_identity)
+                if self.process_identity
+                else None,
+                "request_id": self.request_id,
+                "payload_hash": self.payload_hash,
+                "cluster": self.cluster,
             },
             ensure_ascii=False,
         )
@@ -148,6 +177,10 @@ class RemoteJobHandle:
             capabilities=tuple(
                 str(item) for item in decoded.get("capabilities", ()) if item
             ),
+            process_identity=decoded.get("process_identity"),
+            request_id=str(decoded.get("request_id") or ""),
+            payload_hash=str(decoded.get("payload_hash") or ""),
+            cluster=str(decoded.get("cluster") or ""),
         )
 
     def identity(self) -> str:

@@ -37,6 +37,16 @@
       "retention": "SSH never prunes raw events; same original DB backup/migration/workspace archival lifecycle; disposable only while source remains; external gaps require previously confirmed evidence, future automated prune requires review",
       "recovery": "at most64 frames/512KiB per page; Mac full digest/conflict checks then replay after coverage; no execution owner acquisition, terminal choice, model/tool permission or retry",
       "migration": "additive CREATE TABLE IF NOT EXISTS; source and frames each at most4MiB/20,000 records with SQL length checks before source JSON load; no second usage or terminal table"
+    },
+    {
+      "name": "jobs.lifetime and remote_jobs request/proof columns",
+      "owner": "existing JobsManager/JobStore/RemoteJobStore and original Database",
+      "gap": "execution location alone cannot identify controller-independent lifetime; a handle written only after launch leaves ACK-loss and process-identity gaps",
+      "transaction": "additive fields; BEGIN IMMEDIATE canonical source_request_id claim and partial unique index in original remote_jobs; no launch or terminal decision in the store",
+      "identity": "original workspace/local_job_id/immutable target; process proof UID/host/boot/PID birth/PGID/session/nonce; request/hash binds the pre-launch intent",
+      "retention": "existing workspace DB backup/migration/archival lifecycle; uncertain claims are retained, never TTL-deleted to permit relaunch",
+      "recovery": "repeated same request/hash returns the original unknown row; different hash/target refuses; actual launch/reconcile/signal fencing remain Stage3 implementation work",
+      "migration": "additive jobs.lifetime and remote_jobs.source_request_id/payload_hash/proof_json; empty legacy lifetime keeps runtime-derived meaning; missing identity stays absent"
     }
   ],
   "effortEstimateBasis": "Engineering planning intervals in person-days, not elapsed-time promises or measured implementation effort. Scope includes adapters, tests, migration and shared safety work. v2 comparison keeps science/SSH/migration scope identical and additionally ports control semantics and Notebook native client. Based on named existing seams and changed contracts; uncertainty is recorded per package. Re-estimate requires explicit review if a package upper bound, profile cap or allowed seam is exceeded.",

@@ -182,6 +182,7 @@ class JobRecord:
     target_alias: str = ""
     target_workdir: str = ""
     capabilities: tuple[str, ...] = ()
+    lifetime: str = ""
 
     def __post_init__(self) -> None:
         if not self.target_alias and self.runtime.startswith("remote:"):
@@ -191,6 +192,14 @@ class JobRecord:
             if isinstance(candidate, str):
                 object.__setattr__(self, "target_workdir", candidate)
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        if not self.lifetime:
+            object.__setattr__(
+                self,
+                "lifetime",
+                "in_process" if self.runtime == "local" else "external",
+            )
+        if self.lifetime not in {"in_process", "external"}:
+            raise ValueError("invalid_job_lifetime")
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -234,8 +243,8 @@ class JobStore:
             lambda conn: conn.execute(
                 "INSERT INTO jobs (id, session_id, kind, skill, inputs_json,"
                 " runtime, target_alias, target_workdir, capabilities_json,"
-                " status, error, created_at, started_at, finished_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " status, error, created_at, started_at, finished_at,lifetime)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.session_id,
@@ -251,12 +260,13 @@ class JobStore:
                     record.created_at,
                     record.started_at,
                     record.finished_at,
+                    record.lifetime,
                 ),
             )
         )
 
     def update_job(self, job_id: str, **changes: Any) -> None:
-        immutable = {"target_alias", "target_workdir", "capabilities_json"}
+        immutable = {"target_alias", "target_workdir", "capabilities_json", "lifetime"}
         if immutable.intersection(changes):
             raise ValueError("target_snapshot_immutable")
         allowed = (
@@ -284,7 +294,7 @@ class JobStore:
             lambda conn: conn.execute(
                 "SELECT id, session_id, kind, skill, inputs_json, runtime,"
                 " target_alias, target_workdir, capabilities_json,"
-                " status, error, created_at, started_at, finished_at"
+                " status, error, created_at, started_at, finished_at,lifetime"
                 " FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchall()
@@ -312,7 +322,7 @@ class JobStore:
             lambda conn: conn.execute(
                 "SELECT id, session_id, kind, skill, inputs_json, runtime,"
                 " target_alias, target_workdir, capabilities_json,"
-                " status, error, created_at, started_at, finished_at FROM jobs "
+                " status, error, created_at, started_at, finished_at,lifetime FROM jobs "
                 + where
                 + " ORDER BY created_at DESC, id DESC LIMIT ?",
                 tuple(params),
@@ -338,7 +348,8 @@ class JobStore:
                     "UPDATE jobs SET status = 'interrupted',"
                     " error = 'backend restarted before this job finished',"
                     " finished_at = ? WHERE status IN ('queued', 'running',"
-                    " 'cancel_requested') AND runtime = 'local'",
+                    " 'cancel_requested') AND runtime = 'local' "
+                    "AND lifetime IN ('','in_process')",
                     (time.time(),),
                 ).rowcount
             )
@@ -431,6 +442,7 @@ def _row_to_record(row: Any) -> JobRecord:
         # means the same thing "local" does — that job ran in the
         # process that wrote it.
         runtime=str(row["runtime"] or "local"),
+        lifetime=str(row["lifetime"] or ""),
         target_alias=str(row["target_alias"] or ""),
         target_workdir=str(row["target_workdir"] or ""),
         capabilities=_decode_capabilities(row["capabilities_json"]),
@@ -1559,9 +1571,7 @@ class JobsManager:
         self.run_store.save(started, event="started")
         try:
             result = verify()
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - verifier failure is persisted evidence
+        except Exception as exc:  # noqa: BLE001 - verifier failure is persisted evidence
             _log.exception("verification failed to execute: check=%s", check)
             result = Verification(check=check, verdict="inconclusive", details=str(exc))
         result.verification_id = started.verification_id
@@ -1652,7 +1662,9 @@ class JobsManager:
         target_caps = (
             ("remote_kernel",)
             if kind == "code_run" and is_remote_target
-            else ("remote_exec", "remote_submit") if is_remote_target else ()
+            else ("remote_exec", "remote_submit")
+            if is_remote_target
+            else ()
         )
         target_snapshot = None
         if is_remote_target:
@@ -2165,9 +2177,7 @@ class JobsManager:
                 self.store.update_job(
                     job_id, status="failed", error=exc.error, finished_at=time.time()
                 )
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - one job must never take the plane down
+        except Exception as exc:  # noqa: BLE001 - one job must never take the plane down
             _log.exception("job %s crashed the runner", job_id)
             named = type(exc).__name__ + ": " + str(exc)
             terminal = ("job.failed", {"error": named, "phase": "run"})

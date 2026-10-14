@@ -1,3 +1,7 @@
+## 2026-10-15: Persistent external job metadata
+
+Job records now distinguish execution location from in-process or external lifetime, so an explicitly external job on the controller host is excluded from the old local-orphan sweep. RemoteJobStore can atomically claim a canonical submission request in its existing table, preserving the original unknown handle on repetition and refusing conflicting intent. Handles retain immutable process birth/UID/boot/group/session/nonce evidence across serialization. These are the first Stage3 storage seams; verified launch, recovery, cancellation and scientific supply remain in progress.
+
 ## 2026-10-15: SSH review repairs
 
 SSH activation now fences configuration saves and opens; ordinary duplicates reuse canonical intent validation, and lost admission acknowledgements recover the original first-title CAS. Trusted Mac build records pin archive, source files and manifest together. Native secret imports read stable regular files through EOF. Public SDK clients share equivalent transport settings with a finite per-role cache and explicit close; successful proxy completions retain their original bytes.
