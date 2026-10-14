@@ -70,6 +70,7 @@ class DurableTurnEventLog:
                 "SELECT authority_id, workspace_id FROM turn_authority_identity WHERE singleton=1"
             ).fetchone()
             return DurableAuthorityIdentity(**dict(row))
+
         return self._db.run(work)
 
     @property
@@ -79,29 +80,110 @@ class DurableTurnEventLog:
     def request_receipt(self, session_id: str, source_request_id: str) -> dict | None:
         def work(conn):
             row = conn.execute(
-                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at "
+                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at,payload_json "
                 "FROM turn_ingress WHERE session_id=? AND source_request_id=?",
                 (session_id, source_request_id),
             ).fetchone()
-            return {**dataclasses.asdict(self.identity), **dict(row)} if row is not None else None
+            return self._receipt(row) if row is not None else None
+
         return self._db.run(work)
 
-    def claim_request(self, session_id: str, source_request_id: str, payload_hash: str, turn_id: str) -> dict:
+    def turn_receipt(self, session_id: str, turn_id: str) -> dict | None:
+        """Find the admitted source for a running turn; no second identity store."""
+
+        def work(conn):
+            row = conn.execute(
+                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at,payload_json FROM turn_ingress WHERE session_id=? AND turn_id=?",
+                (session_id, turn_id),
+            ).fetchone()
+            return self._receipt(row) if row is not None else None
+
+        return self._db.run(work)
+
+    def claim_request(
+        self,
+        session_id: str,
+        source_request_id: str,
+        payload_hash: str,
+        turn_id: str,
+        payload: dict | None = None,
+    ) -> dict:
         """Persist admission before scheduling. A receipt is never a retry permit."""
+
         def work(conn):
             conn.execute(
-                "INSERT OR IGNORE INTO turn_ingress VALUES(?,?,?,?,?)",
-                (session_id, source_request_id, payload_hash, turn_id, time.time()),
+                "INSERT OR IGNORE INTO turn_ingress(session_id,source_request_id,payload_hash,turn_id,created_at,payload_json) VALUES(?,?,?,?,?,?)",
+                (
+                    session_id,
+                    source_request_id,
+                    payload_hash,
+                    turn_id,
+                    time.time(),
+                    json.dumps(
+                        payload or {},
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
             )
             row = conn.execute(
-                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at "
+                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at,payload_json "
                 "FROM turn_ingress WHERE session_id=? AND source_request_id=?",
                 (session_id, source_request_id),
             ).fetchone()
             if row["payload_hash"] != payload_hash:
-                raise EventLogConflict("request identity reused with a different payload")
-            return {**dataclasses.asdict(self.identity), **dict(row)}
+                raise EventLogConflict(
+                    "request identity reused with a different payload"
+                )
+            return self._receipt(row)
+
         return self._db.run(work)
+
+    def _receipt(self, row):
+        fields = dict(row)
+        fields["payload"] = json.loads(fields.pop("payload_json", "{}"))
+        return {**dataclasses.asdict(self.identity), **fields}
+
+    def requests(self, session_id: str, *, offset: int = 0, limit: int = 50):
+        if (
+            type(offset) is not int
+            or offset < 0
+            or type(limit) is not int
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("invalid request page")
+
+        def work(conn):
+            result, size = [], 0
+            for row in conn.execute(
+                "SELECT * FROM turn_ingress WHERE session_id=? ORDER BY created_at,source_request_id LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ):
+                cost = len(row["payload_json"].encode()) + 1024
+                if cost > 524288:
+                    raise ValueError("request_payload_requires_data_channel")
+                if size + cost > 524288:
+                    break
+                result.append(self._receipt(row))
+                size += cost
+            return result
+
+        return self._db.run(work)
+
+    def admitted_sessions(self, *, limit: int = 100):
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("invalid session limit")
+        return self._db.run(
+            lambda conn: [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT session_id,MAX(created_at) AS updated_at,MIN(created_at) AS created_at FROM turn_ingress GROUP BY session_id ORDER BY updated_at DESC LIMIT ?",
+                    (limit,),
+                )
+            ]
+        )
 
     def acquire_owner(
         self, stream_id: str, *, owner_id: str | None = None, now: float | None = None
@@ -302,18 +384,32 @@ class DurableTurnEventLog:
                 f"stream {event.stream_id} owner acquisition raced"
             ) from exc
 
-    def replay(self, stream_id: str, *, after_seq: int = 0) -> list[DurableTurnEvent]:
-        if not isinstance(after_seq, int) or after_seq < 0:
+    def replay(
+        self,
+        stream_id: str,
+        *,
+        after_seq: int = 0,
+        limit: int | None = None,
+        event_type: str | None = None,
+    ) -> list[DurableTurnEvent]:
+        if type(after_seq) is not int or after_seq < 0:
             raise ValueError("after_seq must be a non-negative integer")
-        return self._db.run(
-            lambda conn: [
-                self._row(row)
-                for row in conn.execute(
-                    "SELECT * FROM turn_events WHERE stream_id=? AND seq>? ORDER BY seq",
-                    (stream_id, after_seq),
-                ).fetchall()
-            ]
-        )
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 1000):
+            raise ValueError("invalid replay limit")
+
+        def work(conn):
+            sql = "SELECT * FROM turn_events WHERE stream_id=? AND seq>?"
+            args = [stream_id, after_seq]
+            if event_type is not None:
+                sql += " AND type=?"
+                args.append(event_type)
+            sql += " ORDER BY seq"
+            if limit is not None:
+                sql += " LIMIT ?"
+                args.append(limit)
+            return [self._row(row) for row in conn.execute(sql, args).fetchall()]
+
+        return self._db.run(work)
 
     def bounds(self, stream_id: str) -> tuple[int | None, int]:
         def work(conn):

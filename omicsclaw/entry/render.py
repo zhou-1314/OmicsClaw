@@ -225,7 +225,9 @@ def human_tool_description(tool: str, arguments: str = "") -> str:
         if candidate in tool.lower():
             verb = candidate
             break
-    return ("{verb} {label} {summary}".format(verb=verb, label=label, summary=summary)).strip()
+    return (
+        "{verb} {label} {summary}".format(verb=verb, label=label, summary=summary)
+    ).strip()
 
 
 class TextRenderer:
@@ -289,7 +291,11 @@ class TextRenderer:
         reasoning = event.type is TurnEventType.REASONING_DELTA
         if reasoning and not self._show_reasoning:
             return None
-        delta = event.engine.delta if event.engine is not None else str((event.wire_payload or {}).get("delta", ""))
+        delta = (
+            event.engine.delta
+            if event.engine is not None
+            else str((event.wire_payload or {}).get("delta", ""))
+        )
         if not delta:
             return None
         kind = "reasoning" if reasoning else "text"
@@ -564,8 +570,14 @@ def to_wire(event: TurnEvent) -> dict[str, Any]:
     if event.wire_payload is not None:
         # Durable payloads are untrusted data; identity and schema fields are
         # owned by the current frame and cannot be overwritten by replay data.
-        wire.update({k: v for k, v in event.wire_payload.items()
-                     if k not in {"schema_version", "type", "sequence", "session_id", "turn_id"}})
+        wire.update(
+            {
+                k: v
+                for k, v in event.wire_payload.items()
+                if k
+                not in {"schema_version", "type", "sequence", "session_id", "turn_id"}
+            }
+        )
     return wire
 
 
@@ -729,14 +741,17 @@ def _approval_payload(event: TurnEvent) -> dict[str, Any]:
         "reason": request.reason,
         "risk_level": request.risk_level.value,
         "approval_mode": request.approval_mode.value,
+        "reason_shows_call": request.reason_shows_call,
+        "ask_every_time": request.ask_every_time,
         # P6 item 1: the one-line plain-language lead for the card,
         # additive beside the raw arguments (an older client that does
         # not know the field ignores it). The tool's own reason, when it
         # wrote one, beats the derived line — same ruling the jobs plane
         # makes for its approval events.
-        "summary": (request.reason or human_tool_description(request.tool_name, request.arguments))[
-            :HUMAN_DESCRIPTION_CHARS
-        ],
+        "summary": (
+            request.reason
+            or human_tool_description(request.tool_name, request.arguments)
+        )[:HUMAN_DESCRIPTION_CHARS],
     }
 
 

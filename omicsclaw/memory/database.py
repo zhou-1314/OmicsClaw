@@ -29,8 +29,11 @@ CREATE TABLE IF NOT EXISTS turn_ingress (
     payload_hash TEXT NOT NULL,
     turn_id TEXT NOT NULL,
     created_at REAL NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (session_id, source_request_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_turn_ingress_history ON turn_ingress(session_id,created_at,source_request_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
     session_id  TEXT PRIMARY KEY,
@@ -412,10 +415,23 @@ class Database:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Apply additive columns to databases created by older releases."""
+    ingress_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(turn_ingress)")
+    }
+    if "payload_json" not in ingress_columns:
+        try:
+            conn.execute(
+                "ALTER TABLE turn_ingress ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}' "
+            )
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
     columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "runtime" not in columns:
         try:
-            conn.execute("ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'")
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'"
+            )
         except sqlite3.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
@@ -436,7 +452,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name in columns:
                 continue
             try:
-                conn.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + declaration)
+                conn.execute(
+                    "ALTER TABLE " + table + " ADD COLUMN " + name + " " + declaration
+                )
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
@@ -445,14 +463,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-
 def _create_private(path: str) -> bool:
     """Create an empty file at *path* with mode 0600 unless one exists.
 
     :returns: ``True`` when this call created the file.
     """
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE)
+        descriptor = os.open(
+            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE
+        )
     except FileExistsError:
         return False
     os.close(descriptor)

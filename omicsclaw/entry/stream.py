@@ -389,34 +389,9 @@ class TurnStream:
                     )
                 )
             for row in rows:
-                payload = dict(row.payload)
-                for key in (
-                    "schema_version",
-                    "type",
-                    "sequence",
-                    "session_id",
-                    "turn_id",
-                ):
-                    payload.pop(key, None)
-                try:
-                    kind = TurnEventType(row.type)
-                except ValueError:
-                    continue
-                kwargs = {
-                    "type": kind,
-                    "seq": row.seq,
-                    "session_id": row.session_id,
-                    "turn_id": row.turn_id,
-                    "wire_payload": payload,
-                }
-                if kind is TurnEventType.EXCHANGE_END:
-                    kwargs["terminal"] = payload.get("terminal")
-                elif kind is TurnEventType.GAP:
-                    kwargs["gap"] = (
-                        payload.get("oldest_available", row.seq),
-                        payload.get("latest", self._latest),
-                    )
-                pending.append(TurnEvent(**kwargs))
+                event = event_from_durable(row)
+                if event is not None:
+                    pending.append(event)
             if not rows and cursor + 1 < self._latest:
                 # The async writer may not have flushed yet. The ring is the
                 # authoritative same-process fallback; only emit GAP when
@@ -505,6 +480,48 @@ class TurnStream:
             callback(len(self._observers))
         except Exception:  # pragma: no cover - a listener bug, not a flow
             pass
+
+
+def event_from_durable(row) -> TurnEvent | None:
+    """Rehydrate inert event data for all shared observers, without executing it."""
+    payload = dict(row.payload)
+    for key in ("schema_version", "type", "sequence", "session_id", "turn_id"):
+        payload.pop(key, None)
+    try:
+        kind = TurnEventType(row.type)
+    except ValueError:
+        return None
+    kwargs = {
+        "type": kind,
+        "seq": row.seq,
+        "session_id": row.session_id,
+        "turn_id": row.turn_id,
+        "wire_payload": payload,
+    }
+    if kind is TurnEventType.EXCHANGE_END:
+        kwargs["terminal"] = payload.get("terminal")
+    elif kind is TurnEventType.GAP:
+        kwargs["gap"] = (
+            payload.get("oldest_available", row.seq),
+            payload.get("latest", row.seq),
+        )
+    elif kind is TurnEventType.APPROVAL_REQUIRED:
+        from omicsclaw.tools import ApprovalRequest
+        from omicsclaw.tools.base import RiskLevel, ApprovalMode
+
+        kwargs["request_id"] = payload.get("request_id", "")
+        kwargs["subagent"] = payload.get("subagent", "")
+        if payload.get("tool_name"):
+            kwargs["approval"] = ApprovalRequest(
+                tool_name=payload["tool_name"],
+                arguments=payload.get("arguments", "{}"),
+                reason=payload.get("reason", ""),
+                risk_level=RiskLevel(payload.get("risk_level", "high")),
+                approval_mode=ApprovalMode(payload.get("approval_mode", "ask")),
+                reason_shows_call=bool(payload.get("reason_shows_call", False)),
+                ask_every_time=bool(payload.get("ask_every_time", False)),
+            )
+    return TurnEvent(**kwargs)
 
 
 class TurnObservation:

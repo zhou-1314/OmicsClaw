@@ -70,6 +70,9 @@ def effective_model(app: AgentApp) -> str:
     same configuration the app was built from, read-only, and falls back
     to the configured name when it cannot be resolved.
     """
+    explicit = getattr(app, "resolved_model", None)
+    if explicit is not None:
+        return explicit
     try:
         resolved = resolve_config(app.config.provider, app.config.model).model
     except Exception:  # noqa: BLE001 - a report must not fail on this
@@ -107,7 +110,9 @@ def doctor_report(app: AgentApp) -> dict[str, Any]:
     }
 
 
-def _check(name: str, status: str, summary: str, details: list[str] | None = None) -> dict[str, Any]:
+def _check(
+    name: str, status: str, summary: str, details: list[str] | None = None
+) -> dict[str, Any]:
     shown = [_clip(line) for line in details or ()]
     if len(shown) > _MAX_DETAILS:
         hidden = len(shown) - _MAX_DETAILS
@@ -156,8 +161,7 @@ def _skipped_skills(app: AgentApp) -> dict[str, Any]:
     if not skipped:
         return _check("skipped_skills", "ok", "No skill was skipped.")
     details = [
-        f"{entry.path}: {entry.reason}"
-        + (f" ({entry.detail})" if entry.detail else "")
+        f"{entry.path}: {entry.reason}" + (f" ({entry.detail})" if entry.detail else "")
         for entry in skipped
     ]
     return _check(

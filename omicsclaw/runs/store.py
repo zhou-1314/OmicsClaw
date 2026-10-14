@@ -159,7 +159,7 @@ class RunStore:
             return None
         return self._from_payload(events[-1]["kind"], events[-1]["payload"])
 
-    def events(self, object_id=None, *, after_seq=0, run_id=None):
+    def events(self, object_id=None, *, after_seq=0, run_id=None, limit=None):
         with self._lock:
             rows = self.db.execute(
                 "SELECT seq,object_id,kind,event,payload FROM run_events "
@@ -168,7 +168,7 @@ class RunStore:
                 "OR EXISTS (SELECT 1 FROM json_each(run_events.payload, '$.run_ids') WHERE value=?) "
                 "OR json_extract(payload, '$.artifact_id') IN "
                 "(SELECT id FROM run_objects WHERE kind='artifact' AND json_extract(payload, '$.run_id')=?)) "
-                "ORDER BY seq",
+                "ORDER BY seq LIMIT ?",
                 (
                     after_seq,
                     object_id,
@@ -178,6 +178,7 @@ class RunStore:
                     run_id,
                     run_id,
                     run_id,
+                    -1 if limit is None else max(1, int(limit)),
                 ),
             ).fetchall()
         return [

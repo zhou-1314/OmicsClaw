@@ -140,3 +140,30 @@ def test_failed_receipt_write_cannot_schedule_a_turn(tmp_path, monkeypatch):
             await app.aclose()
 
     asyncio.run(run())
+
+
+def test_admitted_payload_is_recoverable_before_execution_without_replay(
+    tmp_path, monkeypatch
+):
+    async def run():
+        app = attach_sessions(
+            build_app(
+                AppConfig(workspace=tmp_path, durable_turn_events=True),
+                provider=Scripted(Message(role=Role.ASSISTANT, content="unused")),
+            )
+        )
+
+        async def blocked_pump(_self, _lane):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(type(app.sessions), "_pump", blocked_pump)
+        try:
+            await app.sessions.submit("s", "accepted user input", source_request_id="r")
+            receipt = app.sessions.request_receipt("s", "r")
+            assert receipt["payload"]["text"] == "accepted user input"
+            assert receipt["payload"]["compact"] is False
+        finally:
+            await app.sessions.shutdown(0)
+            await app.aclose()
+
+    asyncio.run(run())

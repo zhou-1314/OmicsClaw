@@ -635,7 +635,9 @@ class WorkspaceKernelBinding:
             else Path(workspace)
         )
         self.manager = PersistentKernelManager(
-            root, on_figure=self._register_figure, remote_runtime=remote_runtime,
+            root,
+            on_figure=self._register_figure,
+            remote_runtime=remote_runtime,
             python=python,
         )
         self._root = root
@@ -1603,6 +1605,12 @@ class AgentApp:
     desktop server binds the artifact store to it once the jobs manager
     exists; every other surface leaves it unbound and untouched."""
 
+    provider_for_role: Callable[[str], LLMProvider] | None = None
+    """Deployment-owned caller selection. None reuses the main provider."""
+
+    resolved_model: str | None = None
+    """Explicit model authority for deployments that do not read ambient config."""
+
     def set_permission_mode(self, mode: PermissionMode) -> PermissionMode | None:
         """Switch the gate between ``default`` and ``auto-approve``.
 
@@ -1839,6 +1847,8 @@ def build_app(
     resolved_model: str | None = None,
     model_limits: ModelLimits | None = None,
     capabilities: DeploymentCapabilities | None = None,
+    provider_for_role: Callable[[str], LLMProvider] | None = None,
+    review_call=None,
 ) -> AgentApp:
     """Wire one deployment. The only function that knows the order.
 
@@ -1972,14 +1982,20 @@ def build_app(
         # :attr:`AgentApp.kernels` (the desktop jobs plane's code_run runner
         # reads it back). Lazy kernels keep this cheap for deployments that
         # never run a cell.
-        kernels = WorkspaceKernelBinding(
-            config.workspace,
-            python=capabilities.science_python,
-            remote_runtime=remote_kernels,
-            notebook_store=(
-                NotebookStore(remembering.database) if remembering is not None else None
-            ),
-        ) if capabilities.notebook else None
+        kernels = (
+            WorkspaceKernelBinding(
+                config.workspace,
+                python=capabilities.science_python,
+                remote_runtime=remote_kernels,
+                notebook_store=(
+                    NotebookStore(remembering.database)
+                    if remembering is not None
+                    else None
+                ),
+            )
+            if capabilities.notebook
+            else None
+        )
         if tools is None:
             mounted: Sequence[Tool] = (
                 *foundation_tools(
@@ -2068,7 +2084,9 @@ def build_app(
         subagents = build_subagent_registry(config)
         if subagents is not None:
             runner = ChildRunner(
-                provider=provider,
+                provider=(
+                    provider_for_role("subagent") if provider_for_role else provider
+                ),
                 parent=registry,
                 config=config,
                 sandbox=binding,
@@ -2095,7 +2113,9 @@ def build_app(
 
         app_prompt = RecordingPromptSource(build_prompt(chosen))
         budget = build_budget(model, snapshot, limits=model_limits)
-        summarizer = build_summarizer(provider, config)
+        summarizer = build_summarizer(
+            provider_for_role("summary") if provider_for_role else provider, config
+        )
         # The registry goes in as itself — see build_registry on why nothing
         # may wrap it without forwarding both optional Protocols.
         #
@@ -2155,12 +2175,14 @@ def build_app(
         telemetry=observing,
         kernels=kernels,
         env_supply=env_supply,
+        provider_for_role=provider_for_role,
+        resolved_model=resolved_model,
     )
     if config.shadow_review:
         # The reviewer reads the config and receives everything else as
         # arguments, so holding the pre-attach app is deliberate:
         # attach_sessions copies this field onto the attached instance.
-        app = replace(app, shadow_review=ShadowReview(app))
+        app = replace(app, shadow_review=ShadowReview(app, review_call=review_call))
     return app
 
 

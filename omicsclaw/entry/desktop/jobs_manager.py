@@ -395,6 +395,14 @@ class JobStore:
         )
         return int(rows[0]["seq"] or 0) if rows else 0
 
+    def earliest_seq(self, job_id: str) -> int:
+        rows = self._db.run(
+            lambda conn: conn.execute(
+                "SELECT MIN(seq) AS seq FROM job_events WHERE job_id = ?", (job_id,)
+            ).fetchall()
+        )
+        return int(rows[0]["seq"] or 0) if rows else 0
+
 
 def _decode_capabilities(value: Any) -> tuple[str, ...]:
     try:
@@ -1417,7 +1425,9 @@ class JobsManager:
             if record.runtime == "local" and record.status in TERMINAL_JOB_STATUSES:
                 self._sync_run_status(record.id, record.status)
         if register_default_runners:
-            self.register_runner("skill_run", SkillApiRunner(app, artifacts=self.artifacts))
+            self.register_runner(
+                "skill_run", SkillApiRunner(app, artifacts=self.artifacts)
+            )
         # P4's code_run rides the same lifecycle on the deployment's
         # persistent kernels: the binding build_app mounted behind the
         # ``python`` tool when there is one (one manager, shared session
@@ -1549,7 +1559,9 @@ class JobsManager:
         self.run_store.save(started, event="started")
         try:
             result = verify()
-        except Exception as exc:  # noqa: BLE001 - verifier failure is persisted evidence
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - verifier failure is persisted evidence
             _log.exception("verification failed to execute: check=%s", check)
             result = Verification(check=check, verdict="inconclusive", details=str(exc))
         result.verification_id = started.verification_id
@@ -1640,9 +1652,7 @@ class JobsManager:
         target_caps = (
             ("remote_kernel",)
             if kind == "code_run" and is_remote_target
-            else ("remote_exec", "remote_submit")
-            if is_remote_target
-            else ()
+            else ("remote_exec", "remote_submit") if is_remote_target else ()
         )
         target_snapshot = None
         if is_remote_target:
@@ -1682,12 +1692,12 @@ class JobsManager:
             inputs=inputs,
             runtime=runtime,
             target_alias=target_snapshot.alias if target_snapshot is not None else "",
-            target_workdir=target_snapshot.workdir
-            if target_snapshot is not None
-            else "",
-            capabilities=target_snapshot.capabilities
-            if target_snapshot is not None
-            else (),
+            target_workdir=(
+                target_snapshot.workdir if target_snapshot is not None else ""
+            ),
+            capabilities=(
+                target_snapshot.capabilities if target_snapshot is not None else ()
+            ),
             status="queued",
             created_at=time.time(),
         )
@@ -1700,9 +1710,11 @@ class JobsManager:
             plan_id=plan_id,
             plan_steps=plan_steps,
             step_id=step_id,
-            execution_location="remote:" + record.target_alias
-            if record.target_alias
-            else record.runtime,
+            execution_location=(
+                "remote:" + record.target_alias
+                if record.target_alias
+                else record.runtime
+            ),
         )
         self.run_store.save(run)
         self._run_ids[record.id] = run.run_id
@@ -2153,7 +2165,9 @@ class JobsManager:
                 self.store.update_job(
                     job_id, status="failed", error=exc.error, finished_at=time.time()
                 )
-        except Exception as exc:  # noqa: BLE001 - one job must never take the plane down
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - one job must never take the plane down
             _log.exception("job %s crashed the runner", job_id)
             named = type(exc).__name__ + ": " + str(exc)
             terminal = ("job.failed", {"error": named, "phase": "run"})

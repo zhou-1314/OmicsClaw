@@ -139,9 +139,7 @@ def parse_verdict(text: str) -> ShadowReviewVerdict:
     match = _VERDICT_LINE.match(raw)
     if match is None:
         if raw.strip():
-            _log.info(
-                "shadow review: unreadable reviewer answer (%r)", raw[:120]
-            )
+            _log.info("shadow review: unreadable reviewer answer (%r)", raw[:120])
         return ShadowReviewVerdict("pass")
     note = raw.split("\n", 1)[1].strip() if "\n" in raw else ""
     return ShadowReviewVerdict(
@@ -175,9 +173,7 @@ class ShadowReviewCheckpoint:
     _watermark: ArtifactRecord | None = None
     _batch: list[ArtifactRecord] = field(default_factory=list)
 
-    def evaluate(
-        self, records: Sequence[ArtifactRecord]
-    ) -> list[ArtifactRecord]:
+    def evaluate(self, records: Sequence[ArtifactRecord]) -> list[ArtifactRecord]:
         """Fold *records* (newest first, as the store returns them) into
         the window and answer the batch a trigger fires, if any.
 
@@ -205,9 +201,7 @@ class ShadowReviewCheckpoint:
         # Prepend so the batch stays newest-first, matching the store's
         # own ordering — the reviewer prompt reads it top-down.
         self._batch[0:0] = new
-        structured = any(
-            record.kind in STRUCTURED_ARTIFACT_KINDS for record in new
-        )
+        structured = any(record.kind in STRUCTURED_ARTIFACT_KINDS for record in new)
         if (
             overflow
             or structured
@@ -406,17 +400,25 @@ class ShadowReview:
         provider = provider_from_env(
             config.provider, model=model, max_tokens=_MAX_TOKENS
         )
-        request = Message(
-            role=Role.USER,
-            content=_review_prompt(session_id, records, history),
+        return await review_with_provider(
+            provider, session_id, records, history, timeout_s=self._timeout_s
         )
-        async with asyncio.timeout(self._timeout_s):
-            completion = await provider.generate([request], None)
-        return parse_verdict(completion.message.content)
 
     def nudge_for(self, session_id: str) -> ShadowReviewNudge:
         """The augmentor that delivers this session's pending verdict note."""
         return ShadowReviewNudge(self._notes, session_id)
+
+
+async def review_with_provider(
+    provider, session_id, records, history, *, timeout_s=30.0
+):
+    """The same review prompt and verdict codec for injected and ambient callers."""
+    request = Message(
+        role=Role.USER, content=_review_prompt(session_id, records, history)
+    )
+    async with asyncio.timeout(timeout_s):
+        completion = await provider.generate([request], None)
+    return parse_verdict(completion.message.content)
 
 
 def _verdict_note(verdict: ShadowReviewVerdict) -> str:

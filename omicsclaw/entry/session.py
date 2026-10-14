@@ -490,7 +490,11 @@ class SessionRegistry:
         turn_id = new_turn_id()
         if payload_hash:
             receipt = self._event_log.claim_request(
-                session_id, source_request_id, payload_hash, turn_id
+                session_id,
+                source_request_id,
+                payload_hash,
+                turn_id,
+                {"text": text, "values": values or {}, "compact": compaction_only},
             )
             if receipt["turn_id"] != turn_id:
                 raise SubmissionRefused("request was concurrently admitted")
@@ -535,7 +539,9 @@ class SessionRegistry:
         handle, _newly_admitted = await self.admit(message)
         return handle
 
-    async def admit(self, message: InboundMessage) -> tuple[TurnHandle, bool]:
+    async def admit(
+        self, message: InboundMessage, *, compaction_only: bool = False
+    ) -> tuple[TurnHandle, bool]:
         """Return the handle and whether this call admitted it, without suspending.
 
         The same shared enqueue/receipt path serves every surface. A repeated
@@ -550,7 +556,7 @@ class SessionRegistry:
             message.text,
             values=message.values,
             source_request_id=message.source_request_id,
-            compaction_only=False,
+            compaction_only=compaction_only,
         )
         return handle, not existed
 

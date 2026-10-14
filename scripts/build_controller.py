@@ -114,7 +114,17 @@ def build(root: Path, destination: Path, *, allow_dirty: bool = False):
     ):
         raise ValueError("controller source exceeds frozen budget")
     manifest = {
-        "componentVersion": "0.1.0",
+        "componentVersion": next(
+            ast.literal_eval(node.value)
+            for node in ast.parse(
+                (root / "omicsclaw/entry/ssh/controller.py").read_text()
+            ).body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "COMPONENT_VERSION"
+                for target in node.targets
+            )
+        ),
         "protocolVersion": 1,
         "sourceCommit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True

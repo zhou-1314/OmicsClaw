@@ -6,6 +6,7 @@ import base64
 import time
 from dataclasses import dataclass
 from typing import Any
+from collections.abc import Callable
 
 from omicsclaw.provider import ProviderConfig, ProviderDialect, provider_for
 
@@ -25,6 +26,8 @@ class ModelSnapshot:
     revision: int = 1
     provider_name: str = "custom"
     endpoint_hint: str = ""
+    max_retries: int = 0
+    connect_timeout_seconds: float | None = None
 
     def __post_init__(self):
         if (
@@ -44,6 +47,13 @@ class ModelSnapshot:
             raise ValueError("invalid output budget")
         if not 1 <= self.timeout_seconds <= 3600:
             raise ValueError("invalid model deadline")
+        if type(self.max_retries) is not int or not 0 <= self.max_retries <= 5:
+            raise ValueError("invalid SDK retry policy")
+        if (
+            self.connect_timeout_seconds is not None
+            and not 0 < self.connect_timeout_seconds <= self.timeout_seconds
+        ):
+            raise ValueError("invalid connect deadline")
 
 
 class RpcByteStream:
@@ -85,9 +95,18 @@ class RpcByteStream:
 
 
 class RpcTransport:
-    def __init__(self, peer: JsonPeer, snapshot: ModelSnapshot):
+    def __init__(
+        self,
+        peer: JsonPeer,
+        snapshot: ModelSnapshot,
+        *,
+        role: str | None = None,
+        identity: Callable[[], dict | None] | None = None,
+    ):
         self.peer = peer
         self.snapshot = snapshot
+        self.role = role
+        self.identity = identity
 
     async def open(self, request):
         import json
@@ -97,6 +116,15 @@ class RpcTransport:
         body = json.loads(await request.aread())
         if body.get("model") not in self.snapshot.allowed_models:
             raise RpcError("model outside Mac snapshot")
+        caller = None
+        if self.role is not None:
+            identity = self.identity() if self.identity else None
+            if not identity or any(
+                not identity.get(key)
+                for key in ("controllerInstanceId", "epoch", "requestId", "sessionId")
+            ):
+                raise RpcError("model caller identity required")
+            caller = {**identity, "role": self.role}
         deadline = time.monotonic() + self.snapshot.timeout_seconds
         head = await self.peer.call(
             "model.open",
@@ -106,6 +134,7 @@ class RpcTransport:
                 "dialect": self.snapshot.dialect.value,
                 "path": request.url.path,
                 "body": body,
+                **({"caller": caller} if caller else {}),
             },
             timeout=self.snapshot.timeout_seconds,
         )
@@ -139,9 +168,16 @@ def sdk_transport(http, bridge: RpcTransport):
 
 
 class SDKClientFactory:
-    def __init__(self, snapshot: ModelSnapshot, peer: JsonPeer):
+    def __init__(
+        self,
+        snapshot: ModelSnapshot,
+        peer: JsonPeer,
+        *,
+        role: str | None = None,
+        identity: Callable[[], dict | None] | None = None,
+    ):
         self.snapshot = snapshot
-        self.transport = RpcTransport(peer, snapshot)
+        self.transport = RpcTransport(peer, snapshot, role=role, identity=identity)
         self.clients: list[Any] = []
 
     def __call__(self, config: ProviderConfig):
@@ -179,8 +215,14 @@ class SDKClientFactory:
         self.clients.clear()
 
 
-def bridged_provider(snapshot: ModelSnapshot, peer: JsonPeer):
-    factory = SDKClientFactory(snapshot, peer)
+def bridged_provider(
+    snapshot: ModelSnapshot,
+    peer: JsonPeer,
+    *,
+    role: str | None = None,
+    identity: Callable[[], dict | None] | None = None,
+):
+    factory = SDKClientFactory(snapshot, peer, role=role, identity=identity)
     config = ProviderConfig(
         provider=snapshot.provider_name,
         model=snapshot.model,
@@ -189,7 +231,9 @@ def bridged_provider(snapshot: ModelSnapshot, peer: JsonPeer):
         max_tokens=snapshot.output_tokens,
         temperature=snapshot.temperature,
         timeout_seconds=snapshot.timeout_seconds,
-        max_retries=0,
+        max_retries=snapshot.max_retries,
+        connect_timeout_seconds=snapshot.connect_timeout_seconds
+        or min(10, snapshot.timeout_seconds),
     )
     return (
         provider_for(config, dialect=snapshot.dialect, client_factory=factory),
