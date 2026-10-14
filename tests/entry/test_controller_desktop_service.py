@@ -1,14 +1,16 @@
 """Typed stdio routes use existing managers and refuse missing profiles explicitly."""
 
 import asyncio
-from types import SimpleNamespace
+
 import pytest
+
 from omicsclaw.entry import AppConfig, attach_sessions, build_app
 from omicsclaw.entry.assembly import DeploymentCapabilities
-from omicsclaw.entry.desktop.jobs_manager import JobsManager
 from omicsclaw.entry.desktop.interactions import DesktopInteractions
-from tests.entry.test_turn_runner import Scripted
+from omicsclaw.entry.desktop.jobs_manager import JobsManager
+from omicsclaw.entry.desktop.turn_submission import DesktopIngressError
 from omicsclaw.schema import Message, Role
+from tests.entry.test_turn_runner import Scripted
 
 
 def test_desktop_service_has_real_workspace_and_jobs_authority_and_explicit_caps(
@@ -23,11 +25,16 @@ def test_desktop_service_has_real_workspace_and_jobs_authority_and_explicit_caps
                 provider=Scripted(Message(role=Role.ASSISTANT, content="done")),
                 resolved_model="mac",
                 capabilities=DeploymentCapabilities(notebook=False),
-            )
+            ),
+            abandon_grace_s=0,
         )
         jobs = JobsManager(app, register_default_runners=False)
         service = DesktopService(app, jobs, DesktopInteractions(app))
         try:
+            health = await service.dispatch({"method": "GET", "path": "/health"})
+            contract = health["payload"]["contracts"]["desktop_chat"]
+            assert contract["durable_ingress_idempotency"] is True
+            assert contract["abandon_grace_s"] == 0
             workspace = await service.dispatch({"method": "GET", "path": "/workspace"})
             assert workspace["payload"]["workspace"] == str(tmp_path)
             records = await service.dispatch({"method": "GET", "path": "/jobs"})
@@ -52,7 +59,7 @@ def test_desktop_service_has_real_workspace_and_jobs_authority_and_explicit_caps
                 notebook["status"] == 409
                 and notebook["payload"]["capability"] == "notebook"
             )
-            with pytest.raises(Exception):
+            with pytest.raises(DesktopIngressError):
                 await service.dispatch(
                     {"method": "GET", "path": "https://localhost/secrets"}
                 )

@@ -44,6 +44,12 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
     :attr:`~omicsclaw.entry.config.AppConfig.launch_id`, which a managed
     launch compares with the id it passed.
     """
+    chat_contract = desktop_chat_contract(
+        abandon_grace_s=app.sessions.abandon_grace_s if app.sessions else None
+    )
+    chat_contract["durable_ingress_idempotency"] = (
+        app.sessions is not None and app.sessions.durable_identity is not None
+    )
     return {
         "status": "ok",
         "version": __version__,
@@ -77,11 +83,7 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
         "launch_id": app.config.launch_id,
         "served_paths": list(SERVED_PATHS),
         "contracts": {
-            "desktop_chat": desktop_chat_contract(
-                abandon_grace_s=(
-                    app.sessions.abandon_grace_s if app.sessions is not None else None
-                )
-            ),
+            "desktop_chat": chat_contract,
             "desktop_jobs": desktop_jobs_contract(),
             "desktop_artifacts": desktop_artifacts_contract(),
         },
