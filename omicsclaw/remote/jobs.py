@@ -38,6 +38,7 @@ still exist (``kill -0``), and if not, what code did it leave behind.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -125,6 +126,7 @@ class RemoteJobHandle:
     request_id: str = ""
     payload_hash: str = ""
     cluster: str = ""
+    scheduler_identity: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.target_alias:
@@ -132,6 +134,30 @@ class RemoteJobHandle:
         if not self.target_workdir:
             object.__setattr__(self, "target_workdir", self.workdir)
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        if self.scheduler_identity is not None:
+            identity = dict(self.scheduler_identity)
+            if (
+                self.kind != KIND_SLURM
+                or self.process_identity is not None
+                or set(identity)
+                != {"uid", "user", "cluster", "job_id", "submit_time", "nonce"}
+                or type(identity["uid"]) is not int
+                or identity["uid"] < 0
+                or any(
+                    not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", str(identity[key]))
+                    for key in ("user", "cluster")
+                )
+                or not re.fullmatch(r"[1-9][0-9]*", str(identity["job_id"]))
+                or identity["job_id"] != self.job_id
+                or identity["cluster"] != self.cluster
+                or not re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}",
+                    str(identity["submit_time"]),
+                )
+                or not re.fullmatch(r"[a-f0-9]{32}", str(identity["nonce"]))
+            ):
+                raise ValueError("invalid_scheduler_identity")
+            object.__setattr__(self, "scheduler_identity", MappingProxyType(identity))
         if self.process_identity is not None:
             identity = dict(self.process_identity)
             integers = ("uid", "pid", "start_ticks", "pgid", "sid")
@@ -168,9 +194,35 @@ class RemoteJobHandle:
                 "request_id": self.request_id,
                 "payload_hash": self.payload_hash,
                 "cluster": self.cluster,
+                "scheduler_identity": dict(self.scheduler_identity)
+                if self.scheduler_identity
+                else None,
             },
             ensure_ascii=False,
         )
+
+    def proof_digest(self) -> str:
+        identity = (
+            self.process_identity
+            if self.kind == KIND_NOHUP
+            else self.scheduler_identity
+        )
+        if identity is None:
+            return ""
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "kind": self.kind,
+                    "host": self.host,
+                    "workdir": self.workdir,
+                    "request_id": self.request_id,
+                    "payload_hash": self.payload_hash,
+                    "identity": dict(identity),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
 
     @classmethod
     def from_json(cls, text: str) -> RemoteJobHandle:
@@ -192,6 +244,7 @@ class RemoteJobHandle:
             request_id=str(decoded.get("request_id") or ""),
             payload_hash=str(decoded.get("payload_hash") or ""),
             cluster=str(decoded.get("cluster") or ""),
+            scheduler_identity=decoded.get("scheduler_identity"),
         )
 
     def identity(self) -> str:
@@ -280,7 +333,18 @@ def build_submit_command(workdir: str, kind: str) -> str:
     backgrounds only ``B``.
     """
     if kind == KIND_SLURM:
-        return f"cd -- {shell_quote(workdir)} && sbatch --parsable ./job.sh"
+        return (
+            f"cd -- {shell_quote(workdir)} || exit 1; "
+            "_nonce=$(head -c 64 ./_omicsclaw_nonce) && "
+            "printf '%s' \"$_nonce\" | grep -Eq '^[a-f0-9]{32}$' || exit 1; "
+            "if mkdir ./_omicsclaw_launch_claim 2>/dev/null; then "
+            "sbatch --parsable --job-name=omicsclaw_$_nonce --comment=omicsclaw_$_nonce ./job.sh "
+            "> ./_omicsclaw_scheduler_ack.tmp && "
+            "mv -- ./_omicsclaw_scheduler_ack.tmp ./_omicsclaw_scheduler_ack && "
+            "cat ./_omicsclaw_scheduler_ack; "
+            "elif [ -f ./_omicsclaw_scheduler_ack ]; then head -c 4096 ./_omicsclaw_scheduler_ack; "
+            "else printf '%s' 0; exit 1; fi"
+        )
     if kind == KIND_NOHUP:
         return (
             f"cd -- {shell_quote(workdir)} || exit 1; "
@@ -341,16 +405,11 @@ def build_status_command(handle: RemoteJobHandle) -> str:
     """
     quoted = shell_quote(handle.workdir)
     if handle.kind == KIND_SLURM:
-        job_id = handle.job_id or ""
-        return (
-            f"cd -- {quoted} && "
-            f"q=$(squeue -h -j {job_id} -o %T 2>/dev/null); "
-            'if [ -n "$q" ]; then echo "$q"; exit 0; fi; '
-            f"a=$(sacct -n -X -j {job_id} -o State 2>/dev/null "
-            "| head -n 1 | tr -d ' '); "
-            'if [ -n "$a" ]; then echo "$a"; else '
-            f"echo {_LOST_MARK}; fi"
-        )
+        if handle.scheduler_identity is None:
+            return f"printf '%s\\n' {_LOST_MARK}"
+        from .scheduler import probe_command
+
+        return probe_command(handle.job_id, handle.cluster)
     pgid = _nohup_pgid(handle)
     if handle.process_identity is None:
         return f"printf '%s\\n' {_LOST_MARK}"
@@ -386,13 +445,51 @@ def _job_identity_guard(handle: RemoteJobHandle) -> str:
     proof = handle.process_identity
     if proof is None:
         return "false"
+    fields = " && ".join(
+        "printf '%s' \"$_proof\" | grep -Eq "
+        + shell_quote(
+            re.escape(json.dumps(key) + ":" + json.dumps(value, separators=(",", ":")))
+            + r"([,}])"
+        )
+        for key, value in proof.items()
+    )
     return (
         f'[ "$(id -u)" = {proof["uid"]} ] && '
         f'[ "$(stat -c %u . 2>/dev/null)" = {proof["uid"]} ] && '
         f'[ "$(hostname)" = {shell_quote(str(proof["host_id"]))} ] && '
         f'[ "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" = {shell_quote(str(proof["boot_id"]))} ] && '
-        f'[ "$(cat ./_omicsclaw_nonce 2>/dev/null)" = {shell_quote(str(proof["nonce"]))} ]'
+        "[ -f ./_omicsclaw_nonce ] && [ ! -L ./_omicsclaw_nonce ] && "
+        f'[ "$(cat ./_omicsclaw_nonce 2>/dev/null)" = {shell_quote(str(proof["nonce"]))} ] && '
+        "[ -f ./_omicsclaw_process.json ] && [ ! -L ./_omicsclaw_process.json ] && "
+        '[ "$(stat -c %s ./_omicsclaw_process.json)" -le 4096 ] && '
+        "_proof=$(head -c 4096 ./_omicsclaw_process.json | tr -d ' \\t\\r\\n') && "
+        + fields
     )
+
+
+def has_identity_proof(handle: RemoteJobHandle) -> bool:
+    if handle.kind == KIND_NOHUP:
+        return handle.process_identity is not None
+    if handle.kind == KIND_SLURM:
+        return handle.scheduler_identity is not None
+    return False
+
+
+def verified_state(handle: RemoteJobHandle, report) -> str:
+    if (
+        not has_identity_proof(handle)
+        or getattr(report, "identity_verified", False) is not True
+        or getattr(report, "identity_digest", "") != handle.proof_digest()
+    ):
+        return UNKNOWN
+    state = getattr(report, "state", UNKNOWN)
+    if (
+        state not in STATES
+        or state in {DONE, FAILED, CANCELED}
+        and type(getattr(report, "exit_code", None)) is not int
+    ):
+        return UNKNOWN
+    return state
 
 
 def parse_status(kind: str, output: str) -> tuple[str, int | None]:
@@ -460,7 +557,11 @@ def _nohup_pgid(handle: RemoteJobHandle) -> int:
 def build_cancel_command(handle: RemoteJobHandle) -> str:
     """Stop the job the way its kind stops: ``scancel`` or group SIGTERM."""
     if handle.kind == KIND_SLURM:
-        return f"scancel {handle.job_id}"
+        if handle.scheduler_identity is None:
+            return f"printf '%s\\n' {_LOST_MARK}; exit 1"
+        from .scheduler import cancel_command
+
+        return cancel_command(handle.scheduler_identity)
     pgid = _nohup_pgid(handle)
     if handle.process_identity is None:
         return f"printf '%s\\n' {_LOST_MARK}; exit 1"

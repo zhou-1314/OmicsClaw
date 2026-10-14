@@ -27,6 +27,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .jobs import has_identity_proof, verified_state
 from .ssh import RemoteHostUnreachable
 
 Report = dict[str, int]
@@ -59,6 +60,12 @@ async def refresh_in_flight(
     for row in store.in_flight(include_unknown=True):
         report["checked"] += 1
         try:
+            if not has_identity_proof(row.handle()):
+                store.update_status(row.id, "unknown", last_seen=now())
+                report["unknown"] += 1
+                if on_remote_status is not None and row.local_job_id:
+                    on_remote_status(row.local_job_id, row.host_alias, "unknown")
+                continue
             executor = plane.executor_for(row.host_alias)
             outcome = await executor.status(row.handle())
         except (RemoteHostUnreachable, OSError):
@@ -67,15 +74,16 @@ async def refresh_in_flight(
             if on_remote_status is not None and row.local_job_id:
                 on_remote_status(row.local_job_id, row.host_alias, "unknown")
             continue
-        store.update_status(row.id, outcome.state, last_seen=now())
-        if outcome.state in ("pending", "running"):
+        state = verified_state(row.handle(), outcome)
+        store.update_status(row.id, state, last_seen=now())
+        if state in ("pending", "running"):
             report["still_in_flight"] += 1
-        elif outcome.state == "unknown":
+        elif state == "unknown":
             report["unknown"] += 1
         else:
             report["terminal"] += 1
         if on_remote_status is not None and row.local_job_id:
-            on_remote_status(row.local_job_id, row.host_alias, outcome.state)
+            on_remote_status(row.local_job_id, row.host_alias, state)
     return report
 
 

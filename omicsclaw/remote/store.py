@@ -99,7 +99,11 @@ class RemoteJobRow:
 
     def handle(self) -> RemoteJobHandle:
         proof = json.loads(self.proof_json)
-        if not isinstance(proof, dict) or set(proof) - {"process_identity", "cluster"}:
+        if not isinstance(proof, dict) or set(proof) - {
+            "process_identity",
+            "scheduler_identity",
+            "cluster",
+        }:
             raise ValueError("invalid_handle_proof")
         return RemoteJobHandle(
             kind=self.kind,
@@ -113,6 +117,7 @@ class RemoteJobRow:
             target_workdir=self.target_workdir or self.workdir,
             capabilities=self.capabilities,
             process_identity=proof.get("process_identity"),
+            scheduler_identity=proof.get("scheduler_identity"),
             cluster=str(proof.get("cluster") or ""),
             request_id=self.source_request_id,
             payload_hash=self.payload_hash,
@@ -251,6 +256,9 @@ class RemoteJobStore:
                         if handle.process_identity
                         else None,
                         "cluster": handle.cluster,
+                        "scheduler_identity": dict(handle.scheduler_identity)
+                        if handle.scheduler_identity
+                        else None,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
@@ -343,7 +351,10 @@ class RemoteJobStore:
             (handle.kind == "nohup" and handle.process_identity is None)
             or (
                 handle.kind == "slurm"
-                and not re.fullmatch(r"[1-9][0-9]*", handle.job_id or "")
+                and (
+                    not re.fullmatch(r"[1-9][0-9]*", handle.job_id or "")
+                    or handle.scheduler_identity is None
+                )
             )
             or handle.kind not in {"nohup", "slurm"}
         ):
@@ -379,6 +390,7 @@ class RemoteJobStore:
                     or current.job_id != handle.job_id
                     or expected.process_identity != handle.process_identity
                     or expected.cluster != handle.cluster
+                    or expected.scheduler_identity != handle.scheduler_identity
                 ):
                     raise ValueError("submission_handle_conflict")
                 return current
@@ -388,6 +400,9 @@ class RemoteJobStore:
                     if handle.process_identity
                     else None,
                     "cluster": handle.cluster,
+                    "scheduler_identity": dict(handle.scheduler_identity)
+                    if handle.scheduler_identity
+                    else None,
                 },
                 ensure_ascii=False,
                 sort_keys=True,

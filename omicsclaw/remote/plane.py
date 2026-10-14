@@ -78,6 +78,7 @@ from .jobs import (
     build_status_command,
     build_submit_command,
     detect_scheduler,
+    has_identity_proof,
     parse_status,
     parse_submit_output,
 )
@@ -252,7 +253,10 @@ class RemoteExecutor:
                 f"{'job id' if kind == KIND_SLURM else 'pgid'}: {outcome.output!r}"
             )
         if kind == KIND_SLURM:
-            return replace(template, job_id=str(number), submitted_at=time.time())
+            recovered = await self.recover_in(replace(template, job_id=str(number)))
+            if recovered.scheduler_identity is None:
+                raise RuntimeError("scheduler_submission_identity_unconfirmed")
+            return recovered
         recovered = await self.recover_in(template)
         if recovered.pgid != number or recovered.process_identity is None:
             raise RuntimeError("submission_identity_unconfirmed")
@@ -260,6 +264,43 @@ class RemoteExecutor:
 
     async def recover_in(self, handle: RemoteJobHandle) -> RemoteJobHandle:
         """Read immutable submission evidence without staging or launching work."""
+        if handle.kind == KIND_SLURM and handle.request_id and handle.payload_hash:
+            from .scheduler import parse_observation, probe_command
+
+            try:
+                acknowledgement = await self.run(
+                    f"cd -- {shell_quote(handle.workdir)} && "
+                    "[ -f ./_omicsclaw_scheduler_ack ] && [ ! -L ./_omicsclaw_scheduler_ack ] && "
+                    "head -c 4096 ./_omicsclaw_submission_claim/intent.json && printf '\\n' && "
+                    "head -c 4096 ./_omicsclaw_scheduler_ack",
+                    timeout=PROBE_TIMEOUT_S,
+                )
+                intent_raw, ack = acknowledgement.output.split("\n", 1)
+                if acknowledgement.exit_code or json.loads(intent_raw) != {
+                    "request_id": handle.request_id,
+                    "payload_hash": handle.payload_hash,
+                    "kind": KIND_SLURM,
+                }:
+                    return handle
+                job_id = str(parse_submit_output(KIND_SLURM, ack))
+                if job_id == "0" or handle.job_id and handle.job_id != job_id:
+                    return handle
+                output = await self.run(probe_command(job_id), timeout=PROBE_TIMEOUT_S)
+                nonce = hashlib.sha256(
+                    (handle.request_id + "/" + handle.payload_hash).encode()
+                ).hexdigest()[:32]
+                proof, _ = parse_observation(output.output, job_id=job_id, nonce=nonce)
+                if proof is not None:
+                    return replace(
+                        handle,
+                        job_id=job_id,
+                        cluster=proof["cluster"],
+                        scheduler_identity=proof,
+                        submitted_at=handle.submitted_at or time.time(),
+                    )
+            except (RemoteHostUnreachable, ValueError, TypeError):
+                return handle
+            return handle
         if (
             handle.kind != KIND_NOHUP
             or not handle.request_id
@@ -297,10 +338,30 @@ class RemoteExecutor:
 
     async def status(self, handle: RemoteJobHandle) -> StatusReport:
         """Ask the host; an unreachable host answers ``unknown``, not an error."""
-        if handle.kind == KIND_NOHUP and (
-            handle.process_identity is None or handle.host != self.host
-        ):
+        if not has_identity_proof(handle) or handle.host != self.host:
             return StatusReport(state="unknown", detail="unverified_process_identity")
+        if handle.kind == KIND_SLURM:
+            from .scheduler import parse_observation, probe_command
+
+            try:
+                outcome = await self.run(
+                    probe_command(handle.job_id, handle.cluster),
+                    timeout=PROBE_TIMEOUT_S,
+                )
+            except RemoteHostUnreachable:
+                return StatusReport(detail="scheduler_unreachable")
+            _, report = parse_observation(
+                outcome.output,
+                job_id=handle.job_id,
+                nonce=handle.scheduler_identity["nonce"],
+                expected=handle.scheduler_identity,
+            )
+            return replace(
+                report,
+                identity_digest=handle.proof_digest()
+                if report.identity_verified
+                else "",
+            )
         try:
             outcome = await self.run(
                 build_status_command(handle), timeout=PROBE_TIMEOUT_S
@@ -309,18 +370,32 @@ class RemoteExecutor:
             return StatusReport(state="unknown", detail=str(exc))
         state, exit_code = parse_status(handle.kind, outcome.output)
         detail = outcome.output.strip()[:200]
-        return StatusReport(state=state, exit_code=exit_code, detail=detail)
+        return StatusReport(
+            state=state,
+            exit_code=exit_code,
+            detail=detail,
+            identity_verified=state != "unknown",
+            identity_digest=handle.proof_digest() if state != "unknown" else "",
+        )
 
     async def cancel(self, handle: RemoteJobHandle) -> StatusReport:
         """Stop the job; report what the host said, not what we hoped."""
-        if handle.kind == KIND_NOHUP and (
-            handle.process_identity is None or handle.host != self.host
-        ):
+        if not has_identity_proof(handle) or handle.host != self.host:
             return StatusReport(state="unknown", detail="unverified_process_identity")
+        if handle.kind == KIND_SLURM:
+            from .scheduler import cancel_command
+
+            report = await self.status(handle)
+            if not report.identity_verified or report.state not in {
+                "pending",
+                "running",
+            }:
+                return report
+            command = cancel_command(handle.scheduler_identity)
+        else:
+            command = build_cancel_command(handle)
         try:
-            outcome = await self.run(
-                build_cancel_command(handle), timeout=PROBE_TIMEOUT_S
-            )
+            outcome = await self.run(command, timeout=PROBE_TIMEOUT_S)
         except RemoteHostUnreachable as exc:
             return StatusReport(state="unknown", detail=str(exc))
         if outcome.exit_code != 0:
@@ -881,7 +956,7 @@ class RemotePlaneBinding:
         handle = row.handle()
         if row.source_request_id and handle.pgid is None and handle.job_id is None:
             handle = await executor.recover_in(handle)
-            if handle.process_identity is not None:
+            if has_identity_proof(handle):
                 row = self._jobs.bind_submission(row.id, handle)
         report = await executor.status(row.handle())
         self._jobs.update_status(row.id, report.state)
@@ -890,6 +965,8 @@ class RemotePlaneBinding:
             exit_code=report.exit_code,
             detail=report.detail,
             job_ref=job_ref,
+            identity_verified=report.identity_verified,
+            identity_digest=report.identity_digest,
         )
 
     async def cancel(self, job_ref: str) -> StatusReport:
@@ -907,6 +984,8 @@ class RemotePlaneBinding:
             detail=report.detail,
             exit_code=report.exit_code,
             job_ref=job_ref,
+            identity_verified=report.identity_verified,
+            identity_digest=report.identity_digest,
         )
 
     async def fetch(

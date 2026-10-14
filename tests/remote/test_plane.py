@@ -152,6 +152,39 @@ def test_sbatch_directives_submit_through_slurm(plane, spawner):
     assert any("sbatch --parsable" in c for c in spawner.ssh_commands())
 
 
+def test_simulated_slurm_ack_loss_recovers_one_claim_without_resubmit(tmp_path):
+    class LostAckSpawner(FakeSpawner):
+        lost = False
+
+        async def spawn(self, argv, *, timeout, stdin_text=None):
+            result = await super().spawn(argv, timeout=timeout, stdin_text=stdin_text)
+            if "sbatch --parsable" in argv[-1] and not self.lost:
+                self.lost = True
+                raise RemoteHostUnreachable("simulated post-launch ACK loss")
+            return result
+
+    fake = (
+        LostAckSpawner()
+        .on("base64 -d", PROBE_OK)
+        .on("sbatch --parsable", "5150;cluster-a")
+    )
+    plane = RemotePlaneBinding(
+        Database(tmp_path / "own-claim.db"), spawner=fake, workspace=tmp_path
+    )
+    with pytest.raises(RemoteHostUnreachable):
+        run(plane.submit("hpc1", "#SBATCH -N1\necho hi", local_job_id="same-business"))
+    recovered = run(
+        plane.submit("hpc1", "#SBATCH -N1\necho hi", local_job_id="same-business")
+    )
+    report = run(plane.status(recovered.job_ref))
+    assert (
+        recovered.job_id == "5150"
+        and report.state == "running"
+        and report.identity_verified
+    )
+    assert sum("sbatch --parsable" in command for command in fake.ssh_commands()) == 1
+
+
 def test_status_walks_the_state_machine_and_persists(plane, spawner):
     outcome = run(plane.submit("hpc1", "echo hi"))
     report = run(plane.status(outcome.job_ref))

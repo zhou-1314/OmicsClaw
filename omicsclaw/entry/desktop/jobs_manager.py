@@ -68,7 +68,6 @@ from omicsclaw.envsupply import parse_env_step
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.memory.database import Database
 from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
-from omicsclaw.remote.bridge import RemoteJobFailed
 from omicsclaw.runs.manifest import build_manifest
 from omicsclaw.runs.models import Activity, Kernel, Run, Verification
 from omicsclaw.runs.models import Job as RunJob
@@ -757,10 +756,16 @@ class JobExecutionContext:
         record: JobRecord,
         emit: Callable[[str, dict[str, Any]], int],
         workspace: Path,
+        observe: Callable[[str, Any], None] | None = None,
     ) -> None:
         self._record = record
         self._emit_raw = emit
         self.workspace = workspace
+        self._observe = observe
+
+    def observe_execution(self, reference: str, report: Any) -> None:
+        if self._observe is not None:
+            self._observe(reference, report)
 
     @property
     def job_id(self) -> str:
@@ -1497,6 +1502,9 @@ class JobsManager:
         self.run_store = RunStore(str(run_db), on_event=sink)
         self._run_ids: dict[str, str] = {}
         self._run_job_ids: dict[str, str] = {}
+        # An observation authorizes only this process's current projection.
+        # It is never restored from cached events or supplied by event payloads.
+        self._external_observations: dict[str, tuple[str, str, int | None]] = {}
         for persisted in self.run_store.list("job"):
             if (
                 persisted.execution_ref
@@ -2032,11 +2040,15 @@ class JobsManager:
         """
         if self._remote_runtime is None:
             return {"checked": 0, "still_in_flight": 0, "terminal": 0, "unknown": 0}
+        from omicsclaw.remote.jobs import has_identity_proof, verified_state
 
         def on_status(local_job_id: str, alias: str, state: str) -> None:
             record = self.store.get_job(local_job_id)
             if record is None:
                 return
+            remote = self._remote_runtime.plane.job_store().by_local_job(local_job_id)
+            if remote is None or not has_identity_proof(remote.handle()):
+                state = "unknown"
             status = {"done": "succeeded", "pending": "queued"}.get(state, state)
             if record.status in TERMINAL_JOB_STATUSES:
                 return
@@ -2065,44 +2077,60 @@ class JobsManager:
                 ):
                     row = remote_store.by_local_job(record.id)
                     if row is not None:
-                        if (
-                            row.kind == "nohup"
-                            and row.handle().process_identity is None
-                        ):
+                        self._external_observations.pop(record.id, None)
+                        if not has_identity_proof(row.handle()):
                             if record.status not in TERMINAL_JOB_STATUSES:
                                 on_status(record.id, row.host_alias, "unknown")
                             continue
-                        on_status(record.id, row.host_alias, row.status)
+                        try:
+                            self._external_observations.pop(record.id, None)
+                            observation = await self._remote_runtime.plane.executor_for(
+                                row.host_alias
+                            ).status(row.handle())
+                        except OSError:
+                            observation = None
+                        state = verified_state(row.handle(), observation)
+                        self._observe_external_fact(record.id, str(row.id), observation)
+                        on_status(record.id, row.host_alias, state)
                         live = self._live.get(record.id)
-                        if row.status in {"done", "failed", "canceled"} and (
+                        if state in {"done", "failed", "canceled"} and (
                             live is None or live.task is None or live.task.done()
                         ):
-                            await self._recover_remote_evidence(record, row)
+                            await self._recover_remote_evidence(
+                                record, row, observation
+                            )
                             self._emit_terminal_once(
                                 record.id,
-                                {"done": "succeeded"}.get(row.status, row.status),
+                                {"done": "succeeded"}.get(state, state),
                             )
+                        self._external_observations.pop(record.id, None)
             return report
 
-    async def _recover_remote_evidence(self, record, row):
+    async def _recover_remote_evidence(self, record, row, observation):
         from omicsclaw.remote.bridge import remote_output_payloads
+        from omicsclaw.remote.jobs import verified_state
 
+        if verified_state(row.handle(), observation) not in {
+            "done",
+            "failed",
+            "canceled",
+        }:
+            return
+        self._observe_external_fact(record.id, str(row.id), observation)
         verification = self.run_store.load("verification:exit:" + record.id)
         if verification is None or verification.verdict == "inconclusive":
-            try:
-                result = await self._remote_runtime.plane.executor_for(
-                    row.host_alias
-                ).status(row.handle())
-                code = getattr(result, "exit_code", None)
-            except OSError:
-                code = None
+            code = observation.exit_code
             if verification is None or code is not None:
                 self._emit(
                     record.id,
                     "execution.finished",
-                    {"exit_code": code, "evidence_ref": "remote-job:" + str(row.id)},
+                    {
+                        "exit_code": code,
+                        "evidence_ref": "remote-job:" + str(row.id),
+                        "identity_digest": observation.identity_digest,
+                    },
                 )
-        if row.status == "done":
+        if observation.state == "done":
             runner = self._runners.get(record.kind)
             recover = getattr(runner, "recover_evidence", None)
             if callable(recover):
@@ -2166,13 +2194,21 @@ class JobsManager:
         if self._remote_runtime is None:
             raise JobError("remote_runtime_unavailable", status_code=409)
         async with self._reconcile_lock:
+            self._external_observations.pop(job_id, None)
             plane = self._remote_runtime.plane
             row = plane.job_store().by_local_job(job_id)
             if row is None:
                 self.store.update_job(job_id, status="cancel_requested")
                 return "cancel_requested"
+            from omicsclaw.remote.jobs import has_identity_proof, verified_state
+
+            if not has_identity_proof(row.handle()):
+                self.store.update_job(job_id, status="cancel_requested")
+                return "cancel_requested"
+            self._external_observations.pop(job_id, None)
             report = await plane.cancel(str(row.id))
-            if report.state in {"canceled", "done", "failed"}:
+            self._observe_external_fact(job_id, str(row.id), report)
+            if verified_state(row.handle(), report) in {"canceled", "done", "failed"}:
                 status = {"done": "succeeded"}.get(report.state, report.state)
                 self._emit(
                     job_id,
@@ -2180,13 +2216,16 @@ class JobsManager:
                     {
                         "exit_code": report.exit_code,
                         "evidence_ref": "remote-job:" + str(row.id),
+                        "identity_digest": report.identity_digest,
                     },
                 )
                 self.store.update_job(job_id, status=status, finished_at=time.time())
                 self._sync_run_status(job_id, status)
                 self._emit_terminal_once(job_id, status)
+                self._external_observations.pop(job_id, None)
                 return "canceled" if status == "canceled" else "finished"
             self.store.update_job(job_id, status="cancel_requested")
+            self._external_observations.pop(job_id, None)
             return "cancel_requested"
 
     def cancel(self, job_id: str) -> str:
@@ -2307,6 +2346,40 @@ class JobsManager:
         return self.store.events_after(job_id, after_seq)
 
     def _emit(self, job_id: str, event_type: str, payload: dict[str, Any]) -> int:
+        owner = self.store.get_job(job_id)
+        if (
+            owner is not None
+            and owner.lifetime == "external"
+            and event_type
+            in {"execution.finished", "artifact.created", "job.done", "job.failed"}
+        ):
+            from omicsclaw.remote.jobs import has_identity_proof
+
+            row = (
+                self._remote_runtime.plane.job_store().by_local_job(job_id)
+                if self._remote_runtime
+                else None
+            )
+            observed = self._external_observations.get(job_id)
+            if (
+                row is None
+                or not has_identity_proof(row.handle())
+                or observed is None
+                or observed[0] != row.handle().proof_digest()
+                or observed[1] not in {"done", "failed", "canceled"}
+                or type(observed[2]) is not int
+            ):
+                raise JobError("external_observation_unconfirmed")
+            if event_type == "execution.finished" and (
+                payload.get("identity_digest") != observed[0]
+                or type(payload.get("exit_code")) is not int
+                or payload["exit_code"] != observed[2]
+            ):
+                raise JobError("external_exit_unconfirmed")
+            if event_type == "artifact.created" and (
+                observed[1] != "done" or observed[2] != 0
+            ):
+                raise JobError("external_artifact_unconfirmed")
         source_id = payload.get("source_event_id", "")
         if source_id:
             if not isinstance(source_id, str) or not re.fullmatch(
@@ -2480,6 +2553,49 @@ class JobsManager:
             timeout_s=self._approval_timeout_s,
         )
 
+    def _observe_external_fact(self, job_id: str, reference: str, report: Any) -> None:
+        from omicsclaw.remote.jobs import has_identity_proof, verified_state
+
+        row = (
+            self._remote_runtime.plane.job_store().get(reference)
+            if self._remote_runtime
+            else None
+        )
+        record = self.store.get_job(job_id)
+        self._external_observations.pop(job_id, None)
+        if (
+            row is None
+            or record is None
+            or row.local_job_id != job_id
+            or not has_identity_proof(row.handle())
+        ):
+            raise JobError("external_observation_unconfirmed")
+        if record.target_alias and record.target_alias != row.host_alias:
+            raise JobError("external_observation_target_conflict")
+        if verified_state(row.handle(), report) == "unknown":
+            return
+        self._external_observations[job_id] = (
+            report.identity_digest,
+            report.state,
+            report.exit_code,
+        )
+        if (
+            report.state == "running"
+            and record.status not in TERMINAL_JOB_STATUSES
+            and record.status != "cancel_requested"
+        ):
+            self.store.update_job(
+                job_id, status="running", started_at=record.started_at or time.time()
+            )
+            self._sync_run_status(job_id, "running")
+            if not any(
+                kind == "job.started"
+                for _, kind, _ in self.store.events_after(job_id, 0)
+            ):
+                self._emit(
+                    job_id, "job.started", {"job_id": job_id, "evidence_ref": reference}
+                )
+
     async def _run(self, job_id: str) -> None:
         record = self.store.get_job(job_id)
         live = self._live.get(job_id)
@@ -2500,14 +2616,20 @@ class JobsManager:
             record,
             lambda t, p: self._emit(job_id, t, p),
             Path(self._app.config.workspace),
+            observe=lambda reference, report: self._observe_external_fact(
+                job_id, reference, report
+            ),
         )
         progress_sink = self._progress_sink(job_id)
         terminal: tuple[str, dict[str, Any]] | None = None
         try:
             async with self._semaphore:
-                self.store.update_job(job_id, status="running", started_at=time.time())
-                self._sync_run_status(job_id, "running")
-                self._emit(job_id, "job.started", {"job_id": job_id})
+                if record.lifetime != "external":
+                    self.store.update_job(
+                        job_id, status="running", started_at=time.time()
+                    )
+                    self._sync_run_status(job_id, "running")
+                    self._emit(job_id, "job.started", {"job_id": job_id})
                 with use_tool_context(
                     approval=gate,
                     progress=progress_sink,
@@ -2529,6 +2651,17 @@ class JobsManager:
                     and outcome.get("status") == "canceled"
                     else "succeeded"
                 )
+                if record.lifetime == "external":
+                    observed = self._external_observations.get(job_id)
+                    if (
+                        observed is None
+                        or observed[1] not in {"done", "failed", "canceled"}
+                        or type(observed[2]) is not int
+                    ):
+                        raise JobError("external_terminal_unconfirmed")
+                    status = {"done": "succeeded"}.get(observed[1], observed[1])
+                    if status == "failed":
+                        raise JobFailure("external job failed", phase="run")
                 terminal = ("job.done", {"status": status})
                 self.store.update_job(job_id, status=status, finished_at=time.time())
         except TimeoutError:
@@ -2556,7 +2689,16 @@ class JobsManager:
                     job_id, status="canceled", finished_at=time.time()
                 )
         except JobFailure as exc:
-            if exc.terminal_status == "interrupted":
+            observed = self._external_observations.get(job_id)
+            if record.lifetime == "external" and (
+                observed is None
+                or observed[1] != "failed"
+                or type(observed[2]) is not int
+            ):
+                self._detach_external_observation(
+                    job_id, "observation_unconfirmed:" + type(exc).__name__
+                )
+            elif exc.terminal_status == "interrupted":
                 terminal = ("job.done", {"status": "interrupted"})
                 self.store.update_job(
                     job_id,
@@ -2572,7 +2714,12 @@ class JobsManager:
         except Exception as exc:  # noqa: BLE001 - one job must never take the plane down
             _log.exception("job %s crashed the runner", job_id)
             named = type(exc).__name__ + ": " + str(exc)
-            if record.lifetime == "external" and not isinstance(exc, RemoteJobFailed):
+            observed = self._external_observations.get(job_id)
+            if record.lifetime == "external" and (
+                observed is None
+                or observed[1] != "failed"
+                or type(observed[2]) is not int
+            ):
                 self._detach_external_observation(
                     job_id, "observation_unconfirmed:" + type(exc).__name__
                 )
@@ -2607,6 +2754,7 @@ class JobsManager:
             live = self._live.get(job_id)
             if live is not None and not live.subscribers:
                 self._live.pop(job_id, None)
+        self._external_observations.pop(job_id, None)
 
     def _progress_sink(self, job_id: str) -> Callable[[ProgressUpdate], None]:
         def sink(update: ProgressUpdate) -> None:

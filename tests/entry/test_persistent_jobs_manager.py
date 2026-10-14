@@ -259,3 +259,119 @@ def test_worker_source_events_are_idempotent_and_conflicts_refuse(tmp_path):
     with pytest.raises(JobError, match="job_source_event_conflict"):
         manager._emit("source-event", "tool_output_chunk", {**value, "text": "drift"})
     assert (first, second, len(manager.replay_events("source-event", 0))) == (1, 1, 1)
+
+
+def test_external_observer_entry_does_not_claim_running_before_process_proof(tmp_path):
+    async def scenario():
+        manager = manager_for(tmp_path)
+        entered = asyncio.Event()
+
+        async def runner(record, ctx):
+            entered.set()
+            await asyncio.Event().wait()
+
+        manager.register_runner("fixture", runner)
+        record = await manager.create_job(
+            kind="fixture", lifetime="external", source_request_id="no-fact"
+        )
+        await entered.wait()
+        events = manager.replay_events(record.id, 0)
+        assert manager.get_job(record.id).status == "queued"
+        assert not any(
+            kind in {"job.started", "execution.finished", "job.done"}
+            for _, kind, _ in events
+        )
+        await manager.shutdown_observations()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "event_type", ["execution.finished", "artifact.created", "job.done"]
+)
+def test_event_payload_cannot_self_declare_a_verified_external_fact(
+    tmp_path, event_type
+):
+    from omicsclaw.entry.desktop.jobs_manager import JobRecord
+    from omicsclaw.remote.bridge import RemoteJobsBridge
+    from omicsclaw.remote.jobs import RemoteJobHandle
+    from omicsclaw.remote.plane import RemotePlaneBinding
+
+    manager = manager_for(tmp_path)
+    plane = RemotePlaneBinding(Database(tmp_path / "remote.db"), workspace=tmp_path)
+    manager._remote_runtime = RemoteJobsBridge(plane)
+    manager.store.insert_job(JobRecord(id="unobserved", lifetime="external"))
+    handle = RemoteJobHandle(
+        kind="nohup",
+        host="fixture",
+        workdir="/task",
+        pgid=123,
+        local_job_id="unobserved",
+        process_identity={
+            "uid": 1000,
+            "pid": 123,
+            "pgid": 123,
+            "sid": 123,
+            "start_ticks": 1,
+            "host_id": "fixture",
+            "boot_id": "a" * 32,
+            "nonce": "b" * 32,
+        },
+    )
+    plane.job_store().record(handle)
+    with pytest.raises(JobError, match="external_observation_unconfirmed"):
+        manager._emit(
+            "unobserved",
+            event_type,
+            {
+                "identity_verified": True,
+                "identity_digest": handle.proof_digest(),
+                "exit_code": 0,
+                "path": "/task/result",
+            },
+        )
+    assert manager.replay_events("unobserved", 0) == []
+
+
+def test_lost_observation_revokes_an_earlier_external_projection_permission(tmp_path):
+    from omicsclaw.entry.desktop.jobs_manager import JobRecord
+    from omicsclaw.remote.bridge import RemoteJobsBridge
+    from omicsclaw.remote.jobs import RemoteJobHandle
+    from omicsclaw.remote.plane import RemotePlaneBinding
+    from omicsclaw.tools.builtin.remote import StatusReport
+
+    manager = manager_for(tmp_path)
+    plane = RemotePlaneBinding(Database(tmp_path / "remote.db"), workspace=tmp_path)
+    manager._remote_runtime = RemoteJobsBridge(plane)
+    manager.store.insert_job(JobRecord(id="lost", lifetime="external"))
+    handle = RemoteJobHandle(
+        kind="nohup",
+        host="fixture",
+        workdir="/task",
+        pgid=123,
+        local_job_id="lost",
+        process_identity={
+            "uid": 1000,
+            "pid": 123,
+            "pgid": 123,
+            "sid": 123,
+            "start_ticks": 1,
+            "host_id": "fixture",
+            "boot_id": "a" * 32,
+            "nonce": "b" * 32,
+        },
+    )
+    ref = plane.job_store().record(handle)
+    manager._observe_external_fact(
+        "lost",
+        str(ref),
+        StatusReport(
+            state="done",
+            exit_code=0,
+            identity_verified=True,
+            identity_digest=handle.proof_digest(),
+        ),
+    )
+    manager._observe_external_fact("lost", str(ref), StatusReport(detail="offline"))
+    with pytest.raises(JobError, match="external_observation_unconfirmed"):
+        manager._emit("lost", "artifact.created", {"path": "/task/result"})

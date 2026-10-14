@@ -331,3 +331,29 @@ def test_explicit_native_cancel_uses_one_observed_exit_and_one_terminal(tmp_path
         ) == ("canceled", "143", 1, 1)
 
     asyncio.run(scenario())
+
+
+def test_terminal_file_cannot_confirm_a_different_recorded_process_birth(tmp_path):
+    from dataclasses import replace
+
+    from omicsclaw.remote.local import LocalTargetSpawner
+
+    async def scenario():
+        executor = RemoteExecutor("controller", LocalTargetSpawner(tmp_path))
+        handle = await executor.submit_in(str(tmp_path / "own-job"), "true")
+        deadline = time.monotonic() + 5
+        while (await executor.status(handle)).state != "done":
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.02)
+        bad = replace(
+            handle,
+            process_identity={
+                **dict(handle.process_identity),
+                "start_ticks": handle.process_identity["start_ticks"] + 1,
+            },
+        )
+        observed = await executor.status(bad)
+        assert (observed.state, observed.identity_verified) == ("unknown", False)
+        assert (await executor.cancel(bad)).state == "unknown"
+
+    asyncio.run(scenario())

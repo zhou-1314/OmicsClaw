@@ -70,10 +70,16 @@ class _ScriptedExecutor:
 
     async def status(self, handle: RemoteJobHandle) -> StatusReport:
         if self._plane.state == "running":
-            return StatusReport(state="running")
+            return StatusReport(
+                state="running",
+                identity_verified=True,
+                identity_digest=handle.proof_digest(),
+            )
         return StatusReport(
             state=self._plane.state,
             exit_code=0 if self._plane.state == "done" else 3,
+            identity_verified=True,
+            identity_digest=handle.proof_digest(),
         )
 
     async def tail_log(self, workdir: str, offset: int, limit: int) -> str:
@@ -94,9 +100,7 @@ class _ScriptedPlane(RemotePlaneBinding):
     async def status(self, job_ref: str) -> StatusReport:
         # The bridge polls through this method; the reconciler through
         # executor_for().status — both read the same knob.
-        return await self._scripted.status(
-            RemoteJobHandle(kind="nohup", host="", workdir="")
-        )
+        return await self._scripted.status(self.job_store().get(job_ref).handle())
 
 
 def _manager(spawner: FakeSpawner, tmp_path, *, plane: _ScriptedPlane | None = None):
@@ -201,6 +205,7 @@ class TestRemoteRouting:
             record = await manager.create_job(
                 inputs={"command": "echo hi"}, runtime="remote:hpc1"
             )
+            await _until(lambda: manager.get_job(record.id).status == "running")
             manager.plane.state = "done"
             await _terminal(manager, record.id)
             return [t for t, _ in _events(manager.store, record.id)]

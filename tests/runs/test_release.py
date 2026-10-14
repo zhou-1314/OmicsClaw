@@ -16,6 +16,9 @@ def test_unknown_remote_is_rechecked_and_syncs_run(tmp_path):
 
     class Executor:
         async def status(self, handle):
+            outcome.identity_verified = True
+            outcome.identity_digest = handle.proof_digest()
+            outcome.exit_code = 0 if outcome.state == "done" else None
             return outcome
 
     plane.executor_for = lambda alias: Executor()
@@ -186,6 +189,42 @@ def test_artifact_provenance_uses_job_snapshot(tmp_path):
     )
     path = tmp_path / "output.json"
     path.write_text("{}")
+    # This is a simulated, complete observation for the provenance unit case.
+    # A remote location alone does not prove that an output was produced.
+    from omicsclaw.tools.builtin.remote import StatusReport
+
+    plane = RemotePlaneBinding(
+        Database(tmp_path / "provenance-remote.db"), workspace=tmp_path
+    )
+    manager._remote_runtime = RemoteJobsBridge(plane)
+    handle = RemoteJobHandle(
+        kind="nohup",
+        host="localhost",
+        workdir=str(tmp_path),
+        pgid=123,
+        local_job_id="desktop",
+        process_identity={
+            "uid": 1000,
+            "pid": 123,
+            "pgid": 123,
+            "sid": 123,
+            "start_ticks": 1,
+            "host_id": "localhost",
+            "boot_id": "a" * 32,
+            "nonce": "b" * 32,
+        },
+    )
+    ref = plane.job_store().record(handle)
+    manager._observe_external_fact(
+        "desktop",
+        str(ref),
+        StatusReport(
+            state="done",
+            exit_code=0,
+            identity_verified=True,
+            identity_digest=handle.proof_digest(),
+        ),
+    )
     manager._emit("desktop", "artifact.created", {"path": str(path)})
     artifact = manager.run_store.list("artifact")[0]
     assert artifact.code_ref.startswith("sha256:")

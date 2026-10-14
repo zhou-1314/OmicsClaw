@@ -178,6 +178,20 @@ class RemoteJobsBridge:
         while True:
             await asyncio.sleep(self._poll_interval_s)
             report = await self._plane.status(outcome.job_ref)
+            from .jobs import verified_state
+
+            row = self._plane.job_store().get(outcome.job_ref)
+            observer = getattr(ctx, "observe_execution", None)
+            if callable(observer):
+                observer(outcome.job_ref, report)
+            verified = (
+                row is not None and verified_state(row.handle(), report) != "unknown"
+            )
+            if not verified:
+                ctx.progress(
+                    "job identity is not confirmed; observation remains pending"
+                )
+                continue
             executor = self._plane.executor_for(outcome.host)
             tail = await executor.tail_log(outcome.workdir, sent, self._log_chunk_chars)
             if tail:
@@ -186,11 +200,17 @@ class RemoteJobsBridge:
             if report.state in ("pending", "running"):
                 continue
             if report.state in {"done", "failed", "canceled"}:
+                if type(report.exit_code) is not int:
+                    ctx.progress(
+                        "job exit is not confirmed; observation remains pending"
+                    )
+                    continue
                 ctx.emit(
                     "execution.finished",
                     {
                         "exit_code": report.exit_code,
                         "evidence_ref": outcome.job_ref,
+                        "identity_digest": report.identity_digest,
                     },
                 )
             if report.state == "failed":

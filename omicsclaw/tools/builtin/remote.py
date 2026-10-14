@@ -165,6 +165,8 @@ class StatusReport:
     exit_code: int | None = None
     detail: str = ""
     job_ref: str = ""
+    identity_verified: bool = False
+    identity_digest: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,9 +307,7 @@ def _host_argument(decoded: dict[str, Any]) -> str:
     return host
 
 
-def _timeout_argument(
-    decoded: dict[str, Any], default: float, ceiling: float
-) -> float:
+def _timeout_argument(decoded: dict[str, Any], default: float, ceiling: float) -> float:
     """The ``timeout_seconds`` field: omitted means *default*, never above."""
     requested = decoded.get("timeout_seconds")
     if requested is None:
@@ -352,9 +352,7 @@ def _inputs_summary(inputs: tuple[tuple[str, str], ...]) -> str:
     """
     if not inputs:
         return ""
-    lines = [
-        f"  {src} -> {dst}" for src, dst in inputs[:INPUTS_SUMMARY_ITEMS]
-    ]
+    lines = [f"  {src} -> {dst}" for src, dst in inputs[:INPUTS_SUMMARY_ITEMS]]
     hidden = len(inputs) - INPUTS_SUMMARY_ITEMS
     if hidden > 0:
         lines.append(f"  …and {hidden} more")
@@ -573,9 +571,7 @@ class RemoteSubmitTool:
                 f"({len(raw_inputs)} given); stage a directory or an "
                 "archive instead of listing a dataset file by file"
             )
-        inputs = tuple(
-            (str(item["src"]), str(item["dst"])) for item in raw_inputs
-        )
+        inputs = tuple((str(item["src"]), str(item["dst"])) for item in raw_inputs)
         outputs = tuple(str(item) for item in decoded.get("outputs", []))
         scheduler = str(decoded.get("scheduler") or "auto")
         if scheduler not in SCHEDULERS:
@@ -591,9 +587,7 @@ class RemoteSubmitTool:
             self.name,
             arguments,
             policy=self.policy,
-            reason=_remote_reason(
-                intent, host, command, timeout, inputs=inputs
-            ),
+            reason=_remote_reason(intent, host, command, timeout, inputs=inputs),
             reason_shows_call=True,
         )
         outcome = await self._plane.submit(
@@ -740,8 +734,7 @@ class RemoteStatusTool:
         job_ref = str(decoded.get("job_ref") or "")
         if not job_ref.strip():
             raise ToolArgumentError(
-                "input.job_ref is required: the reference remote_submit "
-                "returned"
+                "input.job_ref is required: the reference remote_submit returned"
             )
         await require_approval(
             self.name,
@@ -789,8 +782,7 @@ class RemoteCancelTool:
         job_ref = str(decoded.get("job_ref") or "")
         if not job_ref.strip():
             raise ToolArgumentError(
-                "input.job_ref is required: the reference remote_submit "
-                "returned"
+                "input.job_ref is required: the reference remote_submit returned"
             )
         await require_approval(
             self.name,
@@ -867,8 +859,7 @@ class RemoteFetchTool:
         max_mb = decoded.get("max_mb", DEFAULT_FETCH_MAX_MB)
         if not isinstance(max_mb, (int, float)) or max_mb <= 0:
             raise ToolArgumentError(
-                f"input.max_mb must be a positive number of megabytes; got "
-                f"{max_mb!r}"
+                f"input.max_mb must be a positive number of megabytes; got {max_mb!r}"
             )
         await require_approval(
             self.name,
@@ -976,8 +967,7 @@ class AskAboutHostTool:
         question = str(decoded.get("question") or "")
         if not question.strip():
             raise ToolArgumentError(
-                "input.question is required: say what you want to know "
-                "about the host"
+                "input.question is required: say what you want to know about the host"
             )
         card = self._plane.host_card(alias)
         context = ""
@@ -989,9 +979,7 @@ class AskAboutHostTool:
                 context = "(known: " + "; ".join(bits) + ")"
         request = QuestionRequest(
             question=f"About the remote host '{alias}' {context}: {question}",
-            options=(
-                QuestionOption(label="Skip this question"),
-            ),
+            options=(QuestionOption(label="Skip this question"),),
         )
         answer = await ask_question(request)
         if answer.status is not AnswerStatus.ANSWERED:
@@ -1002,8 +990,7 @@ class AskAboutHostTool:
         text = answer.reply or ", ".join(answer.selected)
         if not text:
             return (
-                f"The user answered without text about {alias}; nothing was "
-                "recorded."
+                f"The user answered without text about {alias}; nothing was recorded."
             )
         self._plane.note_answer(alias, question, text)
         return f"Recorded about {alias}: {text}"
@@ -1047,21 +1034,21 @@ __all__ = [
     "DEFAULT_EXEC_TIMEOUT_S",
     "DEFAULT_FETCH_MAX_MB",
     "DEFAULT_SUBMIT_TIMEOUT_S",
+    "HOST_NAME",
+    "MAX_EXEC_TIMEOUT_S",
+    "SCHEDULERS",
+    "AskAboutHostTool",
     "ExecOutcome",
     "FetchOutcome",
-    "HOST_NAME",
     "HostCard",
-    "MAX_EXEC_TIMEOUT_S",
     "RemoteCancelTool",
     "RemoteExecTool",
     "RemoteFetchTool",
     "RemotePlane",
     "RemoteStatusTool",
     "RemoteSubmitTool",
-    "SCHEDULERS",
     "StatusReport",
     "SubmitOutcome",
-    "AskAboutHostTool",
     "remote_tools",
     "valid_host",
 ]
