@@ -1,3 +1,9 @@
+## 2026-10-14 — Shared Desktop coordination over SSH
+
+The headless controller and HTTP facade now share chat admission, workspace, health and job submission coordination. Six named model callers use Mac-owned nonsecret snapshots through the existing public SDK factories. Durable source requests and event subframes support history reconstruction after a connection or Mac cache loss. The finite SSH owner records host, user, process birth and nonce; the source manifest identifies the complete import closure without the HTTP server or scientific libraries.
+
+Desktop transport adapters expose stored jobs, runs, usage, file reads and the skill catalogue through the existing managers and stores. Missing science, Notebook, extension and multi-target capabilities are explicit until their migration stages finish. Stage2 still requires independent review; automatic environment supply, persistent external science jobs and kernels, data migration and old-mode removal remain pending.
+
 ## 2026-10-14 — SSH controller cancellation and admission repair
 
 The stdio peers now revoke known in-flight calls and recognize bounded canceled-request responses without accepting arbitrary unsolicited responses. Mac fetch and stream reads stop on cancellation, timeout and EOF. Shared session admission reports whether a turn is new, so an old legal request cannot restore a later revoked permission profile or create another observer. Model reads use the remaining snapshot deadline.
@@ -230,9 +236,3 @@ at a document that is not published. Plan documents are in
 - **Loop health** — ping-pong / repeated-failure pathology detection with soft self-correction.
 
 </details>
-## 2026-10-14 — Shared Desktop coordination over SSH
-
-The headless controller and HTTP facade now share chat admission, workspace, health and job submission coordination. Six named model callers use Mac-owned nonsecret snapshots through the existing public SDK factories. Durable source requests and event subframes support history reconstruction after a connection or Mac cache loss. The finite SSH owner records host, user, process birth and nonce; the source manifest identifies the complete import closure without the HTTP server or scientific libraries.
-
-Desktop transport adapters expose stored jobs, runs, usage, file reads and the skill catalogue through the existing managers and stores. Missing science, Notebook, extension and multi-target capabilities are explicit until their migration stages finish. Stage2 still requires independent review; automatic environment supply, persistent external science jobs and kernels, data migration and old-mode removal remain pending.
-
