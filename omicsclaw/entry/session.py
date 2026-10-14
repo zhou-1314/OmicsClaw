@@ -42,8 +42,11 @@ until the day it becomes SQLite. So the registry, which is the side that
 the same reason :meth:`InMemorySessionStore.save` suspends once on
 purpose.
 
-**What is not here.** No authentication, no rate limiting, no durable
-log, no cross-process anything. A sender allowlist is
+With durable events enabled, the shared memory database records admission
+before lane execution. Restarted callers inspect that receipt and the existing
+event log; admission never grants an automatic retry of uncertain work.
+
+**What is not here.** No authentication or rate limiting. A sender allowlist is
 :class:`~omicsclaw.entry.ingress.SenderPolicy`'s, one layer out, and it
 is out there because a registry that decided who may talk to it would be
 a registry every surface had to configure identically.
@@ -52,6 +55,8 @@ a registry every surface had to configure identically.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import dataclasses
 import logging
 import re
@@ -444,6 +449,18 @@ class SessionRegistry:
     ) -> TurnHandle:
         if self._closed:
             raise RegistryClosed("this registry is shutting down")
+        payload_hash = ""
+        if source_request_id and self._event_log is not None:
+            payload_hash = hashlib.sha256(json.dumps(
+                {"text": text, "values": values or {}, "compact": compaction_only},
+                sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"),
+            ).encode()).hexdigest()
+            prior = self.request_receipt(session_id, source_request_id)
+            if prior is not None:
+                if prior["payload_hash"] != payload_hash:
+                    raise SubmissionRefused("request identity has a different payload")
+                if (session_id, source_request_id) not in self._by_request:
+                    raise SubmissionRefused("request was already admitted; observe its durable state")
         if source_request_id:
             seen = self._by_request.get((session_id, source_request_id))
             if seen is not None:
@@ -463,9 +480,14 @@ class SessionRegistry:
                 f"waiting, which is its limit of {limit}"
             )
 
+        turn_id = new_turn_id()
+        if payload_hash:
+            receipt = self._event_log.claim_request(session_id, source_request_id, payload_hash, turn_id)
+            if receipt["turn_id"] != turn_id:
+                raise SubmissionRefused("request was concurrently admitted")
         handle = TurnHandle(
             session_id=session_id,
-            turn_id=new_turn_id(),
+            turn_id=turn_id,
             text=text,
             values=values,
             ring_size=self._app.config.delta_ring_size,
@@ -509,6 +531,17 @@ class SessionRegistry:
         )
 
     # ---- observation -----------------------------------------------------
+
+    @property
+    def durable_identity(self):
+        """Stable authority/workspace identity, or None without durable capability."""
+        return self._event_log.identity if self._event_log is not None else None
+
+    def request_receipt(self, session_id: str, source_request_id: str) -> dict | None:
+        """Read admission evidence without queuing or retrying a turn."""
+        if self._event_log is None:
+            return None
+        return self._event_log.request_receipt(session_id, source_request_id)
 
     def observe(self, turn_id: str, *, after_seq: int = 0) -> TurnObservation:
         """Open a cursor over an exchange named by id.

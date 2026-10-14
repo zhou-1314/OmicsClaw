@@ -1371,6 +1371,7 @@ class JobsManager:
         kernels: Any = None,
         env_supply: Any = None,
         run_event_sink: Any = None,
+        register_default_runners: bool = True,
     ) -> None:
         self._app = app
         if store is None:
@@ -1415,22 +1416,24 @@ class JobsManager:
         for record in self.store.list_jobs(limit=10000):
             if record.runtime == "local" and record.status in TERMINAL_JOB_STATUSES:
                 self._sync_run_status(record.id, record.status)
-        self.register_runner("skill_run", SkillApiRunner(app, artifacts=self.artifacts))
+        if register_default_runners:
+            self.register_runner("skill_run", SkillApiRunner(app, artifacts=self.artifacts))
         # P4's code_run rides the same lifecycle on the deployment's
         # persistent kernels: the binding build_app mounted behind the
         # ``python`` tool when there is one (one manager, shared session
         # kernels between the faces), else a private one for this manager.
         if kernels is None:
             kernels = getattr(app, "kernels", None)
-        if kernels is None:
+        if kernels is None and register_default_runners:
             from ..assembly import WorkspaceKernelBinding
 
             kernels = WorkspaceKernelBinding(app.config.workspace)
         self.kernels = kernels
-        self.register_runner(
-            "code_run",
-            CodeRunRunner(kernels, artifact_store=self.artifacts),
-        )
+        if register_default_runners:
+            self.register_runner(
+                "code_run",
+                CodeRunRunner(kernels, artifact_store=self.artifacts),
+            )
         # P5's env_install rides the same lifecycle over the deployment's
         # environment supply: the binding build_app mounted behind
         # ``manage_environments`` when the switch is on, else None — and
@@ -1439,7 +1442,8 @@ class JobsManager:
         # would read as "this backend is old".
         if env_supply is None:
             env_supply = getattr(app, "env_supply", None)
-        self.register_runner("env_install", EnvInstallRunner(env_supply))
+        if register_default_runners:
+            self.register_runner("env_install", EnvInstallRunner(env_supply))
 
     # ---- construction and lookup ----
 

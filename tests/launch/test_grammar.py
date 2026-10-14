@@ -242,6 +242,10 @@ def test_the_environment_handed_to_main_reaches_the_surface(env, expected, capsy
 
 
 MODULE_GUARDS = {
+    "entry/ssh/__main__.py": (
+        "Finite SSH controller launcher. Parses an explicit workspace only; "
+        "the Mac supplies model authority over stdio and it uses shared build_app."
+    ),
     "launch/__main__.py": "the shell; plan 0037 §5.1",
     "__main__.py": (
         "python -m omicsclaw, repointed at this shell on the owner's "

@@ -17,6 +17,21 @@ from typing import Any, Callable, TypeVar
 T = TypeVar("T")
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS turn_authority_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    authority_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS turn_ingress (
+    session_id TEXT NOT NULL,
+    source_request_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (session_id, source_request_id)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     session_id  TEXT PRIMARY KEY,
     created_at  REAL NOT NULL,

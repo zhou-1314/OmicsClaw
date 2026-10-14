@@ -136,6 +136,7 @@ from omicsclaw.planning import (
 )
 from omicsclaw.provider import (
     LLMProvider,
+    ModelLimits,
     get_model_limits,
     provider_from_env,
     resolve_config,
@@ -622,6 +623,7 @@ class WorkspaceKernelBinding:
         *,
         remote_runtime: RemoteKernelStarter | None = None,
         notebook_store: NotebookStore | None = None,
+        python: str | None = None,
     ) -> None:
         """*remote_runtime* (C3) is the remote kernel half or ``None`` —
         ``None`` is the off answer: the manager then refuses remote
@@ -633,7 +635,8 @@ class WorkspaceKernelBinding:
             else Path(workspace)
         )
         self.manager = PersistentKernelManager(
-            root, on_figure=self._register_figure, remote_runtime=remote_runtime
+            root, on_figure=self._register_figure, remote_runtime=remote_runtime,
+            python=python,
         )
         self._root = root
         self._store: ArtifactStore | None = None
@@ -1286,6 +1289,8 @@ class RecordingPromptSource:
 def build_budget(
     model: str,
     tools: Sequence[ToolDefinition],
+    *,
+    limits: ModelLimits | None = None,
 ) -> ContextBudget:
     """The window, and the two reserves carved out of it.
 
@@ -1300,7 +1305,7 @@ def build_budget(
     optimistic answer, recorded as debt in plan 0031 §11-2 and warned
     about here because this layer is the first that ever asks.
     """
-    limits = get_model_limits(model)
+    limits = get_model_limits(model) if limits is None else limits
     if not model:
         _log.warning(
             "no model named; budgeting against the default limits "
@@ -1812,6 +1817,14 @@ async def _consent_remote_kernel_env(host: str) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DeploymentCapabilities:
+    """Explicit optional services; the default preserves CLI behavior."""
+
+    notebook: bool = True
+    science_python: str | None = None
+
+
 def build_app(
     config: AppConfig,
     *,
@@ -1823,6 +1836,9 @@ def build_app(
     telemetry: Telemetry | None = None,
     skills: SkillIndex | None = None,
     provider: LLMProvider | None = None,
+    resolved_model: str | None = None,
+    model_limits: ModelLimits | None = None,
+    capabilities: DeploymentCapabilities | None = None,
 ) -> AgentApp:
     """Wire one deployment. The only function that knows the order.
 
@@ -1893,6 +1909,8 @@ def build_app(
     database wants — :func:`~omicsclaw.entry.memory.prepare_memory` is
     ``async`` and :func:`open_app` is what runs it.
     """
+    if capabilities is None:
+        capabilities = DeploymentCapabilities()
     binding = unstarted_sandbox(config) if sandbox is None else sandbox
     # Telemetry is resolved before the provider, because the provider is
     # the first thing it wraps. ``build_telemetry`` reads the OTEL_*
@@ -1904,7 +1922,11 @@ def build_app(
     # named: ``LLM_PROVIDER=deepseek`` alone leaves ``config.model`` empty
     # and runs the preset's default, and budgeting against ``""`` would
     # be the fallback window instead of that model's.
-    model = resolve_config(config.provider, config.model).model
+    model = (
+        resolve_config(config.provider, config.model).model
+        if resolved_model is None
+        else resolved_model
+    )
     backend = (
         provider_from_env(config.provider, config.model)
         if provider is None
@@ -1952,11 +1974,12 @@ def build_app(
         # never run a cell.
         kernels = WorkspaceKernelBinding(
             config.workspace,
+            python=capabilities.science_python,
             remote_runtime=remote_kernels,
             notebook_store=(
                 NotebookStore(remembering.database) if remembering is not None else None
             ),
-        )
+        ) if capabilities.notebook else None
         if tools is None:
             mounted: Sequence[Tool] = (
                 *foundation_tools(
@@ -1980,12 +2003,16 @@ def build_app(
                     Workspace(config.workspace),
                     sink=WorkspaceArtifactSink(config.workspace),
                 ),
-                PythonKernelTool(
-                    runner=kernels,
-                    allow_remote=remote_kernels is not None,
-                ),
-                LiveAppTool(NotebookAppBridge(kernels)),
             )
+            if kernels is not None:
+                mounted = (
+                    *mounted,
+                    PythonKernelTool(
+                        runner=kernels,
+                        allow_remote=remote_kernels is not None,
+                    ),
+                    LiveAppTool(NotebookAppBridge(kernels)),
+                )
             if env_supply is not None:
                 # Appended in the one slot the wiring tests allow: after
                 # the foundation set and P4's python, before nothing —
@@ -2067,7 +2094,7 @@ def build_app(
         )
 
         app_prompt = RecordingPromptSource(build_prompt(chosen))
-        budget = build_budget(model, snapshot)
+        budget = build_budget(model, snapshot, limits=model_limits)
         summarizer = build_summarizer(provider, config)
         # The registry goes in as itself — see build_registry on why nothing
         # may wrap it without forwarding both optional Protocols.

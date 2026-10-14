@@ -1,3 +1,7 @@
+## 2026-10-14 — SSH controller feasibility slice
+
+Added a finite stdio controller over the shared application, session and job managers. Desktop Node can bridge model calls and approval events without client Python or a remote HTTP backend. Public provider factories survive binding; durable admission receipts refuse process-restart resubmission. Independent source manifests and hashed control profiles separate science execution. This is the first migration stage, not a released Desktop mode. See `docs/engineering/2026-10-14-ssh-controller.md`.
+
 ## 2026-10-13 — Hosted Notebook live apps
 
 Notebooks can host a versioned, self-contained HTML/JS application linked to a completed execution. The Agent publishes through the approval-gated `live_app` tool. The Desktop iframe provides bounded Notebook context and saves structured interaction state through revision-checked routes; the next chat request receives that state as untrusted reference data. See `docs/core-features/notebook.md` for the API, bridge and hosting limits.

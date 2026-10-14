@@ -55,6 +55,7 @@ def provider_for(
     config: ProviderConfig,
     *,
     dialect: ProviderDialect | None = None,
+    client_factory: Callable[[ProviderConfig], Any] | None = None,
 ) -> LLMProvider:
     """Build the adapter that can talk to ``config``'s backend.
 
@@ -85,6 +86,8 @@ def provider_for(
             f"are {known}",
             provider=config.provider,
         )
+    if client_factory is not None:
+        return build(config, client_factory=client_factory)
     return build(config)
 
 

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "platform": "linux-x86_64-gnu",
+  "python": "3.11.17",
+  "sourceBytes": 4718592,
+  "sourceArchiveBytes": 2097152,
+  "pythonLogicalBytes": 104857600,
+  "baseEnvironmentLogicalBytes": 41943040,
+  "fullEnvironmentLogicalBytes": 52428800,
+  "baseTotalLogicalBytes": 157286400,
+  "fullTotalLogicalBytes": 167772160,
+  "coldSupplyDownloadBytes": 125829120,
+  "basePeakRssBytes": 146800640,
+  "fullPeakRssBytes": 167772160,
+  "coldHandshakeSeconds": 10,
+  "scientificEnvironment": "reported separately; never installed into control profiles",
+  "growthRule": "fail and inspect dependency/source backflow; thresholds require an explicit reviewed contract change",
+  "cacheLogicalBytes": 83886080,
+  "fullTotalWithCacheLogicalBytes": 251658240,
+  "estimateContract": "Full means all promised control capabilities. Current full.lock measures representative Notebook client increment; workers/science reported separately. Limits are frozen for later measured gates, not automatic upgrades."
+}

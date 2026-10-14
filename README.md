@@ -96,6 +96,11 @@ network access by setting `OMICSCLAW_SANDBOX=docker` and
 
 ## Desktop App
 
+The SSH controller migration has an experimental source slice described in
+[its architecture record](docs/engineering/2026-10-14-ssh-controller.md).
+It uses the shared Python core over stdio and keeps model credentials on the
+Mac. The released Desktop modes below have not yet been replaced.
+
 The current source App includes an [interactive Python notebook](docs/core-features/notebook.md) with persistent kernel sessions, durable execution replay, `.ipynb` interchange, and execution-linked feedback. Run matching backend and App source to use the Notebook navigation item.
 
 <p align="center">

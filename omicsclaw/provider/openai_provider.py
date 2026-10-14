@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any
 
 from omicsclaw.schema import (
@@ -413,10 +413,16 @@ class OpenAIProvider:
     :meth:`bind`.
     """
 
-    __slots__ = ("_client", "_config")
+    __slots__ = ("_client", "_client_factory", "_config")
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(
+        self,
+        config: ProviderConfig,
+        *,
+        client_factory: Callable[[ProviderConfig], Any] | None = None,
+    ) -> None:
         self._config = config
+        self._client_factory = client_factory
         # Built on first use and cached. An instance attribute rather than
         # a local so a test can substitute a fake client and exercise the
         # whole request path with no SDK installed and no socket opened.
@@ -428,11 +434,16 @@ class OpenAIProvider:
 
     def bind(self, **overrides: Any) -> OpenAIProvider:
         """A new provider with a different configuration; never a mutation."""
-        return type(self)(self._config.with_overrides(**overrides))
+        return type(self)(
+            self._config.with_overrides(**overrides),
+            client_factory=self._client_factory,
+        )
 
     # ---- SDK plumbing ----------------------------------------------------
 
     def _create_client(self) -> Any:
+        if self._client_factory is not None:
+            return self._client_factory(self._config)
         try:
             import openai
         except ImportError as exc:

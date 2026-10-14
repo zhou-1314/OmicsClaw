@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
 import time
@@ -22,6 +23,12 @@ class DurableTurnEvent:
     payload: dict[str, Any]
     created_at: float
     owner_epoch: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class DurableAuthorityIdentity:
+    authority_id: str
+    workspace_id: str
 
 
 class EventLogConflict(ValueError):
@@ -51,10 +58,50 @@ class DurableTurnEventLog:
         self._retained = retained
         self.owner_id = owner_id or uuid.uuid4().hex
         self.lease_s = float(lease_s)
+        self.identity = self._identity()
+
+    def _identity(self) -> DurableAuthorityIdentity:
+        def work(conn):
+            conn.execute(
+                "INSERT OR IGNORE INTO turn_authority_identity VALUES(1,?,?)",
+                (uuid.uuid4().hex, uuid.uuid4().hex),
+            )
+            row = conn.execute(
+                "SELECT authority_id, workspace_id FROM turn_authority_identity WHERE singleton=1"
+            ).fetchone()
+            return DurableAuthorityIdentity(**dict(row))
+        return self._db.run(work)
 
     @property
     def database(self) -> Database:
         return self._db
+
+    def request_receipt(self, session_id: str, source_request_id: str) -> dict | None:
+        def work(conn):
+            row = conn.execute(
+                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at "
+                "FROM turn_ingress WHERE session_id=? AND source_request_id=?",
+                (session_id, source_request_id),
+            ).fetchone()
+            return {**dataclasses.asdict(self.identity), **dict(row)} if row is not None else None
+        return self._db.run(work)
+
+    def claim_request(self, session_id: str, source_request_id: str, payload_hash: str, turn_id: str) -> dict:
+        """Persist admission before scheduling. A receipt is never a retry permit."""
+        def work(conn):
+            conn.execute(
+                "INSERT OR IGNORE INTO turn_ingress VALUES(?,?,?,?,?)",
+                (session_id, source_request_id, payload_hash, turn_id, time.time()),
+            )
+            row = conn.execute(
+                "SELECT session_id,source_request_id,payload_hash,turn_id,created_at "
+                "FROM turn_ingress WHERE session_id=? AND source_request_id=?",
+                (session_id, source_request_id),
+            ).fetchone()
+            if row["payload_hash"] != payload_hash:
+                raise EventLogConflict("request identity reused with a different payload")
+            return {**dataclasses.asdict(self.identity), **dict(row)}
+        return self._db.run(work)
 
     def acquire_owner(
         self, stream_id: str, *, owner_id: str | None = None, now: float | None = None

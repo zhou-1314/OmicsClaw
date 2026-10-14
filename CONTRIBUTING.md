@@ -454,3 +454,8 @@ AI coding agents should follow the same workflow, plus:
 ## Questions?
 
 Open an issue on [GitHub](https://github.com/TianGzlab/OmicsClaw/issues) or check the documentation.
+The experimental SSH controller uses the shared application and manager
+implementations. Keep protocol, model bridge and independent environment
+adapters at that boundary; do not duplicate the agent or job state machines.
+See `docs/engineering/2026-10-14-ssh-controller.md` for the profile and
+dependency update contract.

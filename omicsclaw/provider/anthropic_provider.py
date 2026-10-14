@@ -34,7 +34,7 @@ it; everything else in this module runs on the standard library.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -599,10 +599,16 @@ class AnthropicProvider:
     ``anthropic`` package is not installed at all.
     """
 
-    __slots__ = ("_config", "_cached_client")
+    __slots__ = ("_config", "_cached_client", "_client_factory")
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(
+        self,
+        config: ProviderConfig,
+        *,
+        client_factory: Callable[[ProviderConfig], Any] | None = None,
+    ) -> None:
         self._config = config
+        self._client_factory = client_factory
         self._cached_client: Any = None
 
     @property
@@ -616,7 +622,10 @@ class AnthropicProvider:
 
     def bind(self, **overrides: Any) -> AnthropicProvider:
         """Copy-on-write. The receiver is never mutated — see ``base.py``."""
-        return type(self)(self._config.with_overrides(**overrides))
+        return type(self)(
+            self._config.with_overrides(**overrides),
+            client_factory=self._client_factory,
+        )
 
     # ---- request assembly ------------------------------------------------
 
@@ -674,7 +683,8 @@ class AnthropicProvider:
 
     def _client(self) -> Any:
         if self._cached_client is None:
-            self._cached_client = _build_async_client(self._config)
+            factory = self._client_factory or _build_async_client
+            self._cached_client = factory(self._config)
         return self._cached_client
 
     def _wrap(self, exc: Exception) -> ProviderError:

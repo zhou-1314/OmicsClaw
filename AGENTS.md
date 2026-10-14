@@ -100,6 +100,12 @@ oc cli                     # terminal REPL
 
 ## Commands
 
+The source-only SSH controller experiment lives in `omicsclaw/entry/ssh/`.
+It reuses `build_app` and receives model configuration through stdio;
+it does not add an `oc` surface or run a product HTTP server. Its release
+boundary and staged verification are recorded in
+`docs/engineering/2026-10-14-ssh-controller.md`.
+
 `oc` takes a **surface**, not a subcommand. Deployment flags go before `--`;
 a surface's own flags may be written on either side of it. Use `--` when a
 value is spelled like a flag: `oc cli -- --prompt --model`.
