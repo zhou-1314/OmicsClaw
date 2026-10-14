@@ -862,6 +862,8 @@ class Controller:
         await asyncio.gather(*self.observers.values(), return_exceptions=True)
         if self.app is not None:
             await self.app.sessions.shutdown(0)
+            if self.jobs is not None:
+                await self.jobs.shutdown_observations()
             await self.app.aclose()
         for factory in self.factories:
             await factory.aclose()

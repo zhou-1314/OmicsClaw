@@ -49,6 +49,7 @@ lock anyway.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -67,6 +68,7 @@ from omicsclaw.envsupply import parse_env_step
 from omicsclaw.memory.artifacts import ArtifactStore
 from omicsclaw.memory.database import Database
 from omicsclaw.remote import RemoteJobsBridge, refresh_in_flight
+from omicsclaw.remote.bridge import RemoteJobFailed
 from omicsclaw.runs.manifest import build_manifest
 from omicsclaw.runs.models import Activity, Kernel, Run, Verification
 from omicsclaw.runs.models import Job as RunJob
@@ -128,6 +130,14 @@ HEARTBEAT_INTERVAL_S: Final = 25.0
 _DATA_PARAMETER_NAMES: Final = ("adata", "data", "dataset", "input")
 _DATA_INPUT_KEYS: Final = ("adata", "data", "dataset", "input")
 _RESULT_SUMMARY_CHARS: Final = 4000
+_PROJECTION_BYTES: Final = 512 * 1024
+_JOB_COLUMNS = (
+    "id,session_id,kind,skill,inputs_json,runtime,target_alias,target_workdir,capabilities_json,"
+    "status,error,created_at,started_at,finished_at,lifetime,source_request_id,payload_hash,"
+    "length(CAST(projection_json AS BLOB)) AS projection_bytes,"
+    f"CASE WHEN length(CAST(projection_json AS BLOB)) <= {_PROJECTION_BYTES} "
+    "THEN projection_json ELSE NULL END AS projection_json"
+)
 
 
 class JobError(ValueError):
@@ -183,6 +193,9 @@ class JobRecord:
     target_workdir: str = ""
     capabilities: tuple[str, ...] = ()
     lifetime: str = ""
+    source_request_id: str = ""
+    payload_hash: str = ""
+    projection: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.target_alias and self.runtime.startswith("remote:"):
@@ -209,6 +222,8 @@ class JobRecord:
             "skill": self.skill,
             "inputs": dict(self.inputs),
             "runtime": self.runtime,
+            "lifetime": self.lifetime,
+            "source_request_id": self.source_request_id,
             "target_alias": self.target_alias or None,
             "target_workdir": self.target_workdir or None,
             "capabilities": list(self.capabilities),
@@ -239,34 +254,85 @@ class JobStore:
         return self._db
 
     def insert_job(self, record: JobRecord) -> None:
-        self._db.run(
-            lambda conn: conn.execute(
-                "INSERT INTO jobs (id, session_id, kind, skill, inputs_json,"
-                " runtime, target_alias, target_workdir, capabilities_json,"
-                " status, error, created_at, started_at, finished_at,lifetime)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    record.id,
-                    record.session_id,
-                    record.kind,
-                    record.skill,
-                    json.dumps(dict(record.inputs), ensure_ascii=False, default=str),
-                    record.runtime,
-                    record.target_alias,
-                    record.target_workdir,
-                    json.dumps(list(record.capabilities), ensure_ascii=False),
-                    record.status,
-                    record.error,
-                    record.created_at,
-                    record.started_at,
-                    record.finished_at,
-                    record.lifetime,
-                ),
-            )
+        self._db.run(lambda conn: self._insert_job(conn, record))
+
+    @staticmethod
+    def _insert_job(conn, record):
+        projection_json = json.dumps(dict(record.projection), ensure_ascii=False)
+        if len(projection_json.encode()) > _PROJECTION_BYTES:
+            raise JobError("job_projection_too_large")
+        return conn.execute(
+            "INSERT INTO jobs (id, session_id, kind, skill, inputs_json,"
+            " runtime, target_alias, target_workdir, capabilities_json,"
+            " status, error, created_at, started_at, finished_at,lifetime,source_request_id,payload_hash,projection_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                record.id,
+                record.session_id,
+                record.kind,
+                record.skill,
+                json.dumps(dict(record.inputs), ensure_ascii=False, default=str),
+                record.runtime,
+                record.target_alias,
+                record.target_workdir,
+                json.dumps(list(record.capabilities), ensure_ascii=False),
+                record.status,
+                record.error,
+                record.created_at,
+                record.started_at,
+                record.finished_at,
+                record.lifetime,
+                record.source_request_id,
+                record.payload_hash,
+                projection_json,
+            ),
         )
 
+    def by_request(self, session_id: str, request_id: str) -> JobRecord | None:
+        row = self._db.run(
+            lambda conn: conn.execute(
+                "SELECT "
+                + _JOB_COLUMNS
+                + " FROM jobs WHERE session_id=? AND source_request_id=?",
+                (session_id, request_id),
+            ).fetchone()
+        )
+        return _row_to_record(row) if row is not None else None
+
+    def claim_job(self, record: JobRecord) -> tuple[JobRecord, bool]:
+        """Atomically admit a canonical job in the original jobs table."""
+        if not record.source_request_id:
+            self.insert_job(record)
+            return record, True
+
+        def write(conn):
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT "
+                + _JOB_COLUMNS
+                + " FROM jobs WHERE session_id=? AND source_request_id=?",
+                (record.session_id, record.source_request_id),
+            ).fetchone()
+            if row is not None:
+                original = _row_to_record(row)
+                if original.payload_hash != record.payload_hash:
+                    raise JobError("job_payload_conflict", status_code=409)
+                return original, False
+            self._insert_job(conn, record)
+            return record, True
+
+        return self._db.run(write)
+
     def update_job(self, job_id: str, **changes: Any) -> None:
-        immutable = {"target_alias", "target_workdir", "capabilities_json", "lifetime"}
+        immutable = {
+            "target_alias",
+            "target_workdir",
+            "capabilities_json",
+            "lifetime",
+            "source_request_id",
+            "payload_hash",
+            "projection_json",
+        }
         if immutable.intersection(changes):
             raise ValueError("target_snapshot_immutable")
         allowed = (
@@ -292,10 +358,7 @@ class JobStore:
     def get_job(self, job_id: str) -> JobRecord | None:
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, session_id, kind, skill, inputs_json, runtime,"
-                " target_alias, target_workdir, capabilities_json,"
-                " status, error, created_at, started_at, finished_at,lifetime"
-                " FROM jobs WHERE id = ?",
+                "SELECT " + _JOB_COLUMNS + " FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchall()
         )
@@ -320,9 +383,9 @@ class JobStore:
         params.append(max(1, min(limit, 500)))
         rows = self._db.run(
             lambda conn: conn.execute(
-                "SELECT id, session_id, kind, skill, inputs_json, runtime,"
-                " target_alias, target_workdir, capabilities_json,"
-                " status, error, created_at, started_at, finished_at,lifetime FROM jobs "
+                "SELECT "
+                + _JOB_COLUMNS
+                + " FROM jobs "
                 + where
                 + " ORDER BY created_at DESC, id DESC LIMIT ?",
                 tuple(params),
@@ -426,6 +489,8 @@ def _decode_capabilities(value: Any) -> tuple[str, ...]:
 
 
 def _row_to_record(row: Any) -> JobRecord:
+    if row["projection_bytes"] > _PROJECTION_BYTES:
+        raise JobError("job_projection_too_large")
     try:
         inputs = json.loads(row["inputs_json"]) if row["inputs_json"] else {}
     except (TypeError, ValueError):
@@ -443,6 +508,9 @@ def _row_to_record(row: Any) -> JobRecord:
         # process that wrote it.
         runtime=str(row["runtime"] or "local"),
         lifetime=str(row["lifetime"] or ""),
+        source_request_id=str(row["source_request_id"] or ""),
+        payload_hash=str(row["payload_hash"] or ""),
+        projection=json.loads(row["projection_json"] or "{}"),
         target_alias=str(row["target_alias"] or ""),
         target_workdir=str(row["target_workdir"] or ""),
         capabilities=_decode_capabilities(row["capabilities_json"]),
@@ -1423,6 +1491,7 @@ class JobsManager:
         self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
         self._runners: dict[str, Any] = {}
         self._live: dict[str, _LiveJob] = {}
+        self._cancel_tasks: set[asyncio.Task] = set()
         self._seq: dict[str, int] = {}
         self._remote_runtime = remote_runtime
         self._reconcile_lock = asyncio.Lock()
@@ -1494,6 +1563,17 @@ class JobsManager:
             for session in await sessions.list_sessions(limit=500):
                 ensure_session_run(self.run_store, session.session_id, plans=plans)
         for run in self.run_store.list("run"):
+            owner_id = next(
+                (
+                    job_id
+                    for job_id, run_id in self._run_ids.items()
+                    if run_id == run.run_id
+                ),
+                None,
+            )
+            owner = self.store.get_job(owner_id) if owner_id else None
+            if owner is not None and owner.source_request_id:
+                continue
             plan_id, steps, active = plan_snapshot(plans, run.session_id)
             run.plan_id, run.plan_steps = plan_id, steps
             if run.origin == "legacy":
@@ -1590,6 +1670,8 @@ class JobsManager:
         session_id: str = "",
         workspace: str = "",
         runtime: str = "local",
+        source_request_id: str = "",
+        lifetime: str = "",
     ) -> JobRecord:
         """Validate, persist and start one job. Returns its record.
 
@@ -1606,19 +1688,24 @@ class JobsManager:
         no remote bridge is bound, or the runner ``validate`` refused the
         skill or inputs.
         """
-        runner = self._runners.get(kind)
-        if runner is None:
-            raise JobError("unknown_kind")
         if inputs is None:
             inputs = {}
         if not isinstance(inputs, dict):
             raise JobError("inputs_must_be_object")
-        if runtime != "local":
-            alias = runtime[len("remote:") :] if runtime.startswith("remote:") else ""
-            if not alias or not valid_host(alias):
-                raise JobError("invalid_runtime")
-            if self._remote_runtime is None:
-                raise JobError("remote_runtime_unavailable", status_code=409)
+        configured_runner = self._runners.get(kind)
+        lifetime = lifetime or (
+            getattr(configured_runner, "lifetime", "in_process")
+            if runtime == "local"
+            else "external"
+        )
+        if not isinstance(lifetime, str) or lifetime not in {"in_process", "external"}:
+            raise JobError("invalid_job_lifetime")
+        if (
+            not isinstance(source_request_id, str)
+            or source_request_id
+            and not re.fullmatch(r"[A-Za-z0-9:._-]{1,256}", source_request_id)
+        ):
+            raise JobError("invalid_job_request_id")
         declared_workspace = str(getattr(self._app.config, "workspace", ""))
         if workspace and workspace.strip():
             try:
@@ -1632,6 +1719,44 @@ class JobsManager:
                 raise JobError(
                     "workspace_does_not_match_backend_runtime", status_code=409
                 )
+        payload_hash = ""
+        if source_request_id:
+            try:
+                payload = json.dumps(
+                    {
+                        "kind": kind,
+                        "skill": str(skill or ""),
+                        "inputs": inputs,
+                        "session_id": str(session_id or ""),
+                        "runtime": runtime,
+                        "lifetime": lifetime,
+                        "workspace": str(Path(self._app.config.workspace).resolve()),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode()
+            except (ValueError, TypeError) as exc:
+                raise JobError("invalid_job_payload") from exc
+            if len(payload) > 2 * 1024 * 1024:
+                raise JobError("job_payload_too_large")
+            payload_hash = hashlib.sha256(payload).hexdigest()
+            original = self.store.by_request(str(session_id or ""), source_request_id)
+            if original is not None:
+                if original.payload_hash != payload_hash:
+                    raise JobError("job_payload_conflict", status_code=409)
+                self._ensure_job_projection(original)
+                return original
+        runner = self._runners.get(kind)
+        if runner is None:
+            raise JobError("unknown_kind")
+        if runtime != "local":
+            alias = runtime[len("remote:") :] if runtime.startswith("remote:") else ""
+            if not alias or not valid_host(alias):
+                raise JobError("invalid_runtime")
+            if self._remote_runtime is None:
+                raise JobError("remote_runtime_unavailable", status_code=409)
         validate = (
             self._remote_runtime.validate
             if runtime != "local" and self._remote_runtime is not None
@@ -1684,6 +1809,8 @@ class JobsManager:
             except Exception as exc:
                 _log.debug("target resolution failed", exc_info=True)
                 raise JobError("target_resolution_failed", status_code=409) from exc
+        elif lifetime == "external" and getattr(runner, "target_alias", ""):
+            target_snapshot = await runner.resolve_target(runner.target_alias)
         if runtime != "local":
             # The query-time half of C2's re-estimation: before adding a
             # job to the in-flight set, ask the ones already in it what
@@ -1696,13 +1823,51 @@ class JobsManager:
                 await self.reconcile_remote_jobs()
             except Exception:  # noqa: BLE001 - reconcile is best-effort here
                 _log.debug("pre-create remote reconcile failed", exc_info=True)
+        job_id = secrets.token_hex(16)
+        plan_id, plan_steps, step_id = plan_snapshot(
+            getattr(self._app, "plans", None), str(session_id or "")
+        )
+        run = Run(
+            run_id="run_job_" + job_id,
+            session_id=str(session_id or ""),
+            plan_id=plan_id,
+            plan_steps=plan_steps,
+            step_id=step_id,
+            execution_location=target_runtime if kind == "code_run" else runtime,
+        )
+        projection = {
+            "run_id": run.run_id,
+            "plan_id": run.plan_id,
+            "plan_steps": run.plan_steps,
+            "step_id": run.step_id,
+            "created_at": run.created_at,
+            "execution_location": run.execution_location,
+        }
+        projection_bytes = json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+        if len(projection_bytes) > _PROJECTION_BYTES - 128:
+            raise JobError("job_projection_too_large")
+        projection = {
+            **projection,
+            "schema_version": 1,
+            "sha256": hashlib.sha256(projection_bytes).hexdigest(),
+        }
         record = JobRecord(
-            id=secrets.token_hex(16),
+            id=job_id,
             session_id=str(session_id or ""),
             kind=kind,
             skill=str(skill or ""),
             inputs=inputs,
             runtime=runtime,
+            lifetime=lifetime,
+            source_request_id=source_request_id,
+            payload_hash=payload_hash,
+            projection=projection,
             target_alias=target_snapshot.alias if target_snapshot is not None else "",
             target_workdir=(
                 target_snapshot.workdir if target_snapshot is not None else ""
@@ -1713,49 +1878,120 @@ class JobsManager:
             status="queued",
             created_at=time.time(),
         )
-        self.store.insert_job(record)
-        plan_id, plan_steps, step_id = plan_snapshot(
-            getattr(self._app, "plans", None), record.session_id
-        )
-        run = Run(
-            session_id=record.session_id,
-            plan_id=plan_id,
-            plan_steps=plan_steps,
-            step_id=step_id,
-            execution_location=(
-                "remote:" + record.target_alias
-                if record.target_alias
-                else record.runtime
-            ),
-        )
-        self.run_store.save(run)
-        self._run_ids[record.id] = run.run_id
-        run_job = RunJob(
-            run_id=run.run_id,
-            host_id=record.target_alias,
-            scheduler=record.runtime,
-            execution_ref=record.id,
-            step_id=step_id,
-            status="created",
-        )
-        self.run_store.save(run_job)
-        self._run_job_ids[record.id] = run_job.job_id
-        self._emit(
-            record.id,
-            "job.created",
-            {
-                "job_id": record.id,
-                "kind": kind,
-                "skill": record.skill,
-                "runtime": runtime,
-            },
-        )
+        record, newly_claimed = self.store.claim_job(record)
+        self._ensure_job_projection(record)
+        if not newly_claimed:
+            return record
         live = _LiveJob(task=None, gate=self._make_gate(record.id))
         self._live[record.id] = live
         live.task = asyncio.create_task(
             self._run(record.id), name="omicsclaw-job-" + record.id
         )
         return record
+
+    def _ensure_job_projection(self, record: JobRecord) -> None:
+        """Repair the original job-to-run links without admitting execution."""
+        snapshot = dict(record.projection)
+        if record.source_request_id and not snapshot:
+            raise JobError("job_projection_conflict", status_code=409)
+        if snapshot:
+            version = snapshot.pop("schema_version", None)
+            digest = snapshot.pop("sha256", None)
+            raw = json.dumps(
+                snapshot,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+            if version != 1 or digest != hashlib.sha256(raw).hexdigest():
+                raise JobError("job_projection_conflict", status_code=409)
+        run_id = (
+            self._run_ids.get(record.id)
+            or snapshot.get("run_id")
+            or "run_job_" + record.id
+        )
+        run = self.run_store.load(run_id)
+        if (
+            run is not None
+            and snapshot
+            and (
+                not isinstance(run, Run)
+                or run.run_id != snapshot["run_id"]
+                or run.session_id != record.session_id
+                or any(
+                    getattr(run, name) != snapshot[name]
+                    for name in (
+                        "plan_id",
+                        "plan_steps",
+                        "step_id",
+                        "created_at",
+                        "execution_location",
+                    )
+                )
+            )
+        ):
+            raise JobError("job_projection_conflict", status_code=409)
+        if run is None:
+            allowed = {
+                name: snapshot[name]
+                for name in (
+                    "plan_id",
+                    "plan_steps",
+                    "step_id",
+                    "created_at",
+                    "execution_location",
+                )
+                if name in snapshot
+            }
+            run = Run(run_id=run_id, session_id=record.session_id, **allowed)
+            if not snapshot:
+                run.execution_location = record.runtime
+            self.run_store.save(run, if_absent=True)
+        self._run_ids[record.id] = run_id
+        projection_id = (
+            self._run_job_ids.get(record.id) or "job_projection_" + record.id
+        )
+        existing_job = self.run_store.load(projection_id)
+        if (
+            existing_job is not None
+            and snapshot
+            and (
+                not isinstance(existing_job, RunJob)
+                or existing_job.run_id != run_id
+                or existing_job.execution_ref != record.id
+                or existing_job.host_id != record.target_alias
+                or existing_job.scheduler != record.runtime
+                or existing_job.command_digest != record.payload_hash
+                or existing_job.step_id != run.step_id
+            )
+        ):
+            raise JobError("job_projection_conflict", status_code=409)
+        if existing_job is None:
+            self.run_store.save(
+                RunJob(
+                    job_id=projection_id,
+                    run_id=run_id,
+                    host_id=record.target_alias,
+                    scheduler=record.runtime,
+                    execution_ref=record.id,
+                    step_id=run.step_id,
+                    command_digest=record.payload_hash,
+                ),
+                if_absent=True,
+            )
+        self._run_job_ids[record.id] = projection_id
+        if self.store.latest_seq(record.id) == 0:
+            self._emit(
+                record.id,
+                "job.created",
+                {
+                    "job_id": record.id,
+                    "kind": record.kind,
+                    "skill": record.skill,
+                    "runtime": record.runtime,
+                },
+            )
 
     async def reconcile_remote_jobs(self) -> dict[str, int]:
         """Re-estimate every in-flight remote handle; move local rows with it.
@@ -1778,6 +2014,13 @@ class JobsManager:
             if record is None:
                 return
             status = {"done": "succeeded", "pending": "queued"}.get(state, state)
+            if record.status in TERMINAL_JOB_STATUSES:
+                return
+            if (
+                record.status == "cancel_requested"
+                and status not in TERMINAL_JOB_STATUSES
+            ):
+                return
             if record.status != status:
                 changes: dict[str, Any] = {"status": status}
                 if status in TERMINAL_JOB_STATUSES:
@@ -1793,15 +2036,28 @@ class JobsManager:
             # updating the desktop projection. Repair that window on restart.
             remote_store = self._remote_runtime.plane.job_store()
             for record in self.store.list_jobs(limit=10000):
-                if record.runtime.startswith("remote:"):
+                if record.lifetime == "external" or record.runtime.startswith(
+                    "remote:"
+                ):
                     row = remote_store.by_local_job(record.id)
                     if row is not None:
+                        if (
+                            row.kind == "nohup"
+                            and row.handle().process_identity is None
+                        ):
+                            if record.status not in TERMINAL_JOB_STATUSES:
+                                on_status(record.id, row.host_alias, "unknown")
+                            continue
                         on_status(record.id, row.host_alias, row.status)
                         live = self._live.get(record.id)
                         if row.status in {"done", "failed", "canceled"} and (
                             live is None or live.task is None or live.task.done()
                         ):
                             await self._recover_remote_evidence(record, row)
+                            self._emit_terminal_once(
+                                record.id,
+                                {"done": "succeeded"}.get(row.status, row.status),
+                            )
             return report
 
     async def _recover_remote_evidence(self, record, row):
@@ -1866,12 +2122,7 @@ class JobsManager:
     async def cancel_job(self, job_id: str) -> str:
         """Cancel a live task or a remote handle recovered after restart."""
         record = self.store.get_job(job_id)
-        live = self._live.get(job_id)
-        if (
-            record is None
-            or not record.runtime.startswith("remote:")
-            or (live is not None and live.task is not None and not live.task.done())
-        ):
+        if record is None or record.lifetime != "external":
             return self.cancel(job_id)
         if record.status in TERMINAL_JOB_STATUSES:
             return "finished"
@@ -1881,14 +2132,25 @@ class JobsManager:
             plane = self._remote_runtime.plane
             row = plane.job_store().by_local_job(job_id)
             if row is None:
-                raise JobError("remote_handle_unavailable", status_code=409)
+                self.store.update_job(job_id, status="cancel_requested")
+                return "cancel_requested"
             report = await plane.cancel(str(row.id))
-            if report.state != "canceled":
-                raise JobError("remote_cancel_unconfirmed", status_code=409)
-            self.store.update_job(job_id, status="canceled", finished_at=time.time())
-            self._sync_run_status(job_id, "canceled")
-            self._emit(job_id, "job.done", {"status": "canceled"})
-            return "canceled"
+            if report.state in {"canceled", "done", "failed"}:
+                status = {"done": "succeeded"}.get(report.state, report.state)
+                self._emit(
+                    job_id,
+                    "execution.finished",
+                    {
+                        "exit_code": report.exit_code,
+                        "evidence_ref": "remote-job:" + str(row.id),
+                    },
+                )
+                self.store.update_job(job_id, status=status, finished_at=time.time())
+                self._sync_run_status(job_id, status)
+                self._emit_terminal_once(job_id, status)
+                return "canceled" if status == "canceled" else "finished"
+            self.store.update_job(job_id, status="cancel_requested")
+            return "cancel_requested"
 
     def cancel(self, job_id: str) -> str:
         """Cancel one job. Answers ``"canceled"``, ``"unknown"`` or ``"finished"``.
@@ -1902,6 +2164,14 @@ class JobsManager:
         record = self.store.get_job(job_id)
         if record is None:
             return "unknown"
+        if record.lifetime == "external" and record.status not in TERMINAL_JOB_STATUSES:
+            self.store.update_job(job_id, status="cancel_requested")
+            task = asyncio.create_task(
+                self.cancel_job(job_id), name="omicsclaw-explicit-cancel-" + job_id
+            )
+            self._cancel_tasks.add(task)
+            task.add_done_callback(self._cancel_finished)
+            return "cancel_requested"
         live = self._live.get(job_id)
         if live is None or record.status in TERMINAL_JOB_STATUSES:
             return "finished"
@@ -1910,6 +2180,56 @@ class JobsManager:
         if live.task is not None and not live.task.done():
             live.task.cancel()
         return "canceled"
+
+    async def shutdown_observations(self) -> None:
+        """Detach controller-owned observers without cancelling external work."""
+        tasks = [
+            live.task
+            for live in self._live.values()
+            if live.task is not None and not live.task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=3.0)
+            if pending:
+                raise RuntimeError("job_observation_shutdown_unconfirmed")
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self._cancel_tasks:
+            _, pending = await asyncio.wait(self._cancel_tasks, timeout=3.0)
+            if pending:
+                raise RuntimeError("job_explicit_cancel_shutdown_unconfirmed")
+
+    def _cancel_finished(self, task: asyncio.Task) -> None:
+        self._cancel_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            _log.warning("explicit job cancel unconfirmed: %s", type(error).__name__)
+
+    def _emit_terminal_once(self, job_id: str, status: str, payload=None) -> None:
+        found = self.store.database.run(
+            lambda conn: conn.execute(
+                "SELECT 1 FROM job_events WHERE job_id=? AND type IN ('job.done','job.failed') LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        )
+        if found is None:
+            self._emit(
+                job_id,
+                "job.failed" if status == "failed" else "job.done",
+                payload or {"status": status},
+            )
+
+    def _detach_external_observation(self, job_id: str, reason: str) -> None:
+        current = self.store.get_job(job_id)
+        if current is None or current.status in TERMINAL_JOB_STATUSES:
+            return
+        status = (
+            "cancel_requested" if current.status == "cancel_requested" else "unknown"
+        )
+        self.store.update_job(job_id, status=status, error=reason)
+        self._emit(
+            job_id, "job.observation_stopped", {"reason": reason, "status": status}
+        )
 
     def settle_approval(
         self, job_id: str, call_id: str, decision: ApprovalDecision
@@ -1954,6 +2274,13 @@ class JobsManager:
         if run_id and event_type == "kernel.observed":
             bind_kernel(self.run_store, Kernel(**payload), run_id, job_id)
         if run_id and event_type == "execution.finished":
+            previous = self.run_store.load("verification:exit:" + job_id)
+            if previous is not None:
+                expected = str(payload.get("exit_code"))
+                if previous.evidence_ref == expected:
+                    return self.store.latest_seq(job_id)
+                if previous.verdict != "inconclusive":
+                    raise JobError("job_exit_evidence_conflict", status_code=409)
             self._run_verification(
                 "exit_code",
                 lambda: verify_exit_code(payload.get("exit_code")),
@@ -2148,21 +2475,29 @@ class JobsManager:
                 terminal = ("job.done", {"status": status})
                 self.store.update_job(job_id, status=status, finished_at=time.time())
         except TimeoutError:
-            terminal = (
-                "job.failed",
-                {
-                    "error": "job exceeded its "
-                    + str(int(self.default_timeout_s))
-                    + "s limit",
-                    "phase": "run",
-                },
-            )
-            self.store.update_job(
-                job_id, status="failed", error="timeout", finished_at=time.time()
-            )
+            if record.lifetime == "external":
+                self._detach_external_observation(job_id, "observation_timeout")
+            else:
+                terminal = (
+                    "job.failed",
+                    {
+                        "error": "job exceeded its "
+                        + str(int(self.default_timeout_s))
+                        + "s limit",
+                        "phase": "run",
+                    },
+                )
+                self.store.update_job(
+                    job_id, status="failed", error="timeout", finished_at=time.time()
+                )
         except asyncio.CancelledError:
-            terminal = ("job.done", {"status": "canceled"})
-            self.store.update_job(job_id, status="canceled", finished_at=time.time())
+            if record.lifetime == "external":
+                self._detach_external_observation(job_id, "observation_detached")
+            else:
+                terminal = ("job.done", {"status": "canceled"})
+                self.store.update_job(
+                    job_id, status="canceled", finished_at=time.time()
+                )
         except JobFailure as exc:
             if exc.terminal_status == "interrupted":
                 terminal = ("job.done", {"status": "interrupted"})
@@ -2180,16 +2515,24 @@ class JobsManager:
         except Exception as exc:  # noqa: BLE001 - one job must never take the plane down
             _log.exception("job %s crashed the runner", job_id)
             named = type(exc).__name__ + ": " + str(exc)
-            terminal = ("job.failed", {"error": named, "phase": "run"})
-            self.store.update_job(
-                job_id, status="failed", error=named, finished_at=time.time()
-            )
+            if record.lifetime == "external" and not isinstance(exc, RemoteJobFailed):
+                self._detach_external_observation(
+                    job_id, "observation_unconfirmed:" + type(exc).__name__
+                )
+            else:
+                terminal = ("job.failed", {"error": named, "phase": "run"})
+                self.store.update_job(
+                    job_id, status="failed", error=named, finished_at=time.time()
+                )
         finally:
             gate.abandon()
             final = self.store.get_job(job_id)
             if final:
                 self._sync_run_status(job_id, final.status)
-                if self.run_store.load("verification:exit:" + job_id) is None:
+                if (
+                    record.lifetime != "external"
+                    and self.run_store.load("verification:exit:" + job_id) is None
+                ):
                     self._emit(
                         job_id,
                         "execution.finished",
@@ -2199,7 +2542,11 @@ class JobsManager:
                         },
                     )
         if terminal is not None:
-            self._emit(job_id, terminal[0], terminal[1])
+            if record.lifetime == "external":
+                final = self.store.get_job(job_id)
+                self._emit_terminal_once(job_id, final.status, terminal[1])
+            else:
+                self._emit(job_id, terminal[0], terminal[1])
             live = self._live.get(job_id)
             if live is not None and not live.subscribers:
                 self._live.pop(job_id, None)

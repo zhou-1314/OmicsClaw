@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     inputs_json TEXT NOT NULL DEFAULT '{}',
     runtime     TEXT NOT NULL DEFAULT 'local',
     lifetime    TEXT NOT NULL DEFAULT '',
+    source_request_id TEXT NOT NULL DEFAULT '',
+    payload_hash TEXT NOT NULL DEFAULT '',
+    projection_json TEXT NOT NULL DEFAULT '{}',
     target_alias TEXT NOT NULL DEFAULT '',
     target_workdir TEXT NOT NULL DEFAULT '',
     capabilities_json TEXT NOT NULL DEFAULT '[]',
@@ -459,6 +462,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for table, additions in {
         "jobs": {
             "lifetime": "TEXT NOT NULL DEFAULT ''",
+            "source_request_id": "TEXT NOT NULL DEFAULT ''",
+            "payload_hash": "TEXT NOT NULL DEFAULT ''",
+            "projection_json": "TEXT NOT NULL DEFAULT '{}'",
             "target_alias": "TEXT NOT NULL DEFAULT ''",
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -488,6 +494,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_job_request "
         "ON remote_jobs(source_request_id) WHERE source_request_id != ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_request "
+        "ON jobs(session_id,source_request_id) WHERE source_request_id != ''"
     )
     conn.commit()
 

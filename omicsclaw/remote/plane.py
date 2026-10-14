@@ -182,6 +182,9 @@ class RemoteExecutor:
         already exist — the caller's input files — verified to land
         inside *workdir* before anything moves.
         """
+        validate_workdir = getattr(self._spawner, "validate_workdir", None)
+        if callable(validate_workdir):
+            validate_workdir(workdir)
         kind = detect_scheduler(command, scheduler)
         request_id = request_id or secrets.token_hex(16)
         payload_hash = payload_hash or hashlib.sha256(command.encode()).hexdigest()
@@ -515,7 +518,8 @@ class RemoteExecutor:
         not a silent one."""
         pairs: list[tuple[str, str]] = []
         with tempfile.TemporaryDirectory(
-            prefix=f"omicsclaw-upload-{secrets.token_hex(4)}-"
+            prefix=f"omicsclaw-upload-{secrets.token_hex(4)}-",
+            dir=getattr(self._spawner, "staging_root", None),
         ) as staging:
             for name, content in files.items():
                 local = Path(staging) / name
@@ -827,6 +831,7 @@ class RemotePlaneBinding:
         alias: str,
         *,
         capabilities: tuple[str, ...] = ("remote_exec", "remote_submit"),
+        target_root: str = "",
     ) -> TargetSnapshot:
         """Resolve a target once, including the workdir used by its job.
 
@@ -835,10 +840,15 @@ class RemotePlaneBinding:
         configuration after a job has been created.
         """
         validate_host(alias)
+        validate_workdir = getattr(self._spawner, "validate_workdir", None)
+        if target_root and callable(validate_workdir):
+            validate_workdir(target_root)
         executor = RemoteExecutor(alias, self._spawner)
-        probe = await self._probe_into_store(executor, alias)
+        probe = (
+            await self._probe_into_store(executor, alias) if not target_root else None
+        )
         workdir = remote_join(
-            probe.scratch_root(),
+            target_root or probe.scratch_root(),
             "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
         )
         return TargetSnapshot(alias, workdir, tuple(capabilities))
@@ -874,7 +884,12 @@ class RemotePlaneBinding:
             row.handle()
         )
         self._jobs.update_status(row.id, report.state)
-        return StatusReport(state=report.state, detail=report.detail, job_ref=job_ref)
+        return StatusReport(
+            state=report.state,
+            detail=report.detail,
+            exit_code=report.exit_code,
+            job_ref=job_ref,
+        )
 
     async def fetch(
         self, source: str, dest: str, max_mb: float = DEFAULT_FETCH_MAX_MB

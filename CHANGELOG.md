@@ -1,3 +1,7 @@
+## 2026-10-15: Shared external job recovery and observation lifetime
+
+JobsManager admits canonical requests in the original job table and repairs missing immutable Run projections without scheduling the job again. Same-host external execution reuses RemoteExecutor through a bound native transport. Controller shutdown and observation timeout detach; explicit cancellation waits for observed exit. Original job events dedupe exit and terminal projections, and late observation cannot regress a cancellation request or confirmed terminal. Real owned-process tests cover controller SIGKILL, EOF and cancel; the scientific worker and production transport chain remain Stage3 work.
+
 ## 2026-10-15: Canonical external submission and process fencing
 
 RemotePlane persists complete canonical submission intent before staging or launch. Exclusive remote sentinels and immutable process evidence let duplicate requests and lost acknowledgements observe the original handle without rewriting or submitting again. Stable input hashes and staged-byte verification precede launch. Missing or mismatched process identity cannot signal a group, cancellation acknowledgements query actual status, and terminal files require the original user, host boot and nonce. Full JobsManager lifetime/restart behavior and scientific supply remain Stage3 work.

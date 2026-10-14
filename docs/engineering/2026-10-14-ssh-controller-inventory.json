@@ -39,14 +39,14 @@
       "migration": "additive CREATE TABLE IF NOT EXISTS; source and frames each at most4MiB/20,000 records with SQL length checks before source JSON load; no second usage or terminal table"
     },
     {
-      "name": "jobs.lifetime and remote_jobs request/proof columns",
+      "name": "jobs canonical intent/projection and remote_jobs request/proof columns",
       "owner": "existing JobsManager/JobStore/RemoteJobStore and original Database",
       "gap": "execution location alone cannot identify controller-independent lifetime; a handle written only after launch leaves ACK-loss and process-identity gaps",
-      "transaction": "additive fields; BEGIN IMMEDIATE canonical source_request_id claim and partial unique index in original remote_jobs; no launch or terminal decision in the store",
+      "transaction": "Original JobStore BEGIN IMMEDIATE + partial unique session/source request claim; canonical payload conflicts refuse before queueing. RemoteJobStore separately claims submission before launch. No distributed transaction or added business authority.",
       "identity": "original workspace/local_job_id/immutable target; process proof UID/host/boot/PID birth/PGID/session/nonce; request/hash binds the pre-launch intent",
       "retention": "existing workspace DB backup/migration/archival lifecycle; uncertain claims are retained, never TTL-deleted to permit relaunch",
-      "recovery": "RemotePlane persists complete canonical intent before upload/launch; exclusive remote request/launch sentinels prevent overwrite or second launch; ACK loss reads request/hash/process proof and binds the original row once; absent evidence stays unknown; missing or mismatched process identity never signals; cancel ACK queries status; terminal requires UID/host/boot/nonce and group departure. JobsManager shutdown/same-host external dispatch and full Slurm identity remain Stage3 work",
-      "migration": "additive jobs.lifetime and remote_jobs.source_request_id/payload_hash/proof_json; empty legacy lifetime keeps runtime-derived meaning; missing identity stays absent"
+      "recovery": "Same JobStore claim observes the original business ID and repairs only missing RunStore projections, never schedules again. Original projection version/digest/identity conflicts refuse. External observation shutdown/timeout/EOF does not cancel. Explicit cancellation waits for verified exit; original job events dedupe exit and terminal projection. Bound same-host transport reuses RemoteExecutor. Slurm and scientific wiring remain Stage3 work.",
+      "migration": "Additive jobs.lifetime/source_request_id/payload_hash/projection_json and remote_jobs request/proof columns. Canonical request <=2MiB; immutable Run projection <=512KiB UTF-8 bytes, SQL BLOB length gate before JSON parse. Legacy empty identity stays absent."
     }
   ],
   "effortEstimateBasis": "Engineering planning intervals in person-days, not elapsed-time promises or measured implementation effort. Scope includes adapters, tests, migration and shared safety work. v2 comparison keeps science/SSH/migration scope identical and additionally ports control semantics and Notebook native client. Based on named existing seams and changed contracts; uncertainty is recorded per package. Re-estimate requires explicit review if a package upper bound, profile cap or allowed seam is exceeded.",
@@ -149,7 +149,8 @@
         "additive turn_ingress and turn_authority_identity",
         "canonical JSON hash; persistence before lane scheduling",
         "no RPC-owned turn status or retry state",
-        "additive immutable turn_projection_checkpoints with continuous raw coverage, original TurnUsage fold and transactional source/owner generation checks; SSH no-prune"
+        "additive immutable turn_projection_checkpoints with continuous raw coverage, original TurnUsage fold and transactional source/owner generation checks; SSH no-prune",
+        "Original jobs canonical claim + immutable RunStore projection: no launch before durable intent; first-store crash leaves unknown original job, missing Run/Job link repair never queues; version/digest/identity conflicts refuse. SQL UTF-8 byte guard <=512KiB. RemoteJobStore launch binding remains a separate original evidence authority."
       ],
       "reusedTests": [
         "tests/entry/test_durable_ingress.py",

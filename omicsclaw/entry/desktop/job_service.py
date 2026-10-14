@@ -59,6 +59,12 @@ async def create_job_from_document(jobs, document):
     ):
         raise DesktopIngressError("invalid_runtime", status_code=422)
     inputs = document.get("inputs")
+    request_id = document.get("source_request_id", "")
+    lifetime = document.get("lifetime", "")
+    if not isinstance(request_id, str):
+        raise DesktopIngressError("invalid_job_request_id", status_code=422)
+    if not isinstance(lifetime, str) or lifetime not in {"", "in_process", "external"}:
+        raise DesktopIngressError("invalid_job_lifetime", status_code=422)
     # P4's code_run carries its payload at the top level
     # (``{kind, code, language?, inputs?{adata_path?}}``, the shape
     # the plan spells) rather than inside ``inputs``: the code is the
@@ -110,6 +116,8 @@ async def create_job_from_document(jobs, document):
         session_id=session_id or "",
         workspace=workspace or "",
         runtime=runtime,
+        source_request_id=request_id,
+        lifetime=lifetime,
     )
     return record
 
