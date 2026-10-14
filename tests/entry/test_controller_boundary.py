@@ -158,3 +158,89 @@ def test_duplicate_request_cannot_change_permission_profile(tmp_path, monkeypatc
             await controller.aclose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "initial,later", [("full_access", "default"), ("default", "full_access")]
+)
+def test_old_legal_redelivery_cannot_reapply_permission_profile(
+    tmp_path, monkeypatch, initial, later
+):
+    from omicsclaw.entry.session import SessionRegistry
+    from omicsclaw.entry.ssh.controller import Controller
+
+    async def blocked(_self, _lane):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(SessionRegistry, "_pump", blocked)
+
+    async def run():
+        controller = Controller(tmp_path, SimpleNamespace(handlers={}))
+        try:
+            await controller.configure(
+                {
+                    "provider_id": "test",
+                    "dialect": "openai_chat",
+                    "model": "test",
+                    "allowed_models": ["test"],
+                    "context_tokens": 8192,
+                    "output_tokens": 1024,
+                }
+            )
+            first = {
+                "ingress_schema_version": 3,
+                "session_id": "same",
+                "source_request_id": "1" * 32,
+                "content": "once",
+                "permission_profile": initial,
+            }
+            original = await controller.submit(first)
+            await controller.submit(
+                {**first, "source_request_id": "2" * 32, "permission_profile": later}
+            )
+            restored = await controller.submit(first)
+            assert restored["turnId"] == original["turnId"]
+            assert controller.interactions.permission_profile("same") == later
+        finally:
+            await controller.aclose()
+
+    asyncio.run(run())
+
+
+def test_redelivery_reuses_one_observation_per_turn(tmp_path, monkeypatch):
+    from omicsclaw.entry.session import SessionRegistry
+    from omicsclaw.entry.ssh.controller import Controller
+
+    async def blocked(_self, _lane):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(SessionRegistry, "_pump", blocked)
+
+    async def run():
+        controller = Controller(tmp_path, SimpleNamespace(handlers={}))
+        try:
+            await controller.configure(
+                {
+                    "provider_id": "test",
+                    "dialect": "openai_chat",
+                    "model": "test",
+                    "allowed_models": ["test"],
+                    "context_tokens": 8192,
+                    "output_tokens": 1024,
+                }
+            )
+            first = {
+                "ingress_schema_version": 3,
+                "session_id": "same",
+                "source_request_id": "1" * 32,
+                "content": "once",
+            }
+            await controller.submit(first)
+            await controller.submit({**first, "source_request_id": "2" * 32})
+            for _ in range(100):
+                await controller.submit(first)
+            assert len(controller.observers) == 2
+        finally:
+            await controller.aclose()
+
+    asyncio.run(run())

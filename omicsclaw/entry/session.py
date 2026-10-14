@@ -451,16 +451,23 @@ class SessionRegistry:
             raise RegistryClosed("this registry is shutting down")
         payload_hash = ""
         if source_request_id and self._event_log is not None:
-            payload_hash = hashlib.sha256(json.dumps(
-                {"text": text, "values": values or {}, "compact": compaction_only},
-                sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"),
-            ).encode()).hexdigest()
+            payload_hash = hashlib.sha256(
+                json.dumps(
+                    {"text": text, "values": values or {}, "compact": compaction_only},
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
             prior = self.request_receipt(session_id, source_request_id)
             if prior is not None:
                 if prior["payload_hash"] != payload_hash:
                     raise SubmissionRefused("request identity has a different payload")
                 if (session_id, source_request_id) not in self._by_request:
-                    raise SubmissionRefused("request was already admitted; observe its durable state")
+                    raise SubmissionRefused(
+                        "request was already admitted; observe its durable state"
+                    )
         if source_request_id:
             seen = self._by_request.get((session_id, source_request_id))
             if seen is not None:
@@ -482,7 +489,9 @@ class SessionRegistry:
 
         turn_id = new_turn_id()
         if payload_hash:
-            receipt = self._event_log.claim_request(session_id, source_request_id, payload_hash, turn_id)
+            receipt = self._event_log.claim_request(
+                session_id, source_request_id, payload_hash, turn_id
+            )
             if receipt["turn_id"] != turn_id:
                 raise SubmissionRefused("request was concurrently admitted")
         handle = TurnHandle(
@@ -523,12 +532,27 @@ class SessionRegistry:
         :class:`~omicsclaw.entry.ingress.SenderPolicy`'s and has already
         happened by the time a message reaches here.
         """
-        return await self.submit(
+        handle, _newly_admitted = await self.admit(message)
+        return handle
+
+    async def admit(self, message: InboundMessage) -> tuple[TurnHandle, bool]:
+        """Return the handle and whether this call admitted it, without suspending.
+
+        The same shared enqueue/receipt path serves every surface. A repeated
+        delivery can observe its handle without repeating entry-side policy.
+        """
+        existed = (
+            bool(message.source_request_id)
+            and (message.session_id, message.source_request_id) in self._by_request
+        )
+        handle = self._enqueue(
             message.session_id,
             message.text,
             values=message.values,
             source_request_id=message.source_request_id,
+            compaction_only=False,
         )
+        return handle, not existed
 
     # ---- observation -----------------------------------------------------
 

@@ -82,7 +82,7 @@
         "omicsclaw/provider/{factory,openai_provider,anthropic_provider}.py",
         "omicsclaw/entry/{assembly,subagent,shadow_review}.py",
         "omicsclaw/entry/desktop/{title,providers}.py",
-        "App src/lib/{provider-options,secret-store}.ts"
+        "App src/lib/{provider-settings,secret-store}.ts"
       ],
       "classification": [
         "local change: public client factory retained by bind",
@@ -132,7 +132,7 @@
       "reusedTests": [
         "tests/entry/test_durable_ingress.py",
         "tests/memory/",
-        "tests/entry/test_turn_stream.py"
+        "tests/entry/test_stream.py"
       ],
       "effortPersonDays": {
         "v3": {
@@ -164,7 +164,7 @@
         "external job and kernel shutdown need lifetime classification"
       ],
       "reusedTests": [
-        "tests/entry/test_session_registry.py",
+        "tests/entry/test_session.py",
         "tests/entry/test_controller_boundary.py",
         "App controller-ssh-live.test.ts"
       ],
@@ -186,7 +186,7 @@
       "sources": [
         "omicsclaw/remote/plane.py:RemotePlaneBinding(spawner=...), RemoteExecutor",
         "omicsclaw/remote/{jobs,kernel,store,ssh}.py",
-        "omicsclaw/entry/desktop/remote_bridge.py:RemoteJobsBridge",
+        "omicsclaw/remote/bridge.py:RemoteJobsBridge",
         "omicsclaw/entry/assembly.py:open_remote_plane"
       ],
       "classification": [
@@ -200,9 +200,9 @@
         "existing RemoteJobStore/submit/reconcile own terminal state"
       ],
       "reusedTests": [
-        "tests/tools/test_remote*.py",
-        "tests/entry/test_desktop_remote*.py",
-        "tests/remote/ where present"
+        "tests/remote/test_tools.py",
+        "tests/remote/test_desktop_remote_hosts.py",
+        "tests/remote/"
       ],
       "effortPersonDays": {
         "v3": {
@@ -257,7 +257,7 @@
       "sources": [
         "omicsclaw/entry/assembly.py:WorkspaceKernelBinding",
         "omicsclaw/entry/desktop/notebooks_manager.py",
-        "omicsclaw/notebook",
+        "omicsclaw/memory/notebook.py",
         "omicsclaw/mcp",
         "omicsclaw/attachments"
       ],
@@ -275,7 +275,7 @@
         "tests/sdk/notebook/",
         "tests/mcp/",
         "tests/attachments/",
-        "tests/entry/test_desktop_notebooks*.py"
+        "tests/entry/test_desktop_notebooks.py"
       ],
       "effortPersonDays": {
         "v3": {
@@ -309,8 +309,8 @@
       ],
       "reusedTests": [
         "tests/memory/",
-        "tests/entry/test_desktop_jobs*.py",
-        "tests/attachments/test_store*.py"
+        "tests/entry/test_desktop_jobs.py",
+        "tests/attachments/"
       ],
       "effortPersonDays": {
         "v3": {
@@ -322,14 +322,14 @@
           "high": 10
         }
       },
-      "uncertainty": "RunStore path and assembly-created artifact/notebook databases do not all have current public injection; add local seams instead of cloning managers."
+      "uncertainty": "RunStore path and assembly-created artifact/notebook databases do not all have current public injection; add local seams instead of cloning managers. No dedicated attachment store test exists today; Stage4 must add behavior tests for injected roots and ownership."
     },
     {
       "id": "W09",
       "name": "Mac routes, configuration and projections",
       "sources": [
         "App src/app/api/**/route.ts (88 files)",
-        "App src/lib/{db,backend,backend-config,backend-stdio,secret-store}.ts",
+        "App src/lib/{db,backend,backend-config,backend-operation-binding,secret-store}.ts",
         "App electron/main.ts:ensureAppSecretKey",
         "Core desktop shared handlers"
       ],
@@ -574,7 +574,8 @@
     "semantics": "existing Python codecs retained: stream text/tool args/usage/errors/cache/thinking behavior follows current adapter tests",
     "knownGap": "Anthropic returned thinking signatures discarded in current adapter; not fixed by transport. SDK1.13 httpx2 and removed temperature API is a version upgrade, not evidence language rewrite required.",
     "stage1ResourceContract": "connection-scoped registered provider/revision/model/path only; SDK request body <=512KiB; open+opening<=8; read<=32KiB; provider chunk<=1MiB; frame<=1MiB; deadline 1..3600 finite; outputTokens positive below context; OpenAI n must be 1 so no multiplied output budget; contradictory max token fields rejected",
-    "stage2Required": "requestId/turnId/controllerId and named caller capability; explicit effective summary/title/review/test/subagent models, settings revision and aggregate output budgets; no ambient auth; current Stage1 is not all-caller acceptance"
+    "stage2Required": "requestId/turnId/controllerId and named caller capability; explicit effective summary/title/review/test/subagent models, settings revision and aggregate output budgets; no ambient auth; current Stage1 is not all-caller acceptance",
+    "retryBaseline": "SDKClientFactory preserves ProviderConfig.max_retries and tested 429 retry with each real SDK. Stage1 bridged_provider fixes zero only for deterministic slices; effective Mac caller config/overall RequestDeadline reconciliation remains Stage2."
   },
   "fullControlEstimate": {
     "scope": "all known promised controller capabilities; worker science and MCP plugin processes counted separately in overall footprint, never hidden as control dependencies",

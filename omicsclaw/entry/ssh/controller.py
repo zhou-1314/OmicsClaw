@@ -71,7 +71,7 @@ class Controller:
         self.jobs = None
         self.factory = None
         self.model_snapshot = None
-        self.observers: set[asyncio.Task] = set()
+        self.observers: dict[str, asyncio.Task] = {}
         self.owner = WorkspaceOwner(self.workspace, self.instance_id)
         # Bootstrap the existing memory metadata under the workspace fence.
         # Close it before build_app opens its single business connection.
@@ -192,21 +192,25 @@ class Controller:
                 "__desktop_permission_profile__": request.permission_profile,
             },
         )
-        handle = await app.sessions.deliver(inbound)
-        if request.permission_profile:
+        handle, newly_admitted = await app.sessions.admit(inbound)
+        if newly_admitted and request.permission_profile:
             self.interactions.set_permission_profile(
                 request.session_id, request.permission_profile
             )
         self.interactions.remember_request(
             handle.session_id, request.source_request_id, handle.turn_id
         )
-        task = asyncio.create_task(self._observe(handle))
-        self.observers.add(task)
-        task.add_done_callback(self._observer_done)
+        if newly_admitted:
+            task = asyncio.create_task(self._observe(handle))
+            self.observers[handle.turn_id] = task
+            task.add_done_callback(
+                lambda done: self._observer_done(handle.turn_id, done)
+            )
         return {"turnId": handle.turn_id, "sessionId": handle.session_id}
 
-    def _observer_done(self, task):
-        self.observers.discard(task)
+    def _observer_done(self, turn_id, task):
+        if self.observers.get(turn_id) is task:
+            self.observers.pop(turn_id, None)
         if not task.cancelled():
             task.exception()
 
@@ -293,9 +297,9 @@ class Controller:
 
     async def aclose(self):
         # EOF stops new model and side-effect admission before draining shared state.
-        for task in self.observers:
+        for task in list(self.observers.values()):
             task.cancel()
-        await asyncio.gather(*self.observers, return_exceptions=True)
+        await asyncio.gather(*self.observers.values(), return_exceptions=True)
         if self.app is not None:
             await self.app.sessions.shutdown(0)
             await self.app.aclose()

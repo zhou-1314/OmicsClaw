@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -13,6 +15,8 @@ from omicsclaw.entry.desktop.turn_submission import parse_chat_stream_document
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_PENDING = 32
 MAX_HANDLERS = 16
+MAX_RETIRED = 128
+RETIRED_TTL_SECONDS = 3600
 
 
 def decode_frame(raw: bytes) -> dict[str, Any]:
@@ -23,6 +27,7 @@ def decode_frame(raw: bytes) -> dict[str, Any]:
         "request",
         "response",
         "event",
+        "cancel",
     }:
         raise ValueError("invalid frame")
     if frame["kind"] != "event":
@@ -46,9 +51,27 @@ class JsonPeer:
         self.write = write
         self.handlers: dict[str, Callable[[dict], Awaitable[Any]]] = {}
         self.pending: dict[str, asyncio.Future] = {}
-        self.tasks: set[asyncio.Task] = set()
+        self.tasks: dict[str, asyncio.Task] = {}
+        self.cancelled: OrderedDict[str, float] = OrderedDict()
+        self.completed_handlers: OrderedDict[str, float] = OrderedDict()
         self.closed = False
         self._write_lock = asyncio.Lock()
+
+    def _remember(self, records, identifier):
+        records[identifier] = time.monotonic() + RETIRED_TTL_SECONDS
+        while len(records) > MAX_RETIRED:
+            records.popitem(last=False)
+
+    def _prune(self, records):
+        now = time.monotonic()
+        while records and next(iter(records.values())) <= now:
+            records.popitem(last=False)
+
+    def _finished_handler(self, identifier, task):
+        self.tasks.pop(identifier, None)
+        self._remember(self.completed_handlers, identifier)
+        if not task.cancelled():
+            task.exception()
 
     async def send(self, frame: dict) -> None:
         if self.closed:
@@ -71,16 +94,27 @@ class JsonPeer:
         future = asyncio.get_running_loop().create_future()
         self.pending[identifier] = future
         try:
-            await self.send(
-                {
-                    "kind": "request",
-                    "id": identifier,
-                    "method": method,
-                    "params": params,
-                }
-            )
             async with asyncio.timeout(timeout):
+                await self.send(
+                    {
+                        "kind": "request",
+                        "id": identifier,
+                        "method": method,
+                        "params": params,
+                    }
+                )
                 return await future
+        except (asyncio.CancelledError, TimeoutError):
+            retired = self.pending.pop(identifier, None)
+            if retired is not None:
+                self._remember(self.cancelled, identifier)
+            if not self.closed:
+                try:
+                    async with asyncio.timeout(1):
+                        await self.send({"kind": "cancel", "id": identifier})
+                except (TimeoutError, RpcError, ConnectionError):
+                    pass
+            raise
         finally:
             self.pending.pop(identifier, None)
 
@@ -109,8 +143,17 @@ class JsonPeer:
         try:
             while raw := await self.reader.readline():
                 frame = decode_frame(raw)
+                self._prune(self.cancelled)
+                self._prune(self.completed_handlers)
                 if frame["kind"] == "response":
                     future = self.pending.get(frame["id"])
+                    if frame["id"] in self.cancelled or (
+                        future is not None and future.cancelled()
+                    ):
+                        self.cancelled.pop(frame["id"], None)
+                        if future is not None and future.cancelled():
+                            self.pending.pop(frame["id"], None)
+                        continue
                     if future is None or future.done():
                         raise RpcError("unsolicited response")
                     if "error" in frame:
@@ -118,11 +161,26 @@ class JsonPeer:
                     else:
                         future.set_result(frame.get("result"))
                 elif frame["kind"] == "request":
+                    if (
+                        frame["id"] in self.tasks
+                        or frame["id"] in self.completed_handlers
+                    ):
+                        raise RpcError("request identity repeated")
                     if len(self.tasks) >= MAX_HANDLERS:
                         raise RpcError("request concurrency exceeded")
                     task = asyncio.create_task(self._handle(frame))
-                    self.tasks.add(task)
-                    task.add_done_callback(self.tasks.discard)
+                    self.tasks[frame["id"]] = task
+                    task.add_done_callback(
+                        lambda done, identifier=frame["id"]: self._finished_handler(
+                            identifier, done
+                        )
+                    )
+                elif frame["kind"] == "cancel":
+                    task = self.tasks.get(frame["id"])
+                    if task is not None:
+                        task.cancel()
+                    elif frame["id"] not in self.completed_handlers:
+                        raise RpcError("unknown cancellation identity")
                 else:
                     raise RpcError("client events are not admitted")
         finally:
@@ -130,6 +188,6 @@ class JsonPeer:
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(RpcError("transport closed"))
-            for task in self.tasks:
+            for task in list(self.tasks.values()):
                 task.cancel()
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+            await asyncio.gather(*self.tasks.values(), return_exceptions=True)

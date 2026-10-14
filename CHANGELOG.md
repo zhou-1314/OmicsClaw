@@ -1,3 +1,9 @@
+## 2026-10-14 — SSH controller cancellation and admission repair
+
+The stdio peers now revoke known in-flight calls and recognize bounded canceled-request responses without accepting arbitrary unsolicited responses. Mac fetch and stream reads stop on cancellation, timeout and EOF. Shared session admission reports whether a turn is new, so an old legal request cannot restore a later revoked permission profile or create another observer. Model reads use the remaining snapshot deadline.
+
+The Mac replaces failed HTTP diagnostic bodies with bounded status-derived errors and filters known credentials from success bytes and allowed headers before reverse RPC. Actual SDK status/retry and two-dialect Mac/OpenSSH cancellation and canary fixtures cover these boundaries. The route inventory now names chat's destructured fields and provider/Notebook payload validators. The migration remains at the Stage1 independent review gate; production configuration, caller coverage and legacy retirement remain pending.
+
 ## 2026-10-14 — SSH controller feasibility slice
 
 Added a finite stdio controller over the shared application, session and job managers. Desktop Node can bridge model calls and approval events without client Python or a remote HTTP backend. Public provider factories survive binding; durable admission receipts refuse process-restart resubmission. Independent source manifests and hashed control profiles separate science execution. This is the first migration stage, not a released Desktop mode. See `docs/engineering/2026-10-14-ssh-controller.md`.

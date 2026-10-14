@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,27 +47,41 @@ class ModelSnapshot:
 
 
 class RpcByteStream:
-    def __init__(self, peer: JsonPeer, stream_id: str):
+    def __init__(self, peer: JsonPeer, stream_id: str, deadline: float):
         self.peer = peer
         self.stream_id = stream_id
         self.closed = False
+        self.deadline = deadline
 
     async def __aiter__(self):
-        while not self.closed:
-            result = await self.peer.call("model.read", {"streamId": self.stream_id})
-            if result.get("done"):
-                return
-            chunk = base64.b64decode(result["data"], validate=True)
-            if len(chunk) > 32768:
-                raise RpcError("model chunk exceeds limit")
-            yield chunk
+        try:
+            while not self.closed:
+                remaining = self.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("model deadline exceeded")
+                result = await self.peer.call(
+                    "model.read", {"streamId": self.stream_id}, timeout=remaining
+                )
+                if result.get("done"):
+                    return
+                chunk = base64.b64decode(result["data"], validate=True)
+                if len(chunk) > 32768:
+                    raise RpcError("model chunk exceeds limit")
+                yield chunk
+        finally:
+            await self.aclose()
 
     async def aclose(self):
         if self.closed:
             return
         self.closed = True
         if not self.peer.closed:
-            await self.peer.call("model.close", {"streamId": self.stream_id}, timeout=1)
+            try:
+                await self.peer.call(
+                    "model.close", {"streamId": self.stream_id}, timeout=1
+                )
+            except (TimeoutError, RpcError):
+                pass
 
 
 class RpcTransport:
@@ -82,6 +97,7 @@ class RpcTransport:
         body = json.loads(await request.aread())
         if body.get("model") not in self.snapshot.allowed_models:
             raise RpcError("model outside Mac snapshot")
+        deadline = time.monotonic() + self.snapshot.timeout_seconds
         head = await self.peer.call(
             "model.open",
             {
@@ -93,7 +109,7 @@ class RpcTransport:
             },
             timeout=self.snapshot.timeout_seconds,
         )
-        return head, RpcByteStream(self.peer, head["streamId"])
+        return head, RpcByteStream(self.peer, head["streamId"], deadline)
 
 
 def sdk_transport(http, bridge: RpcTransport):

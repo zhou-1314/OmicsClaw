@@ -160,3 +160,155 @@ def test_real_sdk_stream_codec_and_close(dialect):
         await factory.aclose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("dialect", ["openai_chat", "anthropic_messages"])
+@pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
+def test_real_sdk_retains_status_classification_with_safe_error_document(
+    dialect, status
+):
+    pytest.importorskip("openai")
+    pytest.importorskip("anthropic")
+    from omicsclaw.entry.ssh.model_bridge import ModelSnapshot, SDKClientFactory
+    from omicsclaw.provider import ProviderConfig, ProviderDialect
+
+    class Peer:
+        closed = False
+        read = False
+
+        async def call(self, method, params, **kwargs):
+            if method == "model.open":
+                return {
+                    "streamId": "safe",
+                    "status": status,
+                    "headers": {"content-type": "application/json", "retry-after": "0"},
+                }
+            if method == "model.close":
+                return {}
+            if self.read:
+                return {"done": True}
+            self.read = True
+            document = json.dumps(
+                {
+                    "error": {
+                        "type": "api_error",
+                        "message": f"Model request failed (HTTP {status}).",
+                    }
+                }
+            ).encode()
+            return {"data": base64.b64encode(document).decode()}
+
+    async def run():
+        snapshot = ModelSnapshot(
+            "mac", ProviderDialect(dialect), "primary", ("primary",), 16384, 1024
+        )
+        factory = SDKClientFactory(snapshot, Peer())
+        client = factory(
+            ProviderConfig(provider="custom", model="primary", max_retries=0)
+        )
+        try:
+            with pytest.raises(Exception) as caught:
+                if dialect == "openai_chat":
+                    await client.chat.completions.create(
+                        model="primary", messages=[{"role": "user", "content": "hello"}]
+                    )
+                else:
+                    await client.messages.create(
+                        model="primary",
+                        max_tokens=64,
+                        messages=[{"role": "user", "content": "hello"}],
+                    )
+            assert caught.value.status_code == status
+        finally:
+            await factory.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("dialect", ["openai_chat", "anthropic_messages"])
+def test_public_factory_retains_configured_single_layer_retry(dialect):
+    pytest.importorskip("openai")
+    pytest.importorskip("anthropic")
+    from omicsclaw.entry.ssh.model_bridge import ModelSnapshot, SDKClientFactory
+    from omicsclaw.provider import ProviderConfig, ProviderDialect
+
+    class Peer:
+        closed = False
+        calls = 0
+        consumed = False
+
+        async def call(self, method, params, **kwargs):
+            if method == "model.close":
+                return {}
+            if method == "model.open":
+                self.calls += 1
+                self.consumed = False
+                return {
+                    "streamId": str(self.calls),
+                    "status": 429 if self.calls == 1 else 200,
+                    "headers": {"content-type": "application/json", "retry-after": "0"},
+                }
+            if self.consumed:
+                return {"done": True}
+            self.consumed = True
+            if self.calls == 1:
+                body = {
+                    "error": {
+                        "type": "rate_limit_error",
+                        "message": "Safe rate limit diagnostic",
+                    }
+                }
+            elif dialect == "openai_chat":
+                body = {
+                    "id": "m",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "primary",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            else:
+                body = {
+                    "id": "m",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "primary",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            return {"data": base64.b64encode(json.dumps(body).encode()).decode()}
+
+    async def run():
+        peer = Peer()
+        snapshot = ModelSnapshot(
+            "mac", ProviderDialect(dialect), "primary", ("primary",), 16384, 1024
+        )
+        factory = SDKClientFactory(snapshot, peer)
+        client = factory(
+            ProviderConfig(provider="custom", model="primary", max_retries=1)
+        )
+        try:
+            if dialect == "openai_chat":
+                response = await client.chat.completions.create(
+                    model="primary", messages=[{"role": "user", "content": "hello"}]
+                )
+                assert response.choices[0].message.content == "ok"
+            else:
+                response = await client.messages.create(
+                    model="primary",
+                    max_tokens=64,
+                    messages=[{"role": "user", "content": "hello"}],
+                )
+                assert response.content[0].text == "ok"
+            assert peer.calls == 2
+        finally:
+            await factory.aclose()
+
+    asyncio.run(run())
