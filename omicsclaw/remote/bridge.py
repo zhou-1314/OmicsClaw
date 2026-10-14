@@ -160,6 +160,10 @@ class RemoteJobsBridge:
             local_job_id=record.id,
             target_workdir=target_workdir,
         )
+        return await self.observe(outcome, record, ctx, command=command)
+
+    async def observe(self, outcome, record, ctx, *, command=""):
+        """Observe an already admitted handle through the original event path."""
         ctx.tool_started(
             "remote_submit",
             command,

@@ -47,6 +47,16 @@
       "retention": "existing workspace DB backup/migration/archival lifecycle; uncertain claims are retained, never TTL-deleted to permit relaunch",
       "recovery": "Same JobStore claim observes the original business ID and repairs only missing RunStore projections, never schedules again. Original projection version/digest/identity conflicts refuse. External observation shutdown/timeout/EOF does not cancel. Explicit cancellation waits for verified exit; original job events dedupe exit and terminal projection. Bound same-host transport reuses RemoteExecutor. Slurm and scientific wiring remain Stage3 work.",
       "migration": "Additive jobs.lifetime/source_request_id/payload_hash/projection_json and remote_jobs request/proof columns. Canonical request <=2MiB; immutable Run projection <=512KiB UTF-8 bytes, SQL BLOB length gate before JSON parse. Legacy empty identity stays absent."
+    },
+    {
+      "name": "job_events.source_event_id",
+      "owner": "original JobStore/JobsManager and existing job_events table; RunStore remains projection",
+      "gap": "A restarted observer can read the same scientific worker source events again",
+      "transaction": "Existing Database transaction writes source identity with the original event. Partial unique(job_id,source_event_id); repeated exact payload/type returns original seq; conflicting source bytes refuse before projection side effects.",
+      "identity": "Original business job + immutable remote submission row + worker event seq; physical worker never selects job terminal.",
+      "retention": "Source events retain original job/workspace archival lifetime; excluded from old1000-row disposable view pruning. At most4MiB UTF-8 payload bytes/20,000 source events per job, checked in SQL before insertion.",
+      "recovery": "Original worker events and verified artifact metadata project into original stores after proven process terminal; exact source IDs suppress replay; no execution or approval rescheduling.",
+      "migration": "Additive TEXT NOT NULL default empty + partial unique index; old CLI events preserve empty source and original retention."
     }
   ],
   "effortEstimateBasis": "Engineering planning intervals in person-days, not elapsed-time promises or measured implementation effort. Scope includes adapters, tests, migration and shared safety work. v2 comparison keeps science/SSH/migration scope identical and additionally ports control semantics and Notebook native client. Based on named existing seams and changed contracts; uncertainty is recorded per package. Re-estimate requires explicit review if a package upper bound, profile cap or allowed seam is exceeded.",
@@ -150,7 +160,8 @@
         "canonical JSON hash; persistence before lane scheduling",
         "no RPC-owned turn status or retry state",
         "additive immutable turn_projection_checkpoints with continuous raw coverage, original TurnUsage fold and transactional source/owner generation checks; SSH no-prune",
-        "Original jobs canonical claim + immutable RunStore projection: no launch before durable intent; first-store crash leaves unknown original job, missing Run/Job link repair never queues; version/digest/identity conflicts refuse. SQL UTF-8 byte guard <=512KiB. RemoteJobStore launch binding remains a separate original evidence authority."
+        "Original jobs canonical claim + immutable RunStore projection: no launch before durable intent; first-store crash leaves unknown original job, missing Run/Job link repair never queues; version/digest/identity conflicts refuse. SQL UTF-8 byte guard <=512KiB. RemoteJobStore launch binding remains a separate original evidence authority.",
+        "Scientific worker source_event_id lives in original job_events, not another event authority; SQL UTF-8 sum/count admission bounds and same job lifetime, no-prune source retention."
       ],
       "reusedTests": [
         "tests/entry/test_durable_ingress.py",

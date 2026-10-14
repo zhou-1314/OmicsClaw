@@ -1,3 +1,9 @@
+## 2026-10-15: Isolated science worker and pinned supply seams
+
+A finite scientific worker calls the original SkillApiRunner with separately verified complete skill code and resources. Form and agent admission share JobsManager, its canonical intent and approval gate, and the original external submission plane. Verified worker events and output hashes project through original job events and RunStore with stable source identity. Explicit R executable/library settings keep the scientific launch out of user-prefix library writes while legacy defaults remain available.
+
+Pinned environment supply uses the original install runner, hash-locked requirements and ABI/import checks in an owned temporary venv. A bounded lock serializes supply; ready appears only after validation of the published path, and an incomplete matching publication can be verified and resumed. Production bootstrap/configuration, original representative skills, full scheduler/multi-target contracts and final profile measurements remain Stage3 work.
+
 ## 2026-10-15: Shared external job recovery and observation lifetime
 
 JobsManager admits canonical requests in the original job table and repairs missing immutable Run projections without scheduling the job again. Same-host external execution reuses RemoteExecutor through a bound native transport. Controller shutdown and observation timeout detach; explicit cancellation waits for observed exit. Original job events dedupe exit and terminal projections, and late observation cannot regress a cancellation request or confirmed terminal. Real owned-process tests cover controller SIGKILL, EOF and cancel; the scientific worker and production transport chain remain Stage3 work.

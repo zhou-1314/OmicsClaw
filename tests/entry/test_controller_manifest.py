@@ -78,3 +78,13 @@ def test_component_manifest_allows_declared_catalogue_data_but_not_algorithm_pay
     (tmp_path / "controller-manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="source path"):
         verified_source_metadata(tmp_path)
+
+
+def test_scientific_worker_entry_is_packaged_without_skill_algorithm_source():
+    from pathlib import Path
+
+    from scripts.build_controller import source_closure
+
+    closure = source_closure(Path(__file__).parents[2])
+    assert "omicsclaw.entry.ssh.science_worker" in closure
+    assert not any(name == "skills" or name.startswith("skills.") for name in closure)

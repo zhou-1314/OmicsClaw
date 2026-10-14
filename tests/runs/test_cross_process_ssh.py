@@ -99,7 +99,18 @@ def test_new_process_cancels_real_ssh_handle(tmp_path):
 
     child("submit")
     try:
-        assert child("cancel") == {"cancel": "canceled", "run": "cancelled"}
-        assert child("recover")["run"] == "cancelled"
+        acknowledgement = child("cancel")
+        assert acknowledgement["cancel"] in {"cancel_requested", "canceled"}
+        import time
+
+        deadline = time.monotonic() + 15
+        while True:
+            observed = child("recover")
+            if observed["run"] == "cancelled":
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert observed["desktop"] == "canceled"
+        assert observed["exit"] == [["exit_code", "fail"]]
     finally:
         (tmp_path / "host-job" / "release").touch()

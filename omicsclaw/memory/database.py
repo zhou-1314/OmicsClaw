@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS job_events (
     seq          INTEGER NOT NULL,
     type         TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}',
+    source_event_id TEXT NOT NULL DEFAULT '',
     created_at   REAL NOT NULL,
     PRIMARY KEY (job_id, seq),
     FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
@@ -477,6 +478,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
         },
+        "job_events": {"source_event_id": "TEXT NOT NULL DEFAULT ''"},
     }.items():
         columns = {row[1] for row in conn.execute("PRAGMA table_info(" + table + ")")}
         for name, declaration in additions.items():
@@ -498,6 +500,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_request "
         "ON jobs(session_id,source_request_id) WHERE source_request_id != ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_source_event "
+        "ON job_events(job_id,source_event_id) WHERE source_event_id != ''"
     )
     conn.commit()
 

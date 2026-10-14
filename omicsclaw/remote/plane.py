@@ -724,6 +724,7 @@ class RemotePlaneBinding:
         local_job_id: str = "",
         target_workdir: str = "",
         request_id: str = "",
+        supplied_files: dict[str, str] | None = None,
     ) -> SubmitOutcome:
         validate_host(host)
         resolved_inputs = self._resolve_inputs(inputs)
@@ -746,6 +747,18 @@ class RemotePlaneBinding:
             )
         uploads = [(local, remote_join(workdir, dst)) for local, dst in resolved_inputs]
         files: dict[str, str] = {}
+        for name, content in (supplied_files or {}).items():
+            if (
+                not isinstance(name, str)
+                or "/" in name
+                or "\\" in name
+                or name in {"", ".", "..", OUTPUTS_FILE}
+                or not isinstance(content, str)
+            ):
+                raise RemotePathRefused("invalid_supplied_job_file")
+            files[name] = content
+        if sum(len(value.encode()) for value in files.values()) > 2 * 1024 * 1024:
+            raise RemotePathRefused("supplied_job_file_budget")
         if outputs:
             files[OUTPUTS_FILE] = "\n".join(outputs) + "\n"
         input_evidence = await asyncio.to_thread(
@@ -762,6 +775,11 @@ class RemotePlaneBinding:
             "local_job_id": local_job_id,
             "workdir": workdir,
         }
+        if supplied_files:
+            canonical["files"] = {
+                name: hashlib.sha256(content.encode()).hexdigest()
+                for name, content in sorted(supplied_files.items())
+            }
         payload_hash = hashlib.sha256(
             json.dumps(
                 canonical,

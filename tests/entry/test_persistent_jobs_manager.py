@@ -246,3 +246,16 @@ def test_projection_utf8_byte_guard_precedes_json_parsing(tmp_path):
     )
     with pytest.raises(JobError, match="job_projection_too_large"):
         store.get_job("own-byte-guard")
+
+
+def test_worker_source_events_are_idempotent_and_conflicts_refuse(tmp_path):
+    from omicsclaw.entry.desktop.jobs_manager import JobRecord
+
+    manager = manager_for(tmp_path)
+    manager.store.insert_job(JobRecord(id="source-event", lifetime="external"))
+    value = {"text": "source", "source_event_id": "worker:1"}
+    first = manager._emit("source-event", "tool_output_chunk", value)
+    second = manager._emit("source-event", "tool_output_chunk", value)
+    with pytest.raises(JobError, match="job_source_event_conflict"):
+        manager._emit("source-event", "tool_output_chunk", {**value, "text": "drift"})
+    assert (first, second, len(manager.replay_events("source-event", 0))) == (1, 1, 1)

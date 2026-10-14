@@ -29,7 +29,11 @@ def source_closure(root: Path) -> dict[str, Path]:
         if parts[-1] == "__init__":
             parts.pop()
         modules[".".join(parts)] = path
-    pending = ["omicsclaw.entry.ssh.__main__", "omicsclaw.entry.ssh.science_runner"]
+    pending = [
+        "omicsclaw.entry.ssh.__main__",
+        "omicsclaw.entry.ssh.science_runner",
+        "omicsclaw.entry.ssh.science_worker",
+    ]
     included = {}
 
     def add(name):

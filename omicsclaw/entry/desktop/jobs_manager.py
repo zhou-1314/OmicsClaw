@@ -422,23 +422,42 @@ class JobStore:
         self, job_id: str, seq: int, event_type: str, payload: Mapping[str, Any]
     ) -> None:
         def _write(conn: Any) -> None:
+            source_id = str(payload.get("source_event_id", ""))
+            encoded = json.dumps(dict(payload), ensure_ascii=False, default=str)
+            if source_id:
+                count, size = conn.execute(
+                    "SELECT COUNT(*),COALESCE(SUM(length(CAST(payload_json AS BLOB))),0) "
+                    "FROM job_events WHERE job_id=? AND source_event_id != ''",
+                    (job_id,),
+                ).fetchone()
+                if count >= 20_000 or size + len(encoded.encode()) > 4 * 1024 * 1024:
+                    raise JobError("job_source_event_budget")
             conn.execute(
-                "INSERT INTO job_events (job_id, seq, type, payload_json, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO job_events (job_id, seq, type, payload_json, created_at,source_event_id)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     seq,
                     event_type,
-                    json.dumps(dict(payload), ensure_ascii=False, default=str),
+                    encoded,
                     time.time(),
+                    source_id,
                 ),
             )
             conn.execute(
-                "DELETE FROM job_events WHERE job_id = ? AND seq <= ?",
+                "DELETE FROM job_events WHERE job_id = ? AND seq <= ? AND source_event_id = ''",
                 (job_id, seq - JOB_EVENTS_RETAINED),
             )
 
         self._db.run(_write)
+
+    def source_event(self, job_id: str, source_id: str):
+        return self._db.run(
+            lambda conn: conn.execute(
+                "SELECT seq,type,payload_json FROM job_events WHERE job_id=? AND source_event_id=?",
+                (job_id, source_id),
+            ).fetchone()
+        )
 
     def events_after(
         self, job_id: str, after_seq: int, limit: int = 500
@@ -1693,6 +1712,9 @@ class JobsManager:
         if not isinstance(inputs, dict):
             raise JobError("inputs_must_be_object")
         configured_runner = self._runners.get(kind)
+        canonical_inputs = getattr(configured_runner, "canonical_inputs", None)
+        if callable(canonical_inputs):
+            inputs = await asyncio.to_thread(canonical_inputs, skill, inputs)
         lifetime = lifetime or (
             getattr(configured_runner, "lifetime", "in_process")
             if runtime == "local"
@@ -1759,7 +1781,9 @@ class JobsManager:
                 raise JobError("remote_runtime_unavailable", status_code=409)
         validate = (
             self._remote_runtime.validate
-            if runtime != "local" and self._remote_runtime is not None
+            if runtime != "local"
+            and self._remote_runtime is not None
+            and not getattr(runner, "binds_scientific_inputs", False)
             else getattr(runner, "validate", None)
         )
         if callable(validate):
@@ -2079,6 +2103,19 @@ class JobsManager:
                     {"exit_code": code, "evidence_ref": "remote-job:" + str(row.id)},
                 )
         if row.status == "done":
+            runner = self._runners.get(record.kind)
+            recover = getattr(runner, "recover_evidence", None)
+            if callable(recover):
+                await recover(
+                    record,
+                    row,
+                    JobExecutionContext(
+                        record,
+                        lambda kind, value: self._emit(record.id, kind, value),
+                        Path(self._app.config.workspace),
+                    ),
+                )
+                return
             for payload in remote_output_payloads(
                 row.host_alias, row.workdir, record.inputs.get("outputs", [])
             ):
@@ -2270,6 +2307,20 @@ class JobsManager:
         return self.store.events_after(job_id, after_seq)
 
     def _emit(self, job_id: str, event_type: str, payload: dict[str, Any]) -> int:
+        source_id = payload.get("source_event_id", "")
+        if source_id:
+            if not isinstance(source_id, str) or not re.fullmatch(
+                r"[A-Za-z0-9:._-]{1,256}", source_id
+            ):
+                raise JobError("invalid_job_source_event")
+            previous = self.store.source_event(job_id, source_id)
+            if previous is not None:
+                if (
+                    previous["type"] != event_type
+                    or json.loads(previous["payload_json"]) != payload
+                ):
+                    raise JobError("job_source_event_conflict", status_code=409)
+                return int(previous["seq"])
         run_id = self._run_ids.get(job_id)
         if run_id and event_type == "kernel.observed":
             bind_kernel(self.run_store, Kernel(**payload), run_id, job_id)
@@ -2371,6 +2422,9 @@ class JobsManager:
                 or inputs.get("input_artifact_ids", []),
             )
             artifact.lineage_key = lineage_key
+            if path.startswith("remote://") and payload.get("verified_sha256"):
+                artifact.checksum = str(payload["verified_sha256"])
+                artifact.size = int(payload["verified_bytes"])
             artifact.execution_ref = job_id
             self.run_store.save(artifact)
             if path:
@@ -2436,6 +2490,9 @@ class JobsManager:
         # either. Everything after the choice is shared: the semaphore,
         # the timeout, the vocabulary, the gate.
         runner: Any = self._remote_runtime if record.runtime != "local" else None
+        configured = self._runners.get(record.kind)
+        if getattr(configured, "binds_scientific_inputs", False):
+            runner = configured
         if runner is None:
             runner = self._runners.get(record.kind)
         gate = live.gate
