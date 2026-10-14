@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import resource
 import sys
 import tempfile
 from pathlib import Path
@@ -175,6 +176,21 @@ async def execute(request_path: Path):
         "python": sys.executable,
         "payloadDigest": request["payloadDigest"],
         "events": sequence,
+        "rssPeakBytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        * (1 if sys.platform == "darwin" else 1024),
+        "childRssPeakBytes": resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+        * (1 if sys.platform == "darwin" else 1024),
+        "scientificImports": sorted(
+            {
+                "numpy",
+                "pandas",
+                "scipy",
+                "sklearn",
+                "scanpy",
+                "anndata",
+                "torch",
+            }.intersection(sys.modules)
+        ),
     }
     temporary = workspace / "_omicsclaw_worker.json.tmp"
     temporary.write_text(json.dumps(proof))

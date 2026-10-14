@@ -242,10 +242,12 @@ class PinnedEnvironmentSupply:
         root: Path,
         *,
         uv: Path | None = None,
+        wheelhouse: Path | None = None,
         timeout_s: float = ENV_INSTALL_TIMEOUT_S,
     ):
         self.root = Path(root).absolute()
         self.uv = Path(uv).absolute() if uv else None
+        self.wheelhouse = Path(wheelhouse).absolute() if wheelhouse else None
         self.timeout_s = float(timeout_s)
 
     async def supply(self, manifest, *, lock: Path, interpreter: Path):
@@ -303,6 +305,34 @@ class PinnedEnvironmentSupply:
             raise ValueError("scientific import in control manifest")
         if not interpreter.is_absolute() or not interpreter.is_file():
             raise ValueError("selected interpreter unavailable")
+        offline = ""
+        if self.wheelhouse is not None:
+            import stat
+
+            cache = self.wheelhouse
+            if not cache.is_dir() or any(
+                part.is_symlink() for part in (cache, *cache.parents)
+            ):
+                raise ValueError("wheelhouse directory unavailable or symlinked")
+            observed = cache.stat()
+            if observed.st_uid != os.getuid() or observed.st_mode & 0o022:
+                raise ValueError("wheelhouse ownership mismatch")
+            wheels = list(cache.glob("*.whl"))
+            if len(wheels) > 100:
+                raise ValueError("wheelhouse file budget")
+            total = 0
+            for wheel in wheels:
+                item = wheel.lstat()
+                if (
+                    not stat.S_ISREG(item.st_mode)
+                    or item.st_uid != os.getuid()
+                    or item.st_size > 256 * 1024 * 1024
+                ):
+                    raise ValueError("wheelhouse archive boundary")
+                total += item.st_size
+            if total > 1024 * 1024 * 1024:
+                raise ValueError("wheelhouse archive budget")
+            offline = " --no-index --find-links " + shlex.quote(str(cache))
         with lock.open("rb") as source:
             lock_bytes = source.read(1024 * 1024 + 1)
         if (
@@ -385,9 +415,9 @@ class PinnedEnvironmentSupply:
                     if self.uv is not None:
                         if not self.uv.is_file():
                             raise ValueError("pinned environment installer unavailable")
-                        script += f"{shlex.quote(str(self.uv))} pip install --python {shlex.quote(str(venv / 'bin/python'))} --require-hashes --no-cache --link-mode copy -r {shlex.quote(str(staged_lock))}\n"
+                        script += f"{shlex.quote(str(self.uv))} pip install --python {shlex.quote(str(venv / 'bin/python'))} --require-hashes --no-cache --link-mode copy{offline} -r {shlex.quote(str(staged_lock))}\n"
                     else:
-                        script += f"{shlex.quote(str(interpreter))} -I -m pip --isolated --python {shlex.quote(str(venv))} install --require-hashes --no-compile --no-cache-dir --disable-pip-version-check --only-binary=:all: -r {shlex.quote(str(staged_lock))}\n"
+                        script += f"{shlex.quote(str(interpreter))} -I -m pip --isolated --python {shlex.quote(str(venv))} install --require-hashes --no-compile --no-cache-dir --disable-pip-version-check --only-binary=:all:{offline} -r {shlex.quote(str(staged_lock))}\n"
                 (temporary / "home").mkdir()
                 (temporary / "tmp").mkdir()
                 script = (
@@ -449,9 +479,35 @@ class PinnedEnvironmentSupply:
             + repr(manifest["imports"])
             + "; [importlib.import_module(n) for n in names]; print(json.dumps({'pythonVersion':platform.python_version(),'platform':sys.platform,'machine':platform.machine(),'abi':sysconfig.get_config_var('SOABI')}))"
         )
+        import os
+
+        private = python.parent.parent.parent
+        if (
+            not python.is_absolute()
+            or python.parent.name != "bin"
+            or python.parent.parent.name != "venv"
+        ):
+            raise ValueError("environment verification prefix mismatch")
+        for name in ("home", "tmp"):
+            directory = private / name
+            if directory.is_symlink():
+                raise ValueError("environment verification directory boundary")
+            directory.mkdir(mode=0o700, exist_ok=True)
+            if (
+                not directory.is_dir()
+                or directory.stat().st_uid != os.getuid()
+                or directory.stat().st_mode & 0o022
+            ):
+                raise ValueError("environment verification directory ownership")
         result = subprocess.run(
             [str(python), "-I", "-B", "-c", probe],
-            env={"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1"},
+            env={
+                "PATH": "/usr/bin:/bin",
+                "PYTHONNOUSERSITE": "1",
+                "HOME": str(private / "home"),
+                "TMPDIR": str(private / "tmp"),
+                "MPLCONFIGDIR": str(private / "home/matplotlib"),
+            },
             capture_output=True,
             text=True,
             timeout=30,
