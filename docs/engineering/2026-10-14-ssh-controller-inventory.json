@@ -27,6 +27,16 @@
       "retention": "same lifetime as workspace DB; copied DB identity is deliberately preserved until explicit provenance migration",
       "recovery": "read stable identity on SessionRegistry construction; SSH cannot override; new workspace DB mints new IDs",
       "migration": "additive singleton table; existing event streams receive durable identity without being rewritten"
+    },
+    {
+      "name": "turn_projection_checkpoints",
+      "owner": "existing memory Database/DurableTurnEventLog; original DesktopChatSSEBody projector",
+      "gap": "context history is mutable/compacted and visible frames alone cannot establish continuous raw event coverage after a source gap",
+      "transaction": "original Database BEGIN IMMEDIATE compares continuous bounded raw digest, original ingress/model metadata, authority and producer generation, then publishes complete stable frames and coverage atomically; one immutable revision per turn; byte conflicts refused",
+      "identity": "original stream(session,turn) and stable authority/workspace; revision/source/frame digests pin bounded pages; wire epoch excluded",
+      "retention": "SSH never prunes raw events; same original DB backup/migration/workspace archival lifecycle; disposable only while source remains; external gaps require previously confirmed evidence, future automated prune requires review",
+      "recovery": "at most64 frames/512KiB per page; Mac full digest/conflict checks then replay after coverage; no execution owner acquisition, terminal choice, model/tool permission or retry",
+      "migration": "additive CREATE TABLE IF NOT EXISTS; source and frames each at most4MiB/20,000 records with SQL length checks before source JSON load; no second usage or terminal table"
     }
   ],
   "effortEstimateBasis": "Engineering planning intervals in person-days, not elapsed-time promises or measured implementation effort. Scope includes adapters, tests, migration and shared safety work. v2 comparison keeps science/SSH/migration scope identical and additionally ports control semantics and Notebook native client. Based on named existing seams and changed contracts; uncertainty is recorded per package. Re-estimate requires explicit review if a package upper bound, profile cap or allowed seam is exceeded.",
@@ -118,7 +128,8 @@
       "sources": [
         "omicsclaw/entry/session.py:SessionRegistry._enqueue, observe",
         "omicsclaw/memory/{database,turn_events}.py",
-        "omicsclaw/entry/desktop/turn_observation.py:DesktopChatSSEBody"
+        "omicsclaw/entry/desktop/turn_observation.py:DesktopChatSSEBody",
+        "omicsclaw/entry/desktop/event_service.py:ProjectionCoverage"
       ],
       "classification": [
         "local change: receipt and stable authority identity in existing memory DB",
@@ -127,12 +138,15 @@
       "contracts": [
         "additive turn_ingress and turn_authority_identity",
         "canonical JSON hash; persistence before lane scheduling",
-        "no RPC-owned turn status or retry state"
+        "no RPC-owned turn status or retry state",
+        "additive immutable turn_projection_checkpoints with continuous raw coverage, original TurnUsage fold and transactional source/owner generation checks; SSH no-prune"
       ],
       "reusedTests": [
         "tests/entry/test_durable_ingress.py",
         "tests/memory/",
-        "tests/entry/test_stream.py"
+        "tests/entry/test_stream.py",
+        "tests/entry/test_controller_confirmed_snapshot.py",
+        "tests/entry/test_controller_durable_failure.py"
       ],
       "effortPersonDays": {
         "v3": {
@@ -341,13 +355,16 @@
       "contracts": [
         "per-route concrete body/query/response/schema links in App docs/ssh-controller-route-authority.json",
         "Mac config secrets/drafts authority; remote accepted history/jobs state",
-        "safeStorage AES-GCM reused; no implicit plaintext fallback for new model keys"
+        "safeStorage AES-GCM reused; no implicit plaintext fallback for new model keys",
+        "bounded receipt/part opaque message pagination, confirmed snapshot revision/digest pins and chronological streamed export; old HTTP rowid separate until Stage5"
       ],
       "reusedTests": [
         "App existing route/unit suites",
         "controller-bridge.test.ts",
         "controller-ssh-live.test.ts",
-        "Desktop compatibility selection"
+        "Desktop compatibility selection",
+        "App controller-history-pagination.test.ts",
+        "App controller-confirmed-snapshot.test.ts"
       ],
       "effortPersonDays": {
         "v3": {

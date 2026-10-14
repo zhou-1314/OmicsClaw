@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from collections.abc import Callable
 
 from omicsclaw.provider import ProviderConfig, ProviderDialect, provider_for
 
@@ -179,10 +180,27 @@ class SDKClientFactory:
         self.snapshot = snapshot
         self.transport = RpcTransport(peer, snapshot, role=role, identity=identity)
         self.clients: list[Any] = []
+        self._by_options: dict[tuple[int, float, float], Any] = {}
+        self._closed = False
 
     def __call__(self, config: ProviderConfig):
+        if self._closed:
+            raise RpcError("model client factory closed")
         if config.model not in self.snapshot.allowed_models:
             raise RpcError("bound model outside Mac snapshot")
+        # Model/output/thinking options stay on the original immutable provider.
+        # Only these three fields affect the SDK client constructor. The RPC
+        # transport reads caller context for each request, including concurrent
+        # binds sharing this client.
+        options = (
+            config.max_retries,
+            config.timeout_seconds,
+            config.connect_timeout_seconds,
+        )
+        if options in self._by_options:
+            return self._by_options[options]
+        if len(self._by_options) >= 8:
+            raise RpcError("model client transport configuration limit")
         if self.snapshot.dialect == ProviderDialect.OPENAI_CHAT:
             import httpx as http
             from openai import AsyncOpenAI as SDKClient
@@ -207,12 +225,20 @@ class SDKClientFactory:
         }
         client = SDKClient(**common)
         self.clients.append(client)
+        self._by_options[options] = client
         return client
 
     async def aclose(self):
-        for client in self.clients:
-            await client.close()
+        self._closed = True
+        clients = tuple(self.clients)
         self.clients.clear()
+        self._by_options.clear()
+        results = await asyncio.gather(
+            *(client.close() for client in clients), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
 
 def bridged_provider(

@@ -55,21 +55,22 @@ a registry every surface had to configure identically.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
-import dataclasses
 import logging
 import re
 import time
 import uuid
 from collections import OrderedDict, deque
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping, Protocol, Sequence
+from typing import Protocol
 
 from omicsclaw.context import CompactionState
-from omicsclaw.schema import Message
 from omicsclaw.memory.turn_events import DurableTurnEventLog
+from omicsclaw.schema import Message
 
 from .assembly import AgentApp
 from .events import Terminal
@@ -333,9 +334,9 @@ class SessionRegistry:
         "_app",
         "_by_request",
         "_closed",
+        "_event_log",
         "_grace_s",
         "_handles",
-        "_event_log",
         "_lanes",
         "_sessions",
         "_store",
@@ -451,23 +452,17 @@ class SessionRegistry:
             raise RegistryClosed("this registry is shutting down")
         payload_hash = ""
         if source_request_id and self._event_log is not None:
-            payload_hash = hashlib.sha256(
-                json.dumps(
-                    {"text": text, "values": values or {}, "compact": compaction_only},
-                    sort_keys=True,
-                    ensure_ascii=False,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                ).encode()
-            ).hexdigest()
-            prior = self.request_receipt(session_id, source_request_id)
-            if prior is not None:
-                if prior["payload_hash"] != payload_hash:
-                    raise SubmissionRefused("request identity has a different payload")
-                if (session_id, source_request_id) not in self._by_request:
-                    raise SubmissionRefused(
-                        "request was already admitted; observe its durable state"
-                    )
+            payload_hash = self._request_payload_hash(text, values, compaction_only)
+            prior = self._validate_request_hash(
+                session_id, source_request_id, payload_hash
+            )
+            if (
+                prior is not None
+                and (session_id, source_request_id) not in self._by_request
+            ):
+                raise SubmissionRefused(
+                    "request was already admitted; observe its durable state"
+                )
         if source_request_id:
             seen = self._by_request.get((session_id, source_request_id))
             if seen is not None:
@@ -572,6 +567,36 @@ class SessionRegistry:
         if self._event_log is None:
             return None
         return self._event_log.request_receipt(session_id, source_request_id)
+
+    @staticmethod
+    def _request_payload_hash(text, values, compaction_only):
+        return hashlib.sha256(
+            json.dumps(
+                {"text": text, "values": values or {}, "compact": compaction_only},
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+
+    def _validate_request_hash(self, session_id, source_request_id, payload_hash):
+        receipt = self.request_receipt(session_id, source_request_id)
+        if receipt is not None and receipt["payload_hash"] != payload_hash:
+            raise SubmissionRefused("request identity has a different payload")
+        return receipt
+
+    def validate_admitted_intent(
+        self, message: InboundMessage, *, compaction_only=False
+    ):
+        """Read the original canonical receipt without queuing or applying policy."""
+        if self._event_log is None:
+            raise SubmissionRefused("durable admission capability required")
+        return self._validate_request_hash(
+            message.session_id,
+            message.source_request_id,
+            self._request_payload_hash(message.text, message.values, compaction_only),
+        )
 
     def observe(self, turn_id: str, *, after_seq: int = 0) -> TurnObservation:
         """Open a cursor over an exchange named by id.
@@ -836,7 +861,7 @@ class SessionRegistry:
         except Exception as exc:  # noqa: BLE001 - see the docstring
             _log.exception("turn %s ended outside its own task", handle.turn_id)
             self._end_in_the_air(handle, "failed", exc)
-        except BaseException as exc:  # noqa: BLE001 - see the docstring
+        except BaseException as exc:
             _log.exception("turn %s ended on %s", handle.turn_id, type(exc).__name__)
             self._end_in_the_air(handle, "failed", exc)
             raise

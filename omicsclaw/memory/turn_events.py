@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import hashlib
 import json
+import math
 import sqlite3
 import time
 import uuid
@@ -100,6 +103,16 @@ class DurableTurnEventLog:
 
         return self._db.run(work)
 
+    def is_first_request(self, session_id: str, source_request_id: str) -> bool:
+        def work(conn):
+            row = conn.execute(
+                "SELECT source_request_id FROM turn_ingress WHERE session_id=? ORDER BY created_at,source_request_id LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            return row is not None and row["source_request_id"] == source_request_id
+
+        return self._db.run(work)
+
     def claim_request(
         self,
         session_id: str,
@@ -169,6 +182,342 @@ class DurableTurnEventLog:
                 result.append(self._receipt(row))
                 size += cost
             return result
+
+        return self._db.run(work)
+
+    def request_page(
+        self,
+        session_id: str,
+        *,
+        before=None,
+        limit: int = 50,
+        include_boundary=False,
+        forward=False,
+        through=None,
+    ):
+        """Newest-first keyset page with one bounded lookahead receipt."""
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("invalid request page")
+        for cursor in (before, through):
+            if cursor is not None and (
+                not isinstance(cursor, dict)
+                or set(cursor) != {"createdAt", "sourceRequestId"}
+                or type(cursor["createdAt"]) not in {int, float}
+                or not math.isfinite(cursor["createdAt"])
+                or not isinstance(cursor["sourceRequestId"], str)
+                or not 1 <= len(cursor["sourceRequestId"]) <= 256
+            ):
+                raise ValueError("invalid request cursor")
+
+        def work(conn):
+            where = "session_id=?"
+            args = [session_id]
+            if before is not None:
+                operator = (
+                    (">=" if include_boundary else ">")
+                    if forward
+                    else ("<=" if include_boundary else "<")
+                )
+                where += " AND (created_at,source_request_id)" + operator + "(?,?)"
+                args += [before["createdAt"], before["sourceRequestId"]]
+            if through is not None:
+                where += " AND (created_at,source_request_id)<=(?,?)"
+                args += [through["createdAt"], through["sourceRequestId"]]
+            rows = conn.execute(
+                "SELECT source_request_id,created_at,length(CAST(payload_json AS BLOB)) AS bytes "
+                "FROM turn_ingress WHERE "
+                + where
+                + (
+                    " ORDER BY created_at,source_request_id LIMIT ?"
+                    if forward
+                    else " ORDER BY created_at DESC,source_request_id DESC LIMIT ?"
+                ),
+                [*args, limit + 1],
+            ).fetchall()
+            result, size = [], 0
+            for row in rows[:limit]:
+                cost = row["bytes"] + 1024
+                if cost > 524288 - 8192:
+                    raise ValueError("request_payload_requires_data_channel")
+                if size + cost > 524288 - 8192:
+                    break
+                item = conn.execute(
+                    "SELECT * FROM turn_ingress WHERE session_id=? AND source_request_id=?",
+                    (session_id, row["source_request_id"]),
+                ).fetchone()
+                result.append(self._receipt(item))
+                size += cost
+            last = result[-1] if result else None
+            return {
+                "requests": result,
+                "hasMore": len(rows) > len(result),
+                "nextBefore": {
+                    "createdAt": last["created_at"],
+                    "sourceRequestId": last["source_request_id"],
+                }
+                if last
+                else before,
+            }
+
+        return self._db.run(work)
+
+    @staticmethod
+    def _canonical(value):
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
+    def _projection_source(self, conn, session_id, turn_id):
+        stream = json.dumps([session_id, turn_id], separators=(",", ":"))
+        stats = conn.execute(
+            "SELECT MIN(seq) AS first,MAX(seq) AS last,COUNT(*) AS count,"
+            "COALESCE(SUM(bytes+256),0) AS bytes FROM "
+            "(SELECT seq,length(CAST(payload_json AS BLOB)) AS bytes "
+            "FROM turn_events WHERE stream_id=? ORDER BY seq LIMIT 20001)",
+            (stream,),
+        ).fetchone()
+        if stats["bytes"] > 4 * 1024 * 1024 or stats["count"] > 20000:
+            raise ValueError("projection_requires_data_channel")
+        if stats["first"] != 1 or stats["count"] != stats["last"]:
+            raise ValueError("incomplete_history")
+        end = conn.execute(
+            "SELECT type FROM turn_events WHERE stream_id=? AND seq=?",
+            (stream, stats["last"]),
+        ).fetchone()
+        if end is None or end["type"] != "exchange_end":
+            raise ValueError("incomplete_history")
+        receipt_size = conn.execute(
+            "SELECT length(CAST(payload_json AS BLOB)) AS bytes FROM turn_ingress WHERE session_id=? AND turn_id=?",
+            (session_id, turn_id),
+        ).fetchone()
+        if receipt_size is None:
+            raise ValueError("incomplete_history")
+        if receipt_size["bytes"] > 524288:
+            raise ValueError("request_payload_requires_data_channel")
+        receipt = conn.execute(
+            "SELECT payload_hash,payload_json FROM turn_ingress WHERE session_id=? AND turn_id=?",
+            (session_id, turn_id),
+        ).fetchone()
+        identity = dict(
+            conn.execute(
+                "SELECT authority_id,workspace_id FROM turn_authority_identity WHERE singleton=1"
+            ).fetchone()
+        )
+        owner = conn.execute(
+            "SELECT epoch FROM turn_stream_owners WHERE stream_id=?", (stream,)
+        ).fetchone()
+        if owner is None:
+            raise ValueError("incomplete_history")
+        digest = hashlib.sha256()
+        for row in conn.execute(
+            "SELECT seq,type,payload_json FROM turn_events WHERE stream_id=? ORDER BY seq",
+            (stream,),
+        ):
+            digest.update(
+                self._canonical(
+                    {
+                        "seq": row["seq"],
+                        "type": row["type"],
+                        "payload": json.loads(row["payload_json"]),
+                    }
+                )
+            )
+            digest.update(b"\n")
+        source = {
+            "sessionId": session_id,
+            "turnId": turn_id,
+            "streamId": stream,
+            "durableIdentity": identity,
+            "ownerGeneration": owner["epoch"],
+            "receiptHash": receipt["payload_hash"],
+            "lastSeq": stats["last"],
+            "rawDigest": digest.hexdigest(),
+            "receiptPayload": json.loads(receipt["payload_json"]),
+        }
+        return {
+            **source,
+            "sourceDigest": hashlib.sha256(self._canonical(source)).hexdigest(),
+        }
+
+    def projection_source(self, session_id, turn_id):
+        def work(conn):
+            conn.execute("BEGIN")
+            return self._projection_source(conn, session_id, turn_id)
+
+        return self._db.run(work)
+
+    def confirm_projection(self, source, frames):
+        """Atomically bind original projector bytes to the unchanged raw source."""
+        if not frames or len(frames) > 20000:
+            raise ValueError("incomplete_projection")
+        size, previous = 0, (0, -1)
+        for frame in frames:
+            if (
+                set(frame) != {"seq", "subframe", "frame"}
+                or type(frame["seq"]) is not int
+                or type(frame["subframe"]) is not int
+            ):
+                raise ValueError("incomplete_projection")
+            point = (frame["seq"], frame["subframe"])
+            if (
+                point <= previous
+                or not 1 <= point[0] <= source["lastSeq"]
+                or not 0 <= point[1] <= 16
+            ):
+                raise ValueError("incomplete_projection")
+            previous = point
+            size += len(self._canonical(frame)) + 1
+            if size > 4 * 1024 * 1024:
+                raise ValueError("projection_requires_data_channel")
+        final = json.loads(frames[-1]["frame"].split("data: ", 1)[1])
+        terminal_parts = [
+            frame["subframe"] for frame in frames if frame["seq"] == source["lastSeq"]
+        ]
+        if (
+            previous[0] != source["lastSeq"]
+            or final.get("type") != "done"
+            or terminal_parts != list(range(previous[1] + 1))
+        ):
+            raise ValueError("incomplete_projection")
+        payload = self._canonical(frames).decode()
+        digest = hashlib.sha256(payload.encode()).hexdigest()
+
+        def work(conn):
+            conn.execute("BEGIN IMMEDIATE")
+            actual = self._projection_source(
+                conn, source["sessionId"], source["turnId"]
+            )
+            if actual != source:
+                raise ValueError("projection_source_changed")
+            old = conn.execute(
+                "SELECT source_digest,frame_digest FROM turn_projection_checkpoints WHERE stream_id=?",
+                (source["streamId"],),
+            ).fetchone()
+            if old is not None:
+                if (
+                    old["source_digest"] != source["sourceDigest"]
+                    or old["frame_digest"] != digest
+                ):
+                    raise ValueError("projection_frame_conflict")
+            else:
+                identity = source["durableIdentity"]
+                conn.execute(
+                    "INSERT INTO turn_projection_checkpoints VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        source["streamId"],
+                        source["sessionId"],
+                        source["turnId"],
+                        1,
+                        identity["authority_id"],
+                        identity["workspace_id"],
+                        source["ownerGeneration"],
+                        source["receiptHash"],
+                        source["lastSeq"],
+                        previous[1],
+                        source["sourceDigest"],
+                        digest,
+                        payload,
+                    ),
+                )
+            return self._checkpoint(conn, source["sessionId"], source["turnId"])[0]
+
+        return self._db.run(work)
+
+    def _checkpoint(self, conn, session_id, turn_id):
+        stream = json.dumps([session_id, turn_id], separators=(",", ":"))
+        row = conn.execute(
+            "SELECT length(CAST(frames_json AS BLOB)) AS bytes FROM turn_projection_checkpoints WHERE stream_id=?",
+            (stream,),
+        ).fetchone()
+        if row is None:
+            return None, []
+        if row["bytes"] > 4 * 1024 * 1024:
+            raise ValueError("projection_requires_data_channel")
+        row = conn.execute(
+            "SELECT * FROM turn_projection_checkpoints WHERE stream_id=?", (stream,)
+        ).fetchone()
+        identity = {
+            "authority_id": row["authority_id"],
+            "workspace_id": row["workspace_id"],
+        }
+        if (
+            identity != dataclasses.asdict(self.identity)
+            or hashlib.sha256(row["frames_json"].encode()).hexdigest()
+            != row["frame_digest"]
+        ):
+            raise ValueError("projection_frame_conflict")
+        metadata = {
+            "revision": row["revision"],
+            "sourceDigest": row["source_digest"],
+            "frameDigest": row["frame_digest"],
+            "sessionId": session_id,
+            "turnId": turn_id,
+            "durableIdentity": identity,
+            "coverage": {
+                "firstSeq": 1,
+                "lastSeq": row["last_seq"],
+                "lastSubframe": row["last_subframe"],
+            },
+        }
+        return metadata, json.loads(row["frames_json"])
+
+    def projection_page(
+        self, session_id, turn_id, *, cursor=None, limit=64, frame_overhead=0
+    ):
+        if type(limit) is not int or not 1 <= limit <= 64:
+            raise ValueError("invalid snapshot page")
+        if type(frame_overhead) is not int or not 0 <= frame_overhead <= 4096:
+            raise ValueError("invalid snapshot page")
+
+        def work(conn):
+            conn.execute("BEGIN")
+            metadata, frames = self._checkpoint(conn, session_id, turn_id)
+            if metadata is None:
+                if cursor is not None:
+                    raise ValueError("snapshot_cursor_changed")
+                return {"snapshot": None, "frames": [], "nextPage": None}
+            offset = 0
+            if cursor is not None:
+                try:
+                    if not isinstance(cursor, str) or len(cursor) > 4096:
+                        raise ValueError
+                    page = json.loads(
+                        base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+                    )
+                    if (
+                        set(page) != {"snapshot", "offset"}
+                        or page["snapshot"] != metadata
+                        or type(page["offset"]) is not int
+                        or not 0 <= page["offset"] <= len(frames)
+                    ):
+                        raise ValueError
+                    offset = page["offset"]
+                except (ValueError, TypeError, KeyError) as exc:
+                    raise ValueError("snapshot_cursor_changed") from exc
+            result, size = [], len(self._canonical(metadata)) + 8192
+            for frame in frames[offset : offset + limit]:
+                cost = len(self._canonical(frame)) + 1 + frame_overhead
+                if cost > 524288 - 8192:
+                    raise ValueError("event_frame_requires_data_channel")
+                if size + cost > 524288:
+                    break
+                result.append(frame)
+                size += cost
+            following = offset + len(result)
+            token = (
+                base64.urlsafe_b64encode(
+                    self._canonical({"snapshot": metadata, "offset": following})
+                )
+                .decode()
+                .rstrip("=")
+                if following < len(frames)
+                else None
+            )
+            return {"snapshot": metadata, "frames": result, "nextPage": token}
 
         return self._db.run(work)
 

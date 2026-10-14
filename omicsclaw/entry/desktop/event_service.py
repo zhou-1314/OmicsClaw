@@ -3,14 +3,52 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 
 from omicsclaw.entry.events import TurnEventType
+from omicsclaw.entry.render import to_wire
 from omicsclaw.entry.stream import event_from_durable
 from omicsclaw.memory.turn_events import DurableTurnEventLog
 
 from .interactions import TurnUsage
 from .turn_observation import DesktopChatSSEBody, _count_usage
+
+
+class ProjectionCoverage:
+    """Observe every original raw input while the existing projector renders it."""
+
+    def __init__(self, observation):
+        self.observation = observation
+        self.last_seq = 0
+        self.terminal_seq = 0
+        self.continuous = True
+        self.digest = hashlib.sha256()
+        self.bytes = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        event = await anext(self.observation)
+        self.continuous &= (
+            event.seq == self.last_seq + 1 and event.type is not TurnEventType.GAP
+        )
+        payload = DurableTurnEventLog._canonical(
+            {"seq": event.seq, "type": event.type.value, "payload": to_wire(event)}
+        )
+        self.bytes += len(payload) + 1
+        if self.bytes > 4 * 1024 * 1024 or event.seq > 20000:
+            raise ValueError("projection_requires_data_channel")
+        self.digest.update(payload)
+        self.digest.update(b"\n")
+        self.last_seq = event.seq
+        if event.type is TurnEventType.EXCHANGE_END:
+            self.terminal_seq = event.seq
+        return event
+
+    async def aclose(self):
+        await self.observation.aclose()
 
 
 class _Rows:

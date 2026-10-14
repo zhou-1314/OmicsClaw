@@ -1,3 +1,9 @@
+## 2026-10-15: SSH review repairs
+
+SSH activation now fences configuration saves and opens; ordinary duplicates reuse canonical intent validation, and lost admission acknowledgements recover the original first-title CAS. Trusted Mac build records pin archive, source files and manifest together. Native secret imports read stable regular files through EOF. Public SDK clients share equivalent transport settings with a finite per-role cache and explicit close; successful proxy completions retain their original bytes.
+
+Durable write failure stops unconfirmed business frames and cancels the turn with a bounded transport diagnostic. Original-projector checkpoints in the same memory database support confirmed gap recovery; raw coverage includes TURN_END usage and all terminal subframes. Stable receipt/part pagination and streamed export remove the total-history1000-turn cap. Source logs remain retained. These repairs require a new fixed-source independent Stage2 review before Stage3.
+
 ## 2026-10-14 — Shared Desktop coordination over SSH
 
 The headless controller and HTTP facade now share chat admission, workspace, health and job submission coordination. Six named model callers use Mac-owned nonsecret snapshots through the existing public SDK factories. Durable source requests and event subframes support history reconstruction after a connection or Mac cache loss. The finite SSH owner records host, user, process birth and nonce; the source manifest identifies the complete import closure without the HTTP server or scientific libraries.

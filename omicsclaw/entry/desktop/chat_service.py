@@ -261,14 +261,9 @@ async def admit_chat(
     deployment_values: Mapping[str, object] | None = None,
 ) -> ChatAdmission:
     """Use the shared receipt/lane once, applying entry policy only on admission."""
-    request = decode_chat_stream_request(document)
-    if request.workspace.strip() and not _same_workspace(
-        request.workspace, app.config.workspace
-    ):
-        raise DesktopIngressError(
-            "workspace_does_not_match_backend_runtime", status_code=409
-        )
-    inbound = request.to_inbound()
+    request, inbound = prepare_chat_intent(
+        app, document, deployment_values=deployment_values
+    )
     if policy is not None and not policy.admits(inbound):
         raise DesktopIngressError("sender_not_allowed", status_code=403)
     registry = app.sessions
@@ -283,14 +278,6 @@ async def admit_chat(
             interactions.turn_for(request.session_id, request.source_request_id),
         )
         return ChatAdmission(handle, False, interactions)
-    inbound = dataclasses.replace(
-        inbound,
-        values={
-            **inbound.values,
-            **(deployment_values or {}),
-            "__desktop_permission_profile__": request.permission_profile,
-        },
-    )
     handle, newly_admitted = await registry.admit(
         inbound, compaction_only=request.content.strip() == COMPACT_COMMAND
     )
@@ -304,3 +291,24 @@ async def admit_chat(
     if newly_admitted:
         _maybe_fire_shadow_review(app, registry, handle.session_id)
     return ChatAdmission(handle, newly_admitted, interactions)
+
+
+def prepare_chat_intent(app, document, *, deployment_values=None):
+    """Decode the effective intent shared by admission and read-only validation."""
+    request = decode_chat_stream_request(document)
+    if request.workspace.strip() and not _same_workspace(
+        request.workspace, app.config.workspace
+    ):
+        raise DesktopIngressError(
+            "workspace_does_not_match_backend_runtime", status_code=409
+        )
+    inbound = request.to_inbound()
+    inbound = dataclasses.replace(
+        inbound,
+        values={
+            **inbound.values,
+            **(deployment_values or {}),
+            "__desktop_permission_profile__": request.permission_profile,
+        },
+    )
+    return request, inbound

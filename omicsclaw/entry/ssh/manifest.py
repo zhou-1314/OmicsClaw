@@ -26,7 +26,8 @@ def _read_regular(path: Path, limit: int) -> bytes:
 
 
 def verified_source_metadata(root: Path) -> dict:
-    manifest = json.loads(_read_regular(root / "controller-manifest.json", 1048576))
+    manifest_bytes = _read_regular(root / "controller-manifest.json", 1048576)
+    manifest = json.loads(manifest_bytes)
     records = manifest.get("files")
     if not isinstance(records, list) or not 1 <= len(records) <= 1000:
         raise ValueError("invalid component manifest")
@@ -78,6 +79,7 @@ def verified_source_metadata(root: Path) -> dict:
         "protocolVersion": manifest["protocolVersion"],
         "sourceArchiveHash": manifest["archiveSha256"],
         "sourceFilesHash": digest,
+        "sourceManifestHash": hashlib.sha256(manifest_bytes).hexdigest(),
         "sourceCommit": manifest["sourceCommit"],
         "sourceCommitVerified": manifest.get("sourceCommitVerified") is True,
         "manifestVerified": True,

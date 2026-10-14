@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from pathlib import Path
+
 import pytest
 
 
@@ -33,6 +33,12 @@ def test_component_manifest_verifies_files_and_refuses_changed_payload(tmp_path)
     }
     (tmp_path / "controller-manifest.json").write_text(json.dumps(manifest))
     metadata = verified_source_metadata(tmp_path)
+    assert (
+        metadata.get("sourceManifestHash")
+        == hashlib.sha256(
+            (tmp_path / "controller-manifest.json").read_bytes()
+        ).hexdigest()
+    )
     assert (
         metadata["sourceArchiveHash"] == "b" * 64
         and metadata["sourceCommitVerified"] is True

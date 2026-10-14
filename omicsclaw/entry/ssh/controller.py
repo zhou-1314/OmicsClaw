@@ -3,47 +3,52 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import contextvars
-from contextlib import contextmanager
+import dataclasses
 import fcntl
 import json
 import os
-import resource
-import socket
 import pwd
 import re
+import resource
+import socket
 import stat
 import sys
 import uuid
+from contextlib import contextmanager
 from importlib.metadata import distributions
 from pathlib import Path
 
 from omicsclaw.entry import AppConfig, attach_sessions, build_app
 from omicsclaw.entry.assembly import DeploymentCapabilities
 from omicsclaw.entry.config import SkillEnvMode
-from omicsclaw.entry.desktop.chat_service import admit_chat
+from omicsclaw.entry.desktop.chat_service import (
+    COMPACT_COMMAND,
+    admit_chat,
+    prepare_chat_intent,
+)
+from omicsclaw.entry.desktop.event_service import ProjectionCoverage, replay_frames
 from omicsclaw.entry.desktop.interactions import DesktopInteractions, answer_permission
 from omicsclaw.entry.desktop.jobs_manager import JobsManager
+from omicsclaw.entry.desktop.provider_probe import probe_provider
+from omicsclaw.entry.desktop.service import DesktopService
+from omicsclaw.entry.desktop.title import generate_title
 from omicsclaw.entry.desktop.turn_observation import DesktopChatSSEBody
 from omicsclaw.entry.desktop.turn_submission import (
     decode_chat_stream_request,
     ingress_identity,
 )
 from omicsclaw.entry.memory import memory_db_path
+from omicsclaw.entry.session import SubmissionRefused
+from omicsclaw.entry.shadow_review import review_with_provider
 from omicsclaw.memory.database import Database
 from omicsclaw.memory.turn_events import DurableTurnEventLog
 from omicsclaw.observability import Telemetry
-from omicsclaw.provider import ModelLimits, ProviderDialect, ProviderConfig
+from omicsclaw.provider import ModelLimits, ProviderConfig, ProviderDialect
 from omicsclaw.tools.context import context_value
-from omicsclaw.entry.shadow_review import review_with_provider
-from omicsclaw.entry.desktop.title import generate_title
-from omicsclaw.entry.desktop.provider_probe import probe_provider
-from omicsclaw.entry.desktop.event_service import replay_frames
-from omicsclaw.entry.desktop.service import DesktopService
 
-from .model_bridge import ModelSnapshot, bridged_provider
 from .manifest import verified_source_metadata
+from .model_bridge import ModelSnapshot, bridged_provider
 from .protocol import MAX_FRAME_BYTES, JsonPeer, RpcError
 
 PROTOCOL_VERSION = 1
@@ -143,6 +148,7 @@ class Controller:
                 "hello": self.hello,
                 "configure": self.configure,
                 "chat.submit": self.submit,
+                "chat.validate": self.validate_intent,
                 "chat.permission": self.permission,
                 "chat.abort": self.abort,
                 "request.lookup": self.lookup,
@@ -331,17 +337,7 @@ class Controller:
                 app,
                 params,
                 interactions=self.interactions,
-                deployment_values=(
-                    {
-                        "__desktop_model_snapshot__": {
-                            "provider": self.model_snapshot.provider_id,
-                            "model": self.model_snapshot.model,
-                            "revision": self.model_snapshot.revision,
-                        }
-                    }
-                    if self.production
-                    else None
-                ),
+                deployment_values=self.deployment_values(),
             )
         handle, newly_admitted = settled.handle, settled.newly_admitted
         if newly_admitted:
@@ -350,13 +346,81 @@ class Controller:
             task.add_done_callback(
                 lambda done: self._observer_done(handle.turn_id, done)
             )
-        return {"turnId": handle.turn_id, "sessionId": handle.session_id}
+        return {
+            "turnId": handle.turn_id,
+            "sessionId": handle.session_id,
+            "firstRequest": DurableTurnEventLog(app.memory.database).is_first_request(
+                handle.session_id, request.to_inbound().source_request_id
+            ),
+        }
+
+    def deployment_values(self):
+        return (
+            {
+                "__desktop_model_snapshot__": {
+                    "provider": self.model_snapshot.provider_id,
+                    "model": self.model_snapshot.model,
+                    "revision": self.model_snapshot.revision,
+                }
+            }
+            if self.production
+            else None
+        )
+
+    async def validate_intent(self, params):
+        request, inbound = prepare_chat_intent(
+            self._app(), params, deployment_values=self.deployment_values()
+        )
+        if (
+            request.resume
+            or not request.source_request_id
+            or self.production
+            and request.installation_id != self.installation_id
+        ):
+            raise RpcError("invalid intent validation identity")
+        try:
+            receipt = self._app().sessions.validate_admitted_intent(
+                inbound, compaction_only=request.content.strip() == COMPACT_COMMAND
+            )
+        except SubmissionRefused:
+            return {"valid": False, "code": "request_payload_conflict"}
+        return {
+            "valid": receipt is not None,
+            "code": "request_not_admitted" if receipt is None else "",
+            "turnId": receipt["turn_id"] if receipt else None,
+        }
 
     def _observer_done(self, turn_id, task):
         if self.observers.get(turn_id) is task:
             self.observers.pop(turn_id, None)
         if not task.cancelled():
             task.exception()
+
+    async def _observation_fault(self, handle, source_request_id, code):
+        handle.cancel()
+        # This diagnostic revokes observation, never declaring a business terminal.
+        try:
+            async with asyncio.timeout(1):
+                await self.peer.send(
+                    {
+                        "kind": "event",
+                        "method": "chat.fault",
+                        "params": {
+                            "sessionId": handle.session_id,
+                            "turnId": handle.turn_id,
+                            "sourceRequestId": source_request_id,
+                            "epoch": self.epoch,
+                            "code": code,
+                        },
+                    }
+                )
+        except (TimeoutError, RpcError, ConnectionError):
+            pass
+        try:
+            async with asyncio.timeout(0.25):
+                await handle.wait()
+        except TimeoutError:
+            pass
 
     async def _observe(self, handle):
         receipt = DurableTurnEventLog(self.app.memory.database).turn_receipt(
@@ -365,20 +429,60 @@ class Controller:
         source_request_id = (
             self.caller_request_id(receipt["source_request_id"]) if receipt else ""
         )
+        coverage = ProjectionCoverage(handle.observe())
+        metadata = (receipt or {}).get("payload", {}).get("values", {}).get(
+            "__desktop_model_snapshot__"
+        ) or {}
         body = DesktopChatSSEBody(
-            handle.observe(),
+            coverage,
             keepalive_s=None,
             approvals=handle.approvals,
             interactions=self.interactions,
-            provider=self.model_snapshot.provider_id,
-            model=self.model_snapshot.model,
+            provider=metadata.get("provider", self.model_snapshot.provider_id),
+            model=metadata.get("model", self.model_snapshot.model),
             compaction=handle if handle.compaction_only else None,
         )
+        stable_frames, projection_bytes = [], 0
         try:
             async with body:
                 async for frame in body:
                     # The shared projector owns approval registration and wire semantics.
-                    await handle.stream.flush_durable()
+                    if not await handle.stream.flush_durable():
+                        raise RpcError("durable_turn_write_failed")
+                    frame_type = json.loads(frame.split("data: ", 1)[1]).get("type")
+                    if frame_type == "done" and (
+                        coverage.terminal_seq <= 0
+                        or coverage.terminal_seq != body.last_seq
+                    ):
+                        raise RpcError("durable_turn_terminal_missing")
+                    stable = {
+                        "seq": body.last_seq,
+                        "subframe": body.last_subframe,
+                        "frame": frame,
+                    }
+                    projection_bytes += len(DurableTurnEventLog._canonical(stable)) + 1
+                    if (
+                        projection_bytes > 4 * 1024 * 1024
+                        or len(stable_frames) >= 20000
+                    ):
+                        raise RpcError("projection_requires_data_channel")
+                    stable_frames.append(stable)
+                    if (
+                        frame_type == "done"
+                        and receipt is not None
+                        and coverage.continuous
+                    ):
+                        log = DurableTurnEventLog(self.app.memory.database)
+                        source = log.projection_source(
+                            handle.session_id, handle.turn_id
+                        )
+                        if (
+                            source["rawDigest"] != coverage.digest.hexdigest()
+                            or source["ownerGeneration"]
+                            != handle.stream.durable_owner_generation
+                        ):
+                            raise RpcError("projection_source_changed")
+                        log.confirm_projection(source, stable_frames)
                     await self.peer.send(
                         {
                             "kind": "event",
@@ -403,8 +507,19 @@ class Controller:
                     )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            handle.cancel()
+        except Exception as error:
+            code = (
+                str(error)
+                if str(error)
+                in {
+                    "durable_turn_write_failed",
+                    "durable_turn_terminal_missing",
+                    "projection_requires_data_channel",
+                    "projection_source_changed",
+                }
+                else "projection_confirmation_failed"
+            )
+            await self._observation_fault(handle, source_request_id, code)
             raise
 
     async def permission(self, params):
@@ -419,10 +534,28 @@ class Controller:
         receipt = self._app().sessions.request_receipt(
             params["sessionId"], self.request_key(params["sourceRequestId"])
         )
-        return {"receipt": receipt}
+        return {
+            "receipt": receipt,
+            "firstRequest": receipt is not None
+            and DurableTurnEventLog(self._app().memory.database).is_first_request(
+                params["sessionId"], receipt["source_request_id"]
+            ),
+        }
 
     async def requests(self, params):
         app = self._app()
+        if params.get("descending") is True or params.get("direction") == "forward":
+            return {
+                **DurableTurnEventLog(app.memory.database).request_page(
+                    params["sessionId"],
+                    before=params.get("before"),
+                    limit=params.get("limit", 50),
+                    include_boundary=params.get("includeBoundary") is True,
+                    forward=params.get("direction") == "forward",
+                    through=params.get("through"),
+                ),
+                "durableIdentity": dataclasses.asdict(self.identity),
+            }
         offset = params.get("offset", 0)
         limit = params.get("limit", 50)
         records = DurableTurnEventLog(app.memory.database).requests(
@@ -464,6 +597,33 @@ class Controller:
 
     async def session_snapshot(self, params):
         app = self._app()
+        if "turnId" in params:
+            page = DurableTurnEventLog(app.memory.database).projection_page(
+                params["sessionId"],
+                params["turnId"],
+                cursor=params.get("cursor"),
+                limit=params.get("limit", 64),
+                frame_overhead=1024,
+            )
+            return {
+                **page,
+                "frames": [
+                    {
+                        "durableIdentity": dataclasses.asdict(self.identity),
+                        "epoch": self.epoch,
+                        "eventStreamId": json.dumps(
+                            [params["sessionId"], params["turnId"]],
+                            separators=(",", ":"),
+                        ),
+                        "sessionId": params["sessionId"],
+                        "turnId": params["turnId"],
+                        "cursor": frame["seq"],
+                        "subframe": frame["subframe"],
+                        "frame": frame["frame"],
+                    }
+                    for frame in page["frames"]
+                ],
+            }
         session = await app.sessions.load_session(params["sessionId"])
         if session is None:
             return {"session": None}

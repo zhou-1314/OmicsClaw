@@ -11,8 +11,9 @@ import asyncio
 import os
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -150,6 +151,22 @@ CREATE TABLE IF NOT EXISTS turn_events (
 
 CREATE INDEX IF NOT EXISTS idx_turn_events_stream_seq
     ON turn_events (stream_id, seq);
+
+CREATE TABLE IF NOT EXISTS turn_projection_checkpoints (
+    stream_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    authority_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    owner_generation INTEGER NOT NULL,
+    receipt_hash TEXT NOT NULL,
+    last_seq INTEGER NOT NULL,
+    last_subframe INTEGER NOT NULL,
+    source_digest TEXT NOT NULL,
+    frame_digest TEXT NOT NULL,
+    frames_json TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id              TEXT PRIMARY KEY,
@@ -406,10 +423,10 @@ class Database:
         with self._lock:
             self._conn.close()
 
-    def __enter__(self) -> "Database":
+    def __enter__(self) -> Database:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
 

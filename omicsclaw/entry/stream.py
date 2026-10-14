@@ -131,22 +131,22 @@ class TurnStream:
     """
 
     __slots__ = (
+        "_durable_error",
+        "_durable_lock",
+        "_durable_log",
+        "_durable_owner_epoch",
+        "_durable_tasks",
         "_latest",
         "_loop",
+        "_max_observers",
         "_next_seq",
         "_observer_queue_size",
         "_observers",
-        "_max_observers",
         "_on_observer_change",
         "_ring",
         "_sealed",
         "session_id",
         "turn_id",
-        "_durable_log",
-        "_durable_tasks",
-        "_durable_lock",
-        "_durable_error",
-        "_durable_owner_epoch",
     )
 
     def __init__(
@@ -333,6 +333,11 @@ class TurnStream:
             await asyncio.gather(*tasks, return_exceptions=True)
         return self._durable_error is None
 
+    @property
+    def durable_owner_generation(self) -> int | None:
+        """The original producer generation; reading it never acquires a lease."""
+        return self._durable_owner_epoch
+
     # ---- consumers ------------------------------------------------------
 
     def observe(self, *, after_seq: int = 0) -> TurnObservation:
@@ -507,7 +512,7 @@ def event_from_durable(row) -> TurnEvent | None:
         )
     elif kind is TurnEventType.APPROVAL_REQUIRED:
         from omicsclaw.tools import ApprovalRequest
-        from omicsclaw.tools.base import RiskLevel, ApprovalMode
+        from omicsclaw.tools.base import ApprovalMode, RiskLevel
 
         kwargs["request_id"] = payload.get("request_id", "")
         kwargs["subagent"] = payload.get("subagent", "")
