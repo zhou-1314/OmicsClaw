@@ -32,11 +32,13 @@ script's.
 
 from __future__ import annotations
 
-import queue
+import codecs
+import os
 import re
+import selectors
 import shlex
+import signal
 import subprocess
-import threading
 import time
 from collections.abc import Callable, Sequence
 
@@ -54,9 +56,11 @@ __all__ = [
     "DEFAULT_ENV_DIR",
     "ENV_INSTALL_TIMEOUT_S",
     "ENV_STEP_MARKER_PREFIX",
-    "EnvSupplyError",
+    "INSTALL_OUTPUT_LIMIT_EXIT",
     "INSTALL_TIMEOUT_EXIT",
+    "MAX_INSTALL_OUTPUT_BYTES",
     "UV_NOT_FOUND_EXIT",
+    "EnvSupplyError",
     "build_env_install_script",
     "default_install_runner",
     "env_step_line",
@@ -116,7 +120,7 @@ def parse_env_step(line: str) -> str | None:
         return None
     if not stripped.endswith("==="):
         return None
-    name = stripped[len(ENV_STEP_MARKER_PREFIX):-3]
+    name = stripped[len(ENV_STEP_MARKER_PREFIX) : -3]
     return name or None
 
 
@@ -156,9 +160,7 @@ def build_env_install_script(
     shell-quoted, because the callers are tools and jobs whose
     arguments arrived as model text.
     """
-    resolved = (
-        tuple(KERNEL_BASE_PACKAGES) + CORE_STACK_PACKAGES + tuple(packages)
-    )
+    resolved = tuple(KERNEL_BASE_PACKAGES) + CORE_STACK_PACKAGES + tuple(packages)
     quoted_packages = " ".join(shlex.quote(name) for name in resolved)
     version = shlex.quote(python_version)
     env = _path_literal(env_dir)
@@ -183,7 +185,7 @@ def build_env_install_script(
         'if [ -z "$UV" ]; then UV="$(command -v uv 2>/dev/null || true)"; fi',
         (
             'if [ -z "$UV" ]; then echo "omicsclaw: no uv executable found'
-            ' (set OMICSCLAW_UV_BIN or put uv on PATH); the manual commands'
+            " (set OMICSCLAW_UV_BIN or put uv on PATH); the manual commands"
             ' are in the error that follows" >&2; exit '
             f"{UV_NOT_FOUND_EXIT}; fi"
         ),
@@ -192,8 +194,7 @@ def build_env_install_script(
         env_step_line("venv"),
         f'"$UV" venv {env} --python {version}',
         env_step_line("packages"),
-        f'{index_prefix}"$UV" pip install --python {env_python}'
-        f" {quoted_packages}",
+        (f'{index_prefix}"$UV" pip install --python {env_python} {quoted_packages}'),
         env_step_line("verify"),
         f"{env_python} -c 'import ipykernel'",
     ]
@@ -222,9 +223,7 @@ def manual_env_commands(
         if uv_python_mirror
         else ""
     )
-    index_prefix = (
-        f"UV_INDEX_URL={shlex.quote(uv_index_url)} " if uv_index_url else ""
-    )
+    index_prefix = f"UV_INDEX_URL={shlex.quote(uv_index_url)} " if uv_index_url else ""
     commands = [
         f"{mirror_prefix}uv python install {python_version}",
         f"uv venv {env_dir} --python {python_version}",
@@ -248,6 +247,10 @@ INSTALL_TIMEOUT_EXIT = 124
 GNU ``timeout(1)``'s convention, so an operator reading "exit 124"
 already knows what it means."""
 
+INSTALL_OUTPUT_LIMIT_EXIT = 125
+MAX_INSTALL_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_INSTALL_FRAGMENT_BYTES = 16 * 1024
+
 
 def default_install_runner(
     argv: Sequence[str],
@@ -255,69 +258,99 @@ def default_install_runner(
     on_line: Callable[[str], None] | None = None,
     timeout: float = ENV_INSTALL_TIMEOUT_S,
 ) -> int:
-    """Run the script under ``sh``, streaming merged output line by line.
+    """Run a POSIX installer in its own session with bounded output.
 
-    stdout and stderr share one pipe on purpose: uv's useful progress
-    goes to stderr, and a caller streaming phases wants both in order.
-
-    **The deadline bounds the whole run, silence included** (review
-    m4): a reader thread owns the blocking reads and the main side
-    ``queue.get``\ s with the remaining budget, so a network stall that
-    prints nothing still expires — the process is killed, a disclosure
-    line names the timeout, and 124 is answered. uv installs are
-    resumable, which is what makes killing on timeout safe: the
-    script's idempotence heals the partial run on retry.
+    The deadline includes silent children and EOF followed by a lingering
+    process. Timeout, output overflow and callback failure stop the owned
+    process group before returning. A selector reads fixed-size byte chunks;
+    incomplete lines cannot create an unbounded queue or allocation.
     """
+    if os.name != "posix":
+        raise EnvSupplyError("install runner requires a POSIX process group")
     process = subprocess.Popen(
         list(argv),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        start_new_session=True,
+        bufsize=0,
     )
-    lines: queue.SimpleQueue[str | None] = queue.SimpleQueue()
-
-    def _read() -> None:
-        stream = process.stdout
-        if stream is None:  # PIPE was asked for; unreachable defensively
-            lines.put(None)
-            return
-        for line in stream:
-            lines.put(line)
-        lines.put(None)  # EOF marker
-
-    reader = threading.Thread(target=_read, daemon=True)
-    reader.start()
     deadline = time.monotonic() + max(0.0, timeout)
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    pending = bytearray()
+    total = 0
 
-    def _expire() -> int:
-        process.kill()
-        process.wait(timeout=10)
+    def stop_owned_group() -> None:
+        for action in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(process.pid, action)
+            except ProcessLookupError:
+                # The session has already exited; no other process is selected.
+                break
+            if action == signal.SIGTERM:
+                try:
+                    process.wait(timeout=0.25)
+                except subprocess.TimeoutExpired:
+                    pass  # The next step kills this same owned session.
+        process.wait(timeout=2)
+
+    def refuse(code: int, reason: str) -> int:
+        stop_owned_group()
         if on_line is not None:
             on_line(
-                "omicsclaw: install exceeded its "
-                f"{int(max(0.0, timeout))}s deadline and was killed; the"
-                " install is resumable — re-run it"
+                "omicsclaw: install "
+                + reason
+                + "; owned process group stopped; retry is resumable"
             )
-        return INSTALL_TIMEOUT_EXIT
+        return code
 
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return _expire()
-        try:
-            line = lines.get(timeout=remaining)
-        except queue.Empty:
-            return _expire()
-        if line is None:
-            break
-        if on_line is not None:
-            on_line(line.rstrip("\n"))
+    def emit(fragment: bytes, *, final: bool = False) -> None:
+        text = decoder.decode(fragment, final=final)
+        if on_line is not None and text:
+            on_line(text.rstrip("\n"))
+
+    stream = process.stdout
     try:
-        return process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        # EOF but the process lingers (a grandchild holds the pipe open
-        # past its writer): the same expiry, honestly reported
-        return _expire()
+        if stream is None:
+            raise EnvSupplyError("install output pipe unavailable")
+        with selectors.DefaultSelector() as selector:
+            selector.register(stream, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    return refuse(
+                        INSTALL_TIMEOUT_EXIT,
+                        f"exceeded its {max(0.0, timeout):g}s deadline",
+                    )
+                chunk = os.read(stream.fileno(), 4096)
+                if not chunk:
+                    emit(bytes(pending), final=True)
+                    break
+                total += len(chunk)
+                if total > MAX_INSTALL_OUTPUT_BYTES:
+                    return refuse(
+                        INSTALL_OUTPUT_LIMIT_EXIT, "exceeded its output byte limit"
+                    )
+                pending.extend(chunk)
+                while pending:
+                    newline = pending.find(b"\n")
+                    if 0 <= newline < MAX_INSTALL_FRAGMENT_BYTES:
+                        size = newline + 1
+                    elif len(pending) >= MAX_INSTALL_FRAGMENT_BYTES:
+                        size = MAX_INSTALL_FRAGMENT_BYTES
+                    else:
+                        break
+                    emit(bytes(pending[:size]))
+                    del pending[:size]
+            try:
+                return process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                return refuse(INSTALL_TIMEOUT_EXIT, "exceeded its deadline after EOF")
+    except BaseException:
+        stop_owned_group()
+        raise
+    finally:
+        if stream is not None:
+            stream.close()
 
 
 def run_install_script(

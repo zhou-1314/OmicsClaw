@@ -24,6 +24,7 @@ it. Nothing here asks anyone anything.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -164,7 +165,7 @@ class EnvSupplyBinding:
             uv_index_url=self._index_url,
             uv_python_mirror=self._python_mirror,
         )
-        lines: list[str] = []
+        lines: deque[str] = deque(maxlen=12)
 
         def _collect(line: str) -> None:
             lines.append(line)
@@ -182,7 +183,7 @@ class EnvSupplyBinding:
             raise EnvSupplyError(
                 "installing the environment at "
                 f"{env_dir} failed (exit {exit_code}): "
-                f"{''.join(line + chr(10) for line in lines[-12:])}",
+                f"{''.join(line + chr(10) for line in lines)}",
                 manual_env_commands(
                     env_dir,
                     uv_index_url=self._index_url,
