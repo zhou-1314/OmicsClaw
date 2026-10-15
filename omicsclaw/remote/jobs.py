@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -280,7 +281,25 @@ def detect_scheduler(command: str, scheduler: str = "auto") -> str:
     return KIND_SLURM if promoted else KIND_NOHUP
 
 
-def build_job_scripts(command: str, kind: str) -> dict[str, str]:
+def validate_hard_timeout(value: float | None) -> float | None:
+    if value is None:
+        return None
+    if (
+        type(value) not in {float, int}
+        or not math.isfinite(value)
+        or not 0 < value <= 604800
+    ):
+        raise ValueError("invalid_hard_timeout")
+    return float(value)
+
+
+def build_job_scripts(
+    command: str,
+    kind: str,
+    *,
+    hard_timeout_s: float | None = None,
+    deadline_python: str = "",
+) -> dict[str, str]:
     """The files a work directory needs for a job of *kind*. Pure.
 
     SLURM: the command **is** ``job.sh`` (its ``#SBATCH`` lines only
@@ -301,11 +320,30 @@ def build_job_scripts(command: str, kind: str) -> dict[str, str]:
         cmd = (
             command if command.startswith("#!") else ("#!/usr/bin/env bash\n" + command)
         )
-        return {
+        scripts = {
             "cmd.sh": cmd if cmd.endswith("\n") else cmd + "\n",
             "job.sh": NOHUP_WRAPPER,
             "_omicsclaw_launch.sh": NOHUP_LAUNCHER,
         }
+        if hard_timeout_s is not None:
+            from pathlib import Path
+
+            seconds = validate_hard_timeout(hard_timeout_s)
+            if not deadline_python.startswith("/") or any(
+                char in deadline_python for char in "\x00\r\n"
+            ):
+                raise ValueError("deadline_interpreter_required")
+            scripts["_omicsclaw_deadline.py"] = (
+                Path(__file__).with_name("deadline.py").read_text()
+            )
+            scripts["job.sh"] = (
+                "#!/bin/bash\nexec "
+                + shell_quote(deadline_python)
+                + " -I ./_omicsclaw_deadline.py "
+                + str(seconds)
+                + "\n"
+            )
+        return scripts
     raise ValueError(f"unknown job kind {kind!r}")
 
 
@@ -315,7 +353,9 @@ def build_mkdir_command(workdir: str) -> str:
     return f"mkdir -p -m 700 -- {quoted}"
 
 
-def build_submit_command(workdir: str, kind: str) -> str:
+def build_submit_command(
+    workdir: str, kind: str, *, hard_timeout_s: float | None = None
+) -> str:
     """The one remote command that starts the job. Pure.
 
     nohup waits up to 10 s for ``_omicsclaw_pgid`` to appear — the
@@ -333,12 +373,18 @@ def build_submit_command(workdir: str, kind: str) -> str:
     backgrounds only ``B``.
     """
     if kind == KIND_SLURM:
+        minutes = (
+            math.ceil(validate_hard_timeout(hard_timeout_s) / 60)
+            if hard_timeout_s is not None
+            else None
+        )
+        time_limit = f" --time={minutes}" if minutes is not None else ""
         return (
             f"cd -- {shell_quote(workdir)} || exit 1; "
             "_nonce=$(head -c 64 ./_omicsclaw_nonce) && "
             "printf '%s' \"$_nonce\" | grep -Eq '^[a-f0-9]{32}$' || exit 1; "
             "if mkdir ./_omicsclaw_launch_claim 2>/dev/null; then "
-            "sbatch --parsable --job-name=omicsclaw_$_nonce --comment=omicsclaw_$_nonce ./job.sh "
+            f"sbatch --parsable --job-name=omicsclaw_$_nonce --comment=omicsclaw_$_nonce{time_limit} ./job.sh "
             "> ./_omicsclaw_scheduler_ack.tmp && "
             "mv -- ./_omicsclaw_scheduler_ack.tmp ./_omicsclaw_scheduler_ack && "
             "cat ./_omicsclaw_scheduler_ack; "
@@ -413,13 +459,22 @@ def build_status_command(handle: RemoteJobHandle) -> str:
     pgid = _nohup_pgid(handle)
     if handle.process_identity is None:
         return f"printf '%s\\n' {_LOST_MARK}"
+    # btime has one-second precision; ticks come from the verified birth.
+    start = (
+        "_hz=$(getconf CLK_TCK) && "
+        f'awk -v ticks={handle.process_identity["start_ticks"]} -v hz="$_hz" '
+        + shell_quote(
+            '$1 == "btime" && hz > 0 {printf "__OMICSCLAW_STARTED_AT__=%.6f\\n", $2 + ticks / hz}'
+        )
+        + " /proc/stat; "
+    )
     return (
         f"cd -- {quoted} && "
         f"if {_process_identity_guard(handle)} && kill -0 -- -{_nohup_pgid(handle)} 2>/dev/null;"
-        f" then echo {_RUNNING_MARK}; "
+        f" then {start}echo {_RUNNING_MARK}; "
         f"elif {_job_identity_guard(handle)} "
         f"&& ! kill -0 -- -{pgid} 2>/dev/null "
-        f"&& [ -f ./{_EXIT_FILE} ]; then cat ./{_EXIT_FILE}; "
+        f"&& [ -f ./{_EXIT_FILE} ]; then {start}cat ./{_EXIT_FILE}; "
         f"else echo {_LOST_MARK}; fi"
     )
 
@@ -524,6 +579,8 @@ def parse_status(kind: str, output: str) -> tuple[str, int | None]:
         line = text.splitlines()[-1].strip() if text else ""
         if line == "__OMICSCLAW_CANCELED__":
             return CANCELED, 143
+        if re.fullmatch(r"__OMICSCLAW_CANCELED__:(137|143)", line):
+            return CANCELED, int(line.rsplit(":", 1)[1])
         if line == _RUNNING_MARK:
             return RUNNING, None
         if line == _LOST_MARK:

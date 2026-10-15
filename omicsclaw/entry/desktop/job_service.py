@@ -137,6 +137,7 @@ async def create_job_from_document(jobs, document):
         runtime=runtime,
         source_request_id=request_id,
         lifetime=lifetime,
+        hard_timeout_s=document.get("hard_timeout_s"),
     )
     return record
 

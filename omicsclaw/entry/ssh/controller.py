@@ -357,6 +357,7 @@ class Controller:
                     payload_root=science.payload_root,
                     manifest=science.payload_manifest,
                     environment_digest=science.environment_digest,
+                    default_hard_timeout_s=3600.0,
                     rscript=science.rscript,
                     r_library=science.r_library,
                 ),

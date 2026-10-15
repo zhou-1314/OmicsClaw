@@ -167,6 +167,7 @@ class StatusReport:
     job_ref: str = ""
     identity_verified: bool = False
     identity_digest: str = ""
+    started_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

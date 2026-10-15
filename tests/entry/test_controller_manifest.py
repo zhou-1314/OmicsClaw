@@ -88,3 +88,12 @@ def test_scientific_worker_entry_is_packaged_without_skill_algorithm_source():
     closure = source_closure(Path(__file__).parents[2])
     assert "omicsclaw.entry.ssh.science_worker" in closure
     assert not any(name == "skills" or name.startswith("skills.") for name in closure)
+
+
+def test_finite_execution_wrapper_is_in_the_fixed_controller_archive():
+    from pathlib import Path
+
+    from scripts.build_controller import source_closure
+
+    closure = source_closure(Path(__file__).parents[2])
+    assert "omicsclaw.remote.deadline" in closure

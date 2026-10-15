@@ -98,6 +98,8 @@ def test_production_science_configuration_mounts_one_shared_runner_and_agent_too
             )
             assert (
                 controller.jobs.runner_kinds() == ("skill_run",)
+                and controller.jobs.runner_for("skill_run").default_hard_timeout_s
+                == 3600.0
                 and controller.app.registry.get("run_skill_job") is not None
                 and "run_skill_job"
                 in {item.name for item in controller.app.tools_snapshot}
@@ -180,6 +182,7 @@ def test_production_job_approval_uses_the_original_job_gate_once(tmp_path):
                     break
                 await asyncio.sleep(0.01)
             assert approval is not None
+            assert json.loads(approval["arguments"])["hard_timeout_s"] == 3600.0
             request = {
                 "method": "POST",
                 "path": f"/jobs/{job_id}/approval/{approval['call_id']}",

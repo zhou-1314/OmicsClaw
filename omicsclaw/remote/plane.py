@@ -175,6 +175,8 @@ class RemoteExecutor:
         request_id: str = "",
         payload_hash: str = "",
         expected_inputs: dict[str, tuple[str, int]] | None = None,
+        hard_timeout_s: float | None = None,
+        deadline_python: str = "",
     ) -> RemoteJobHandle:
         """Create *workdir*, upload *files* and *uploads*, start the job.
 
@@ -192,7 +194,23 @@ class RemoteExecutor:
         nonce = hashlib.sha256((request_id + "/" + payload_hash).encode()).hexdigest()[
             :32
         ]
-        scripts = build_job_scripts(command, kind)
+        scripts = build_job_scripts(
+            command,
+            kind,
+            hard_timeout_s=hard_timeout_s,
+            deadline_python=deadline_python,
+        )
+        if hard_timeout_s is not None and kind == KIND_NOHUP:
+            capability = await self.run(
+                shell_quote(deadline_python)
+                + " -I -c "
+                + shell_quote(
+                    "import os,signal; fd=os.pidfd_open(os.getpid(),0); signal.pidfd_send_signal(fd,0); os.close(fd)"
+                ),
+                timeout=PROBE_TIMEOUT_S,
+            )
+            if capability.exit_code:
+                raise RuntimeError("deadline_capability_unconfirmed")
         scripts["_omicsclaw_nonce"] = nonce
         if set(files or {}).intersection(scripts):
             raise RemotePathRefused("job inputs cannot replace the execution wrapper")
@@ -247,7 +265,10 @@ class RemoteExecutor:
             )
             if verified.exit_code != 0:
                 raise RemoteTransferError("input_integrity_unconfirmed")
-        outcome = await self.run(build_submit_command(workdir, kind), timeout=timeout)
+        outcome = await self.run(
+            build_submit_command(workdir, kind, hard_timeout_s=hard_timeout_s),
+            timeout=timeout,
+        )
         number = parse_submit_output(kind, outcome.output)
         if number <= 0:
             raise RuntimeError(
@@ -372,12 +393,20 @@ class RemoteExecutor:
             return StatusReport(state="unknown", detail=str(exc))
         state, exit_code = parse_status(handle.kind, outcome.output)
         detail = outcome.output.strip()[:200]
+        started = re.search(
+            r"^__OMICSCLAW_STARTED_AT__=([0-9]+\.[0-9]{6})$",
+            outcome.output,
+            re.MULTILINE,
+        )
         return StatusReport(
             state=state,
             exit_code=exit_code,
             detail=detail,
             identity_verified=state != "unknown",
             identity_digest=handle.proof_digest() if state != "unknown" else "",
+            started_at=float(started.group(1))
+            if started and state != "unknown"
+            else None,
         )
 
     async def cancel(self, handle: RemoteJobHandle) -> StatusReport:
@@ -834,8 +863,13 @@ class RemotePlaneBinding:
         target_workdir: str = "",
         request_id: str = "",
         supplied_files: dict[str, str] | None = None,
+        hard_timeout_s: float | None = None,
+        deadline_python: str = "",
     ) -> SubmitOutcome:
         validate_host(host)
+        from .jobs import validate_hard_timeout
+
+        hard_timeout_s = validate_hard_timeout(hard_timeout_s)
         resolved_inputs = self._resolve_inputs(inputs)
         executor = RemoteExecutor(host, self._spawner)
         request_id = request_id or (
@@ -889,6 +923,9 @@ class RemotePlaneBinding:
                 name: hashlib.sha256(content.encode()).hexdigest()
                 for name, content in sorted(supplied_files.items())
             }
+        if hard_timeout_s is not None:
+            canonical["hard_timeout_s"] = hard_timeout_s
+            canonical["deadline_python"] = deadline_python
         payload_hash = hashlib.sha256(
             json.dumps(
                 canonical,
@@ -926,6 +963,8 @@ class RemotePlaneBinding:
                     )
                     for item in input_evidence
                 },
+                hard_timeout_s=hard_timeout_s,
+                deadline_python=deadline_python,
             )
             handle = replace(
                 launched,
@@ -1001,6 +1040,7 @@ class RemotePlaneBinding:
             job_ref=job_ref,
             identity_verified=report.identity_verified,
             identity_digest=report.identity_digest,
+            started_at=report.started_at,
         )
 
     async def cancel(self, job_ref: str) -> StatusReport:

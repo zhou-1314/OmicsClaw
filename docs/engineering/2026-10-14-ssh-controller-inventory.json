@@ -46,7 +46,7 @@
       "identity": "original workspace/local_job_id/immutable target; process proof UID/host/boot/PID birth/PGID/session/nonce; request/hash binds the pre-launch intent",
       "retention": "existing workspace DB backup/migration/archival lifecycle; uncertain claims are retained, never TTL-deleted to permit relaunch",
       "recovery": "Same JobStore claim observes the original business ID and repairs only missing RunStore projections, never schedules again. Original projection version/digest/identity conflicts refuse. External observation shutdown/timeout/EOF does not cancel. Explicit cancellation waits for verified exit; original job events dedupe exit and terminal projection. Bound same-host transport reuses RemoteExecutor. Slurm and scientific wiring remain Stage3 work.",
-      "migration": "Additive jobs.lifetime/source_request_id/payload_hash/projection_json and remote_jobs request/proof columns. Canonical request <=2MiB; immutable Run projection <=512KiB UTF-8 bytes, SQL BLOB length gate before JSON parse. Legacy empty identity stays absent."
+      "migration": "Additive jobs.lifetime/source_request_id/payload_hash/projection_json/hard_timeout_s and remote_jobs request/proof columns. The nullable execution limit is immutable and included in original admission/submission hashes before launch; legacy NULL stays unlimited, native science supplies3600 seconds. Canonical request <=2MiB; immutable Run projection <=512KiB UTF-8 bytes, SQL BLOB length gate before JSON parse. Legacy empty identity stays absent."
     },
     {
       "name": "job_events.source_event_id",
@@ -161,7 +161,9 @@
         "no RPC-owned turn status or retry state",
         "additive immutable turn_projection_checkpoints with continuous raw coverage, original TurnUsage fold and transactional source/owner generation checks; SSH no-prune",
         "Original jobs canonical claim + immutable RunStore projection: no launch before durable intent; first-store crash leaves unknown original job, missing Run/Job link repair never queues; version/digest/identity conflicts refuse. SQL UTF-8 byte guard <=512KiB. RemoteJobStore launch binding remains a separate original evidence authority.",
-        "Scientific worker source_event_id lives in original job_events, not another event authority; SQL UTF-8 sum/count admission bounds and same job lifetime, no-prune source retention."
+        "Scientific worker source_event_id lives in original job_events, not another event authority; SQL UTF-8 sum/count admission bounds and same job lifetime, no-prune source retention.",
+        "Original jobs nullable immutable hard_timeout_s is an execution limit, distinct from observer/transport timeout. Native science default3600 seconds is disclosed in original approval; legacy direct runner/CLI defaults remain NULL. Original Linux session leader writes exit evidence only after proven group cleanup; unavailable pidfd/identity or supervisor failure stays unknown. Slurm uses native minute-rounded --time, separate scheduler proof; real Slurm remains pending.",
+        "Fresh verified recovery clears observation-only errors, retains historical detach events and derives Linux started_at from same-boot birth ticks/CLK_TCK plus btime (about one-second precision). Missing scheduler StartTime remains unknown; submit time is not start time."
       ],
       "reusedTests": [
         "tests/entry/test_durable_ingress.py",

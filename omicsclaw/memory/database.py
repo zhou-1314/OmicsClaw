@@ -466,6 +466,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "source_request_id": "TEXT NOT NULL DEFAULT ''",
             "payload_hash": "TEXT NOT NULL DEFAULT ''",
             "projection_json": "TEXT NOT NULL DEFAULT '{}'",
+            "hard_timeout_s": "REAL",
             "target_alias": "TEXT NOT NULL DEFAULT ''",
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",

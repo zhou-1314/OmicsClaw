@@ -33,6 +33,7 @@ def source_closure(root: Path) -> dict[str, Path]:
         "omicsclaw.entry.ssh.__main__",
         "omicsclaw.entry.ssh.science_runner",
         "omicsclaw.entry.ssh.science_worker",
+        "omicsclaw.remote.deadline",
     ]
     included = {}
 

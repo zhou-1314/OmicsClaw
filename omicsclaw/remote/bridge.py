@@ -159,6 +159,8 @@ class RemoteJobsBridge:
             label=f"desktop job {record.id}",
             local_job_id=record.id,
             target_workdir=target_workdir,
+            hard_timeout_s=record.hard_timeout_s,
+            deadline_python=str(record.inputs.get("deadline_python") or ""),
         )
         return await self.observe(outcome, record, ctx, command=command)
 

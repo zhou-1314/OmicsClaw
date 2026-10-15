@@ -117,6 +117,7 @@ class ScienceJobRunner:
         environment_digest: str,
         rscript: Path | None = None,
         r_library: Path | None = None,
+        default_hard_timeout_s: float | None = None,
     ):
         import re
 
@@ -138,6 +139,9 @@ class ScienceJobRunner:
             self.payload_root, self.manifest, expected_digest=self.payload_digest
         )
         self.environment_digest = environment_digest
+        from omicsclaw.remote.jobs import validate_hard_timeout
+
+        self.default_hard_timeout_s = validate_hard_timeout(default_hard_timeout_s)
         self.rscript = rscript.absolute() if rscript else None
         self.r_library = r_library.resolve(strict=True) if r_library else None
         if self.rscript and (not self.rscript.is_file() or self.r_library is None):
@@ -225,6 +229,7 @@ class ScienceJobRunner:
                 "skill": record.skill,
                 "target": record.target_alias,
                 "workdir": record.target_workdir,
+                "hard_timeout_s": record.hard_timeout_s,
                 **snapshot,
             },
             sort_keys=True,
@@ -235,7 +240,14 @@ class ScienceJobRunner:
             await require_approval(
                 "science_job",
                 approval,
-                reason="Run this skill in the selected scientific environment and workspace.",
+                reason=(
+                    "Run this skill in the selected scientific environment and workspace."
+                    + (
+                        f" Execution limit: {record.hard_timeout_s:g} seconds."
+                        if record.hard_timeout_s is not None
+                        else ""
+                    )
+                ),
             )
         await asyncio.to_thread(
             verify_payload,
@@ -286,6 +298,8 @@ class ScienceJobRunner:
             record.target_alias,
             command,
             scheduler="none",
+            hard_timeout_s=record.hard_timeout_s,
+            deadline_python=str(self.interpreter),
             local_job_id=record.id,
             target_workdir=record.target_workdir,
             supplied_files={"science-request.json": content},
@@ -414,6 +428,11 @@ class RunSkillJobTool:
                     "inputs": {"type": "object"},
                     "source_request_id": {"type": "string"},
                     "runtime": {"type": "string"},
+                    "hard_timeout_s": {
+                        "type": "number",
+                        "minimum": 0.001,
+                        "maximum": 604800,
+                    },
                 },
                 "required": ["skill", "source_request_id"],
                 "additionalProperties": False,
