@@ -434,7 +434,7 @@ class RunSkillJobTool:
         if issues:
             raise ToolArgumentError("invalid skill job request: " + "; ".join(issues))
         record = await create_job_from_document(
-            self._jobs,
+            self._jobs() if callable(self._jobs) else self._jobs,
             {
                 **document,
                 "kind": "skill_run",

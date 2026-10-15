@@ -37,6 +37,25 @@ def job_event_page(jobs, job_id, after_seq):
     }
 
 
+def settle_job_approval(jobs, job_id, call_id, document):
+    """Answer the existing per-job gate through either transport."""
+    from omicsclaw.tools.context import ApprovalDecision
+
+    decision = document.get("decision")
+    if not isinstance(decision, str) or decision not in {"approve", "deny"}:
+        raise DesktopIngressError("invalid_decision", status_code=422)
+    if not jobs.settle_approval(
+        job_id,
+        call_id,
+        ApprovalDecision(
+            approved=decision == "approve",
+            reason="" if decision == "approve" else "denied in the desktop app",
+        ),
+    ):
+        raise DesktopIngressError("approval_not_outstanding", status_code=404)
+    return {"job_id": job_id, "call_id": call_id, "decision": decision}
+
+
 async def create_job_from_document(jobs, document):
     kind = document.get("kind", "skill_run")
     if not isinstance(kind, str):

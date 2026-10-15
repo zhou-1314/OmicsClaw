@@ -26,6 +26,7 @@ from .job_service import (
     event_cursor,
     job_event_page,
     run_payload,
+    settle_job_approval,
 )
 from .jobs_manager import JobError
 from .runtime_service import health_payload
@@ -104,10 +105,13 @@ class DesktopService:
                     "kernel_r": False,
                     "mcp": False,
                     "attachments": False,
-                    "science_runner": False,
+                    "science_runner": "skill_run" in jobs.runner_kinds(),
                 }
             )
-            payload["skill_python_executable"] = ""
+            selected = jobs.runner_for("skill_run")
+            payload["skill_python_executable"] = (
+                str(selected.interpreter) if selected is not None else ""
+            )
             payload["transport"] = "ssh-stdio"
         elif method == "GET" and path == "/workspace":
             payload = workspace_payload(app)
@@ -166,6 +170,11 @@ class DesktopService:
         elif method == "POST" and path == "/jobs":
             if document.get("kind", "skill_run") not in jobs.runner_kinds():
                 return capability_required("science_runner")
+            if (
+                not isinstance(document.get("source_request_id"), str)
+                or not document["source_request_id"]
+            ):
+                raise DesktopIngressError("source_request_id_required", status_code=422)
             record = await create_job_from_document(jobs, document)
             payload = {"job_id": record.id, "job": record.as_payload()}
         elif re.fullmatch(r"/jobs/[A-Za-z0-9_.-]+", path) and method == "GET":
@@ -185,6 +194,11 @@ class DesktopService:
         elif re.fullmatch(r"/jobs/[A-Za-z0-9_.-]+/events", path) and method == "GET":
             job_id = path.split("/")[2]
             payload = job_event_page(jobs, job_id, query.get("afterSeq", "0"))
+        elif method == "POST" and re.fullmatch(
+            r"/jobs/[A-Za-z0-9_.-]+/approval/[A-Za-z0-9_.-]+", path
+        ):
+            pieces = path.split("/")
+            payload = settle_job_approval(jobs, pieces[2], pieces[4], document)
         elif path.startswith("/jobs/"):
             return capability_required("science_runner")
         elif method == "GET" and path == "/artifacts":

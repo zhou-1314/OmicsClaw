@@ -80,11 +80,11 @@ import platform
 import sqlite3
 import sys
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from omicsclaw.context import (
     AssembledPrompt,
@@ -98,12 +98,19 @@ from omicsclaw.context import (
     text_from_file,
 )
 from omicsclaw.engine import AgentEngine
+from omicsclaw.entry.notebook_apps import NotebookAppBridge
 from omicsclaw.hooks import (
     AuditHook,
     HookedTool,
     JsonlAuditSink,
     ToolHook,
     hook_tools,
+)
+from omicsclaw.kernel import (
+    OutputLimits,
+    PersistentKernelManager,
+    SessionKernel,
+    format_cell_summary,
 )
 from omicsclaw.mcp import (
     MCPManager,
@@ -118,7 +125,7 @@ from omicsclaw.memory.artifacts import (
     new_artifact_id,
 )
 from omicsclaw.memory.database import Database
-from omicsclaw.memory.notebook import NotebookCell, NotebookStore, ExecutionRecord
+from omicsclaw.memory.notebook import ExecutionRecord, NotebookCell, NotebookStore
 from omicsclaw.observability import Telemetry, build_telemetry
 from omicsclaw.permission import (
     GatedTool,
@@ -140,12 +147,6 @@ from omicsclaw.provider import (
     get_model_limits,
     provider_from_env,
     resolve_config,
-)
-from omicsclaw.kernel import (
-    OutputLimits,
-    PersistentKernelManager,
-    SessionKernel,
-    format_cell_summary,
 )
 from omicsclaw.remote import RemoteKernelRuntime, RemotePlaneBinding
 from omicsclaw.sandbox import ChangeListener
@@ -173,16 +174,14 @@ from omicsclaw.tools import (
 )
 from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
 from omicsclaw.tools.builtin.bash import BashEnvironment
+from omicsclaw.tools.builtin.live_app import LiveAppTool
 from omicsclaw.tools.builtin.manage_env import ManageEnvironmentsTool
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
-from omicsclaw.tools.builtin.live_app import LiveAppTool
-from omicsclaw.entry.notebook_apps import NotebookAppBridge
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
 from .archive import archive_tools
 from .config import AppConfig, SkillsIndex
-from .shadow_review import ShadowReview
 from .env_supply import EnvSupplyBinding, build_env_supply
 from .memory import (
     MemoryBinding,
@@ -200,15 +199,15 @@ from .sandbox import (
     sandbox_section,
     unstarted_sandbox,
 )
+from .shadow_review import ShadowReview
 from .skill_env import SkillEnvBinding, build_skill_env, log_skill_env
-from .suggestions import FOLLOW_UP_SENTINEL
 from .subagent import ChildRunner, build_subagent_registry
+from .suggestions import FOLLOW_UP_SENTINEL
 
 if TYPE_CHECKING:  # pragma: no cover - session.py imports this module
     from .session import SessionRegistry
 
 __all__ = [
-    "AgentApp",
     "COMPACTION_CONTRACT_RULES",
     "COMPACTION_SECTION_HEADING",
     "CONTRACT_FILE",
@@ -218,6 +217,7 @@ __all__ = [
     "SAFETY_RULES",
     "SHUTDOWN_GRACE_S",
     "TOOL_GUIDANCE",
+    "AgentApp",
     "build_app",
     "build_budget",
     "build_hooks",
@@ -721,10 +721,11 @@ class WorkspaceKernelBinding:
         *location* is C3's routing argument, passed through to the
         manager verbatim — the refusals (no runtime, bad shape) are the
         manager's, so both faces answer them identically."""
-        from omicsclaw.kernel import KernelCallbacks
-        from omicsclaw.tools.context import context_value
         import hashlib
         import uuid
+
+        from omicsclaw.kernel import KernelCallbacks
+        from omicsclaw.tools.context import context_value
 
         if self.notebooks.binding(session_id=session_id) is not None:
             call = context_value("tool_call_id", "")
@@ -1471,7 +1472,7 @@ class AgentApp:
     ``app.skills.skipped`` is answerable without scanning again. Empty
     when ``skills_index=off`` or when the directory does not exist."""
 
-    sessions: "SessionRegistry | None" = None
+    sessions: SessionRegistry | None = None
     """Conversations, their queues, and one task per running exchange.
 
     Lives in ``omicsclaw/entry/session.py`` and is annotated as a string
@@ -1562,7 +1563,7 @@ class AgentApp:
     Closed by :meth:`aclose`, after everything that might still be
     producing spans."""
 
-    kernels: "WorkspaceKernelBinding | None" = None
+    kernels: WorkspaceKernelBinding | None = None
     """P4's persistent-kernel binding, or ``None`` in an app constructed
     directly. Holds the one
     :class:`~omicsclaw.kernel.PersistentKernelManager` per deployment —
@@ -1837,6 +1838,7 @@ def build_app(
     config: AppConfig,
     *,
     tools: Sequence[Tool] | None = None,
+    additional_tools: Sequence[Tool] = (),
     hooks: Sequence[ToolHook] | None = None,
     sections: Sequence[Section] | None = None,
     mcp: MCPManager | None = None,
@@ -1865,6 +1867,11 @@ def build_app(
     test can describe a whole app without touching the environment, a
     migration can add a tool by passing it, and a sub-agent is this same
     call with a narrower list.
+
+    ``additional_tools`` appends deployment tools to that selection before
+    the same hook and permission gates and the stable tool snapshot. A
+    deployment can bind a tool to a manager assembled immediately afterwards
+    without replacing the foundation tools or publishing another registry.
 
     ``hooks=None`` takes the chain :func:`build_hooks` reads from the
     configuration, which is empty unless
@@ -2040,6 +2047,7 @@ def build_app(
                 )
         else:
             mounted = tools
+        mounted = (*mounted, *additional_tools)
         if mcp is not None:
             mounted = (*mounted, *mcp.tools())
         # What is mounted decides whether this deployment plans — not what

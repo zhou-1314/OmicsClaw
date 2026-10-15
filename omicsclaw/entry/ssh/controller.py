@@ -50,6 +50,8 @@ from omicsclaw.tools.context import context_value
 from .manifest import verified_source_metadata
 from .model_bridge import ModelSnapshot, bridged_provider
 from .protocol import MAX_FRAME_BYTES, JsonPeer, RpcError
+from .science_deployment import verified_science_deployment
+from .science_runner import RunSkillJobTool, ScienceJobRunner
 
 PROTOCOL_VERSION = 1
 COMPONENT_VERSION = "0.2.0"
@@ -118,6 +120,8 @@ class Controller:
         self.production = False
         self.interactions = None
         self.jobs = None
+        self.science = None
+        self._configuring = False
         self.factory = None
         self.model_snapshot = None
         self.role_providers = {}
@@ -196,10 +200,20 @@ class Controller:
                 "named_model_callers",
                 "stable_event_subframes",
                 "read_only_history",
+                "external_science_binding",
             ],
         }
 
     async def configure(self, params):
+        if self.app is not None or self._configuring:
+            raise RpcError("configuration is immutable for this connection")
+        self._configuring = True
+        try:
+            return await self._configure(params)
+        finally:
+            self._configuring = False
+
+    async def _configure(self, params):
         if self.app is not None:
             raise RpcError("configuration is immutable for this connection")
         roles = (
@@ -213,7 +227,8 @@ class Controller:
         production = params.get("schemaVersion") == 2
         if production:
             if (
-                set(params) - {"schemaVersion", "roles", "installationId", "features"}
+                set(params)
+                - {"schemaVersion", "roles", "installationId", "features", "science"}
                 or not {"schemaVersion", "roles", "installationId"} <= set(params)
                 or not isinstance(params["roles"], dict)
                 or set(params["roles"]) != set(roles)
@@ -234,6 +249,11 @@ class Controller:
             snapshots = params["roles"]
         else:
             snapshots = {"main": params}
+        science = None
+        if production and params.get("science") is not None:
+            science = await asyncio.to_thread(
+                verified_science_deployment, params["science"]
+            )
         permitted = {field.name for field in dataclasses.fields(ModelSnapshot)}
         parsed = {}
         for role, document in snapshots.items():
@@ -278,25 +298,42 @@ class Controller:
             durable_turn_events=True,
             shadow_review=features["shadowReview"] if production else False,
             skill_env=SkillEnvMode.OFF,
-            skills_dir=Path(__file__).resolve().parents[3] / "skills",
+            skills_dir=(
+                science.payload_root if science else Path(__file__).resolve().parents[3]
+            )
+            / "skills",
         )
-        self.app = attach_sessions(
-            build_app(
-                config,
-                provider=provider,
-                resolved_model=snapshot.model,
-                model_limits=ModelLimits(
-                    snapshot.context_tokens, snapshot.output_tokens
-                ),
-                capabilities=DeploymentCapabilities(notebook=False),
-                telemetry=Telemetry(),
-                provider_for_role=(
-                    self.role_providers.__getitem__ if production else None
-                ),
-                review_call=review_call if production else None,
-            ),
-            abandon_grace_s=0,
+        assembled = build_app(
+            config,
+            additional_tools=(RunSkillJobTool(lambda: self.jobs),) if science else (),
+            provider=provider,
+            resolved_model=snapshot.model,
+            model_limits=ModelLimits(snapshot.context_tokens, snapshot.output_tokens),
+            capabilities=DeploymentCapabilities(notebook=False),
+            telemetry=Telemetry(),
+            provider_for_role=(self.role_providers.__getitem__ if production else None),
+            review_call=review_call if production else None,
         )
+        bridge = None
+        try:
+            if science:
+                from omicsclaw.remote import RemoteJobsBridge, RemotePlaneBinding
+                from omicsclaw.remote.local import LocalTargetSpawner
+
+                spawner = LocalTargetSpawner(self.workspace)
+                plane = RemotePlaneBinding(
+                    Database(self.workspace / ".omicsclaw/remote.db"),
+                    workspace=self.workspace,
+                    spawner=spawner,
+                )
+                assembled = dataclasses.replace(assembled, remote=plane)
+                bridge = RemoteJobsBridge(
+                    plane, target_alias="controller", target_root=str(self.workspace)
+                )
+            self.app = attach_sessions(assembled, abandon_grace_s=0)
+        except BaseException:
+            await assembled.aclose()
+            raise
         if self.app.sessions.durable_identity is None:
             await self.app.aclose()
             self.app = None
@@ -306,7 +343,25 @@ class Controller:
             self.app = None
             raise RpcError("workspace authority identity changed")
         self.interactions = DesktopInteractions(self.app)
-        self.jobs = JobsManager(self.app, register_default_runners=False)
+        self.jobs = JobsManager(
+            self.app, remote_runtime=bridge, register_default_runners=False
+        )
+        if science:
+            self.jobs.register_runner(
+                "skill_run",
+                ScienceJobRunner(
+                    self.app,
+                    bridge,
+                    interpreter=science.python,
+                    component_root=Path(__file__).resolve().parents[3],
+                    payload_root=science.payload_root,
+                    manifest=science.payload_manifest,
+                    environment_digest=science.environment_digest,
+                    rscript=science.rscript,
+                    r_library=science.r_library,
+                ),
+            )
+            self.science = science
         self.model_snapshot = snapshot
         if self.app.shadow_review:
             self.app.shadow_review.bind_store(self.jobs.artifacts)

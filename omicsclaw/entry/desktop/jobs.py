@@ -39,10 +39,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, Final
 
-from omicsclaw.tools.builtin.remote import valid_host
-from omicsclaw.tools.context import ApprovalDecision
-
-from .job_service import create_job_from_document, run_payload
+from .job_service import create_job_from_document, run_payload, settle_job_approval
 from .jobs_manager import (
     HEARTBEAT_INTERVAL_S,
     TERMINAL_EVENT_TYPES,
@@ -442,22 +439,10 @@ def mount_jobs_routes(
         _note_runtime_header(request.headers.get(RUNTIME_HEADER))
         try:
             document = await _read_json(request)
-            decision = document.get("decision")
-            if decision not in ("approve", "deny"):
-                raise DesktopIngressError("invalid_decision", status_code=422)
-            took_effect = jobs.settle_approval(
-                job_id,
-                call_id,
-                ApprovalDecision(
-                    approved=decision == "approve",
-                    reason="" if decision == "approve" else "denied in the desktop app",
-                ),
-            )
+            payload = settle_job_approval(jobs, job_id, call_id, document)
         except DesktopIngressError as exc:
             return _refused(exc)
-        if not took_effect:
-            return JSONResponse({"detail": "approval_not_outstanding"}, status_code=404)
         return JSONResponse(
-            {"job_id": job_id, "call_id": call_id, "decision": decision},
+            payload,
             headers={RUNTIME_HEADER: request.headers.get(RUNTIME_HEADER, "local")},
         )

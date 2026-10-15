@@ -1626,6 +1626,10 @@ class JobsManager:
     def runner_kinds(self) -> tuple[str, ...]:
         return tuple(sorted(self._runners))
 
+    def runner_for(self, kind: str):
+        """Return the deployment's registered runner for capability reporting."""
+        return self._runners.get(kind)
+
     def get_job(self, job_id: str) -> JobRecord | None:
         return self.store.get_job(job_id)
 
