@@ -68,7 +68,9 @@ _log = logging.getLogger(__name__)
 _REASON_CHARS = 300
 EGRESS_GRANTS_FILENAME = "sandbox_egress_grants.json"
 EGRESS_GRANTS_HYPHEN_FILENAME = "sandbox-egress-grants.json"
-_APPROVED_NETWORK_SCOPE: ContextVar[str | None] = ContextVar("_APPROVED_NETWORK_SCOPE", default=None)
+_APPROVED_NETWORK_SCOPE: ContextVar[str | None] = ContextVar(
+    "_APPROVED_NETWORK_SCOPE", default=None
+)
 SandboxSpawnWrapper = KernelSpawnAdapter
 
 
@@ -140,8 +142,12 @@ class SandboxBinding:
     egress: EgressMode = EgressMode.NONE
     report: ProbeReport | None = None
     granted_domains_path: Path | None = field(default=None, compare=False)
-    _session_grants: set[str] = field(default_factory=set, compare=False, hash=False, repr=False)
-    _revoked_domains: set[str] = field(default_factory=set, compare=False, hash=False, repr=False)
+    _session_grants: set[str] = field(
+        default_factory=set, compare=False, hash=False, repr=False
+    )
+    _revoked_domains: set[str] = field(
+        default_factory=set, compare=False, hash=False, repr=False
+    )
 
     @property
     def active(self) -> bool:
@@ -232,15 +238,18 @@ class SandboxBinding:
             if self.granted_domains_path is not None
             else []
         )
-        allowed_set = set(st.allowed_domains) | set(self._session_grants) | set(persisted)
+        allowed_set = (
+            set(st.allowed_domains) | set(self._session_grants) | set(persisted)
+        )
         allowed_set -= self._revoked_domains
         egress_groups = (
-            list(self.config.egress_groups)
-            if self.config is not None
-            else []
+            list(self.config.egress_groups) if self.config is not None else []
         )
         recent_blocked_list: list[dict[str, Any]] = []
-        if self.manager is not None and getattr(self.manager, "proxy", None) is not None:
+        if (
+            self.manager is not None
+            and getattr(self.manager, "proxy", None) is not None
+        ):
             proxy = self.manager.proxy
             for ev in getattr(proxy, "recent_blocked_events", ()):
                 recent_blocked_list.append(
@@ -253,7 +262,9 @@ class SandboxBinding:
                     }
                 )
         reason = st.degraded_reason or self.unavailable or ""
-        fix_hint = st.fix_hint or (self.report.fix_hint if self.report is not None else "")
+        fix_hint = st.fix_hint or (
+            self.report.fix_hint if self.report is not None else ""
+        )
         return {
             "backend": st.backend.value,
             "level": st.level.value,
@@ -265,20 +276,26 @@ class SandboxBinding:
             "reason": reason,
             "fix_hint": fix_hint,
             "summary": st.summary,
-            "auto_approve_active": bool(self.can_auto_approve and auto_approve_configured),
+            "auto_approve_active": bool(
+                self.can_auto_approve and auto_approve_configured
+            ),
             "can_auto_approve": self.can_auto_approve,
             "egress_groups": egress_groups,
             "allowed_domains": sorted(allowed_set),
             "persisted_domains": persisted,
             "session_domains": sorted(self._session_grants),
             "recent_blocked": recent_blocked_list,
-            "warnings": [w for w in (reason, fix_hint) if w] if (self.degraded or st.level == Level.NET_ONLY) else [],
+            "warnings": [w for w in (reason, fix_hint) if w]
+            if (self.degraded or st.level == Level.NET_ONLY)
+            else [],
         }
 
     def allow_domain(self, domain: str, *, persist: bool = False) -> dict[str, Any]:
         """Grant outbound access to *domain* for the session (and optionally persist)."""
         norm = domain.strip().lower().rstrip(".")
-        if not norm or any(ch in norm for ch in (" ", "\t", "\r", "\n", "/", "\\", "@", "?")):
+        if not norm or any(
+            ch in norm for ch in (" ", "\t", "\r", "\n", "/", "\\", "@", "?")
+        ):
             raise ValueError(f"Invalid domain '{domain}'")
         check_host = norm[2:] if norm.startswith("*.") else norm
         if not check_host or "." not in check_host and check_host != "localhost":
@@ -360,7 +377,9 @@ async def open_sandbox(
     del on_change, runner
     sandbox_config = config.sandbox_config()
     if sandbox_config is None:
-        return SandboxBinding(granted_domains_path=config.state_dir() / EGRESS_GRANTS_FILENAME)
+        return SandboxBinding(
+            granted_domains_path=config.state_dir() / EGRESS_GRANTS_FILENAME
+        )
 
     grants_path = config.state_dir() / EGRESS_GRANTS_FILENAME
     persisted = load_persisted_egress_grants(grants_path)
@@ -369,7 +388,8 @@ async def open_sandbox(
         sandbox_config = dataclasses.replace(
             sandbox_config,
             egress_allow=merged_allow,
-            extra_allowed_domains=sandbox_config.extra_allowed_domains | frozenset(persisted),
+            extra_allowed_domains=sandbox_config.extra_allowed_domains
+            | frozenset(persisted),
         )
 
     if sandbox_config.egress == EgressMode.PROXY:
@@ -415,7 +435,9 @@ async def open_sandbox(
 def unstarted_sandbox(config: AppConfig) -> SandboxBinding:
     """The binding for a deployment built without :func:`open_sandbox`."""
     if config.sandbox is SandboxMode.OFF:
-        return SandboxBinding(granted_domains_path=config.state_dir() / EGRESS_GRANTS_FILENAME)
+        return SandboxBinding(
+            granted_domains_path=config.state_dir() / EGRESS_GRANTS_FILENAME
+        )
     return _degraded(
         config,
         config.sandbox_config(),
@@ -627,7 +649,11 @@ def _running_text(binding: SandboxBinding) -> str:
     covered = ", ".join(f"`{c}`" for c in binding.covers) or "`bash`"
     lines = [
         f"- {covered} runs inside an {backend_label}"
-        + (f" (image `{config.image}`)" if config.image and binding.backend != BackendName.NONE else "")
+        + (
+            f" (image `{config.image}`)"
+            if config.image and binding.backend != BackendName.NONE
+            else ""
+        )
         + ", not directly on the unisolated host.",
         "- Its working directory is the workspace, mounted at the same path, "
         "so files it writes are the files read_file, write_file and "
@@ -683,16 +709,20 @@ def _degraded_text(reason: str, *, fix_hint: str = "") -> str:
     return "\n".join(lines)
 
 
-def _warn_unlisted_private_mirrors(sandbox_config: SandboxConfig) -> None:
+def _warn_unlisted_private_mirrors(
+    sandbox_config: SandboxConfig, *, environment: Mapping[str, str] | None = None
+) -> None:
     """Warn if host pip/conda config points at a private-IP mirror not in ``egress_endpoints``."""
-    import os
     import re
     from urllib.parse import urlparse
 
     url_pattern = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
     candidate_urls: list[str] = []
+    diagnostic_environment = (
+        without_control_credentials() if environment is None else environment
+    )
     for env_key in ("PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL"):
-        val = os.environ.get(env_key, "")
+        val = diagnostic_environment.get(env_key, "")
         if val:
             candidate_urls.extend(url_pattern.findall(val))
 
@@ -706,7 +736,11 @@ def _warn_unlisted_private_mirrors(sandbox_config: SandboxConfig) -> None:
     for cfg in config_files:
         try:
             if cfg.is_file():
-                candidate_urls.extend(url_pattern.findall(cfg.read_text(encoding="utf-8", errors="ignore")))
+                candidate_urls.extend(
+                    url_pattern.findall(
+                        cfg.read_text(encoding="utf-8", errors="ignore")
+                    )
+                )
         except OSError:
             continue
 
@@ -724,6 +758,7 @@ def _warn_unlisted_private_mirrors(sandbox_config: SandboxConfig) -> None:
             continue
         seen.add((host, port))
         import ipaddress
+
         try:
             ipaddress.ip_address(host)
         except ValueError:

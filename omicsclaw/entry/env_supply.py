@@ -24,6 +24,7 @@ it. Nothing here asks anyone anything.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,7 @@ from omicsclaw.envsupply import (
     run_install_script,
 )
 
-__all__ = ["EnvSupplyBinding", "build_env_supply"]
+__all__ = ["EnvSupplyBinding", "PinnedEnvironmentSupply", "build_env_supply"]
 
 DEFAULT_ENV_ROOT = "~/.omicsclaw/envs"
 
@@ -157,16 +158,14 @@ class EnvSupplyBinding:
         manual commands and the installer's tail — the disclosure rule
         the remote plane set."""
         env_dir = self.env_dir(env)
-        resolved = (
-            tuple(KERNEL_BASE_PACKAGES) + CORE_STACK_PACKAGES + tuple(packages)
-        )
+        resolved = tuple(KERNEL_BASE_PACKAGES) + CORE_STACK_PACKAGES + tuple(packages)
         script = build_env_install_script(
             env_dir,
             packages=tuple(packages),
             uv_index_url=self._index_url,
             uv_python_mirror=self._python_mirror,
         )
-        lines: list[str] = []
+        lines: deque[str] = deque(maxlen=12)
 
         def _collect(line: str) -> None:
             lines.append(line)
@@ -184,7 +183,7 @@ class EnvSupplyBinding:
             raise EnvSupplyError(
                 "installing the environment at "
                 f"{env_dir} failed (exit {exit_code}): "
-                f"{''.join(line + chr(10) for line in lines[-12:])}",
+                f"{''.join(line + chr(10) for line in lines)}",
                 manual_env_commands(
                     env_dir,
                     uv_index_url=self._index_url,
@@ -224,11 +223,8 @@ def build_env_supply(config: Any) -> EnvSupplyBinding:
     at its shipped installer without reconfiguring the backend.
     """
     return EnvSupplyBinding(
-        env_root=str(
-            getattr(config, "env_supply_env_root", None) or DEFAULT_ENV_ROOT
-        ),
-        index_url=getattr(config, "env_supply_index_url", None)
-        or DEFAULT_UV_INDEX_URL,
+        env_root=str(getattr(config, "env_supply_env_root", None) or DEFAULT_ENV_ROOT),
+        index_url=getattr(config, "env_supply_index_url", None) or DEFAULT_UV_INDEX_URL,
         python_mirror=getattr(config, "env_supply_python_mirror", None)
         or DEFAULT_UV_PYTHON_MIRROR,
         install_timeout_s=float(
@@ -236,3 +232,292 @@ def build_env_supply(config: Any) -> EnvSupplyBinding:
             or ENV_INSTALL_TIMEOUT_S
         ),
     )
+
+
+class PinnedEnvironmentSupply:
+    """Original supply runner with owned locks and verified atomic publication."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        uv: Path | None = None,
+        wheelhouse: Path | None = None,
+        timeout_s: float = ENV_INSTALL_TIMEOUT_S,
+    ):
+        self.root = Path(root).absolute()
+        self.uv = Path(uv).absolute() if uv else None
+        self.wheelhouse = Path(wheelhouse).absolute() if wheelhouse else None
+        self.timeout_s = float(timeout_s)
+
+    async def supply(self, manifest, *, lock: Path, interpreter: Path):
+        return await asyncio.to_thread(
+            self._supply, manifest, Path(lock), Path(interpreter)
+        )
+
+    def _supply(self, manifest, lock, interpreter):
+        import fcntl
+        import hashlib
+        import json
+        import os
+        import re
+        import shlex
+        import shutil
+        import tempfile
+        import time
+
+        allowed = {
+            "schemaVersion",
+            "role",
+            "pythonVersion",
+            "platform",
+            "machine",
+            "abi",
+            "lockSha256",
+            "imports",
+        }
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != allowed
+            or manifest["schemaVersion"] != 1
+            or manifest["role"] not in {"control", "science"}
+        ):
+            raise ValueError("invalid pinned environment manifest")
+        if (
+            not isinstance(manifest["imports"], list)
+            or len(manifest["imports"]) > 200
+            or any(
+                not isinstance(name, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", name)
+                for name in manifest["imports"]
+            )
+        ):
+            raise ValueError("invalid environment imports")
+        if manifest["role"] == "control" and set(manifest["imports"]) - {
+            "openai",
+            "anthropic",
+            "httpx",
+            "yaml",
+            "jupyter_client",
+            "zmq",
+            "tornado",
+        }:
+            raise ValueError("scientific import in control manifest")
+        if not interpreter.is_absolute() or not interpreter.is_file():
+            raise ValueError("selected interpreter unavailable")
+        offline = ""
+        if self.wheelhouse is not None:
+            import stat
+
+            cache = self.wheelhouse
+            if not cache.is_dir() or any(
+                part.is_symlink() for part in (cache, *cache.parents)
+            ):
+                raise ValueError("wheelhouse directory unavailable or symlinked")
+            observed = cache.stat()
+            if observed.st_uid != os.getuid() or observed.st_mode & 0o022:
+                raise ValueError("wheelhouse ownership mismatch")
+            wheels = list(cache.glob("*.whl"))
+            if len(wheels) > 100:
+                raise ValueError("wheelhouse file budget")
+            total = 0
+            for wheel in wheels:
+                item = wheel.lstat()
+                if (
+                    not stat.S_ISREG(item.st_mode)
+                    or item.st_uid != os.getuid()
+                    or item.st_size > 256 * 1024 * 1024
+                ):
+                    raise ValueError("wheelhouse archive boundary")
+                total += item.st_size
+            if total > 1024 * 1024 * 1024:
+                raise ValueError("wheelhouse archive budget")
+            offline = " --no-index --find-links " + shlex.quote(str(cache))
+        with lock.open("rb") as source:
+            lock_bytes = source.read(1024 * 1024 + 1)
+        if (
+            len(lock_bytes) > 1024 * 1024
+            or hashlib.sha256(lock_bytes).hexdigest() != manifest["lockSha256"]
+        ):
+            raise ValueError("environment lock mismatch")
+        raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        if len(raw) > 64 * 1024:
+            raise ValueError("environment manifest budget")
+        digest = hashlib.sha256(raw).hexdigest()
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        root_stat = self.root.stat()
+        if (
+            self.root.is_symlink()
+            or root_stat.st_uid != os.getuid()
+            or root_stat.st_mode & 0o022
+        ):
+            raise ValueError("environment root ownership mismatch")
+        final = self.root / digest
+        identity = (root_stat.st_dev, root_stat.st_ino, root_stat.st_uid)
+        descriptor = os.open(
+            self.root / (digest + ".lock"),
+            os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            deadline = time.monotonic() + min(self.timeout_s, 60)
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("environment supply lock deadline")
+                    time.sleep(0.05)
+            expected = {"environmentDigest": digest, "manifest": manifest}
+            if final.exists():
+                ready_file = final / "ready.json"
+                if final.is_symlink() or final.stat().st_uid != os.getuid():
+                    raise ValueError("environment ready evidence conflict")
+                if not ready_file.exists():
+                    publication = final / "manifest.json"
+                    if (
+                        publication.is_symlink()
+                        or not publication.is_file()
+                        or publication.stat().st_size > 64 * 1024
+                        or publication.read_bytes() != raw
+                    ):
+                        raise ValueError("environment incomplete evidence conflict")
+                    self._verify(final / "venv/bin/python", manifest)
+                    ready_temporary = final / "ready.json.tmp"
+                    with ready_temporary.open("x") as sink:
+                        sink.write(json.dumps(expected, sort_keys=True))
+                        sink.flush()
+                        os.fsync(sink.fileno())
+                    os.replace(ready_temporary, ready_file)
+                if (
+                    not (final / "ready.json").is_file()
+                    or (final / "ready.json").is_symlink()
+                    or (final / "ready.json").stat().st_size > 64 * 1024
+                    or json.loads((final / "ready.json").read_text()) != expected
+                ):
+                    raise ValueError("environment ready evidence conflict")
+                self._verify(final / "venv/bin/python", manifest)
+                return {
+                    "root": str(final),
+                    "python": str(final / "venv/bin/python"),
+                    "environmentDigest": digest,
+                    "ready": True,
+                    "reused": True,
+                }
+            temporary = Path(tempfile.mkdtemp(prefix=".environment-", dir=self.root))
+            try:
+                venv = temporary / "venv"
+                staged_lock = temporary / "requirements.lock"
+                staged_lock.write_bytes(lock_bytes)
+                script = f"set -eu\numask 077\n{shlex.quote(str(interpreter))} -I -m venv --without-pip {shlex.quote(str(venv))}\n"
+                if lock_bytes.strip():
+                    if self.uv is not None:
+                        if not self.uv.is_file():
+                            raise ValueError("pinned environment installer unavailable")
+                        script += f"{shlex.quote(str(self.uv))} pip install --python {shlex.quote(str(venv / 'bin/python'))} --require-hashes --no-cache --link-mode copy{offline} -r {shlex.quote(str(staged_lock))}\n"
+                    else:
+                        script += f"{shlex.quote(str(interpreter))} -I -m pip --isolated --python {shlex.quote(str(venv))} install --require-hashes --no-compile --no-cache-dir --disable-pip-version-check --only-binary=:all:{offline} -r {shlex.quote(str(staged_lock))}\n"
+                (temporary / "home").mkdir()
+                (temporary / "tmp").mkdir()
+                script = (
+                    "exec env -i PATH=/usr/bin:/bin "
+                    + shlex.quote("HOME=" + str(temporary / "home"))
+                    + " "
+                    + shlex.quote("TMPDIR=" + str(temporary / "tmp"))
+                    + " /bin/sh -c "
+                    + shlex.quote(script)
+                )
+                code = run_install_script(script, timeout=self.timeout_s)
+                if code:
+                    raise ValueError(f"pinned environment install failed: {code}")
+                self._verify(venv / "bin/python", manifest)
+                # Published command scripts must not point at the temporary venv.
+                for script_file in (venv / "bin").iterdir():
+                    if (
+                        script_file.is_symlink()
+                        or not script_file.is_file()
+                        or script_file.stat().st_size > 1024 * 1024
+                    ):
+                        continue
+                    with script_file.open("rb") as reader:
+                        first = reader.readline(4096)
+                    if first.startswith(b"#!") and str(venv).encode() in first:
+                        content = script_file.read_bytes().replace(
+                            str(venv).encode(), str(final / "venv").encode()
+                        )
+                        script_file.write_bytes(content)
+                (temporary / "manifest.json").write_bytes(raw)
+                observed = self.root.stat()
+                if (observed.st_dev, observed.st_ino, observed.st_uid) != identity:
+                    raise ValueError("environment root identity changed")
+                os.rename(temporary, final)
+                self._verify(final / "venv/bin/python", manifest)
+                ready = final / "ready.json.tmp"
+                ready.write_text(json.dumps(expected, sort_keys=True))
+                os.replace(ready, final / "ready.json")
+                return {
+                    "root": str(final),
+                    "python": str(final / "venv/bin/python"),
+                    "environmentDigest": digest,
+                    "ready": True,
+                    "reused": False,
+                }
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _verify(python, manifest):
+        import json
+        import subprocess
+
+        probe = (
+            "import json,platform,sys,sysconfig,importlib; names="
+            + repr(manifest["imports"])
+            + "; [importlib.import_module(n) for n in names]; print(json.dumps({'pythonVersion':platform.python_version(),'platform':sys.platform,'machine':platform.machine(),'abi':sysconfig.get_config_var('SOABI')}))"
+        )
+        import os
+
+        private = python.parent.parent.parent
+        if (
+            not python.is_absolute()
+            or python.parent.name != "bin"
+            or python.parent.parent.name != "venv"
+        ):
+            raise ValueError("environment verification prefix mismatch")
+        for name in ("home", "tmp"):
+            directory = private / name
+            if directory.is_symlink():
+                raise ValueError("environment verification directory boundary")
+            directory.mkdir(mode=0o700, exist_ok=True)
+            if (
+                not directory.is_dir()
+                or directory.stat().st_uid != os.getuid()
+                or directory.stat().st_mode & 0o022
+            ):
+                raise ValueError("environment verification directory ownership")
+        result = subprocess.run(
+            [str(python), "-I", "-B", "-c", probe],
+            env={
+                "PATH": "/usr/bin:/bin",
+                "PYTHONNOUSERSITE": "1",
+                "HOME": str(private / "home"),
+                "TMPDIR": str(private / "tmp"),
+                "MPLCONFIGDIR": str(private / "home/matplotlib"),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode or len(result.stdout.encode()) > 4096:
+            raise ValueError("environment ABI/import verification failed")
+        facts = json.loads(result.stdout)
+        if any(
+            facts.get(key) != manifest[key]
+            for key in ("pythonVersion", "platform", "machine", "abi")
+        ):
+            raise ValueError("environment ABI mismatch")

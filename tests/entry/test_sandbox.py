@@ -111,7 +111,8 @@ class _FakeSandboxManager:
             summary=self.report.summary,
             covers=covers,
             proxy_url="http://127.0.0.1:51234",
-            allowed_domains=self.config.effective_allowed_domains | frozenset(self.granted_domains),
+            allowed_domains=self.config.effective_allowed_domains
+            | frozenset(self.granted_domains),
             degraded_reason=self.report.reason,
             fix_hint=self.report.fix_hint,
         )
@@ -138,7 +139,12 @@ class _FakeSandboxManager:
 @pytest.fixture
 def fake_sandbox(monkeypatch):
     instances: list[_FakeSandboxManager] = []
-    state = {"available": True, "level": Level.ISOLATED, "backend": BackendName.BWRAP, "fail_start": False}
+    state = {
+        "available": True,
+        "level": Level.ISOLATED,
+        "backend": BackendName.BWRAP,
+        "fail_start": False,
+    }
 
     def fake_probe(preferred=BackendName.AUTO):
         if not state["available"]:
@@ -310,7 +316,11 @@ def test_a_required_sandbox_that_cannot_start_refuses_to_run(workspace, fake_san
     state["fail_start"] = True
 
     with pytest.raises(SandboxError, match="sandbox_required"):
-        _run(open_sandbox(_config(workspace, sandbox=SandboxMode.AUTO, sandbox_required=True)))
+        _run(
+            open_sandbox(
+                _config(workspace, sandbox=SandboxMode.AUTO, sandbox_required=True)
+            )
+        )
 
 
 def test_off_is_an_inactive_binding_with_no_prompt_section(workspace):
@@ -370,10 +380,26 @@ def _active(
 @pytest.mark.parametrize(
     ("binding", "auto", "expected"),
     [
-        (_active(level=Level.ISOLATED, egress=EgressMode.PROXY), True, ApprovalMode.AUTO),
-        (_active(level=Level.ISOLATED, egress=EgressMode.NONE), True, ApprovalMode.AUTO),
-        (_active(level=Level.ISOLATED, egress=EgressMode.PROXY), False, ApprovalMode.ASK),
-        (_active(level=Level.NET_ONLY, egress=EgressMode.PROXY), True, ApprovalMode.ASK),
+        (
+            _active(level=Level.ISOLATED, egress=EgressMode.PROXY),
+            True,
+            ApprovalMode.AUTO,
+        ),
+        (
+            _active(level=Level.ISOLATED, egress=EgressMode.NONE),
+            True,
+            ApprovalMode.AUTO,
+        ),
+        (
+            _active(level=Level.ISOLATED, egress=EgressMode.PROXY),
+            False,
+            ApprovalMode.ASK,
+        ),
+        (
+            _active(level=Level.NET_ONLY, egress=EgressMode.PROXY),
+            True,
+            ApprovalMode.ASK,
+        ),
         (_active(level=Level.ISOLATED, egress=EgressMode.OPEN), True, ApprovalMode.ASK),
         (
             SandboxBinding(mode=SandboxMode.AUTO, unavailable="unavailable"),
@@ -400,9 +426,16 @@ def test_bash_and_python_are_relaxed_only_in_isolated_network_controlled_sandbox
 
 
 def test_python_is_not_relaxed_when_sandbox_kernels_is_false():
-    binding = _active(level=Level.ISOLATED, egress=EgressMode.PROXY, sandbox_kernels=False)
-    assert bash_policy(binding, _ASK, auto_approve=True).approval_mode is ApprovalMode.AUTO
-    assert python_policy(binding, _ASK, auto_approve=True).approval_mode is ApprovalMode.ASK
+    binding = _active(
+        level=Level.ISOLATED, egress=EgressMode.PROXY, sandbox_kernels=False
+    )
+    assert (
+        bash_policy(binding, _ASK, auto_approve=True).approval_mode is ApprovalMode.AUTO
+    )
+    assert (
+        python_policy(binding, _ASK, auto_approve=True).approval_mode
+        is ApprovalMode.ASK
+    )
 
 
 # ---- RequestNetworkAccessTool & /sandbox REPL & Doctor -------------------
@@ -545,10 +578,29 @@ def test_unstarted_sandbox_is_off_for_an_off_config(workspace):
     assert unstarted_sandbox(_config(workspace)) == SandboxBinding()
 
 
-
-def test_private_mirror_warning_when_unlisted(workspace, fake_sandbox, monkeypatch, caplog):
+def test_private_mirror_warning_when_unlisted(
+    workspace, fake_sandbox, monkeypatch, caplog
+):
     monkeypatch.setenv("PIP_INDEX_URL", "http://10.0.1.50:8081/repository/pypi/simple")
     with caplog.at_level(logging.WARNING, logger="omicsclaw.entry"):
         binding = _run(open_sandbox(_config(workspace, sandbox=SandboxMode.AUTO)))
         _run(binding.aclose())
     assert any("10.0.1.50:8081" in r.message for r in caplog.records)
+
+
+def test_private_mirror_diagnostic_uses_supplied_environment_without_logging_credentials(
+    monkeypatch, caplog
+):
+    from types import SimpleNamespace
+    from omicsclaw.entry.sandbox import _warn_unlisted_private_mirrors
+
+    monkeypatch.setattr(Path, "is_file", lambda self: False)
+    config = SimpleNamespace(egress_endpoints=(), allow_private_cidr=())
+    _warn_unlisted_private_mirrors(
+        config,
+        environment={
+            "PIP_INDEX_URL": "https://user-secret:password-secret@10.2.3.4:8443/simple"
+        },
+    )
+    assert "10.2.3.4:8443" in caplog.text
+    assert "user-secret" not in caplog.text and "password-secret" not in caplog.text

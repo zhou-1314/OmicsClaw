@@ -1,0 +1,697 @@
+{
+  "version": 1,
+  "contract": "v3.2 Stage1 static inventory with measured and estimated columns; not runtime acceptance",
+  "businessDefinitions": {
+    "duplicatedBuildApp": 0,
+    "duplicatedTurnStateMachine": 0,
+    "duplicatedJobStateMachine": 0,
+    "duplicatedNotebookStateMachine": 0,
+    "newBusinessStateMachines": 0
+  },
+  "newPersistentStructures": [
+    {
+      "name": "turn_ingress",
+      "owner": "existing memory Database/DurableTurnEventLog",
+      "gap": "SessionRegistry._by_request was process memory only; admission can be acknowledged/lost before durable turn events exist",
+      "transaction": "Database.run INSERT OR IGNORE with (session,source_request) PK + canonical SHA256 conflict; receipt commits before lane scheduling",
+      "identity": "DB-stable authority_id/workspace_id from turn_authority_identity + session_id/source_request_id; no process epoch in key",
+      "retention": "no independent TTL/pruning now; retain for workspace lifetime; deletion must accompany reviewed session/workspace archival, not permit retry",
+      "recovery": "lookup existing receipt/events; same process returns live handle, restarted process refuses new submission; unknown outcome remains unknown",
+      "migration": "additive CREATE TABLE IF NOT EXISTS; no schema rewrite or stored terminal/retry state"
+    },
+    {
+      "name": "turn_authority_identity",
+      "owner": "same original memory database",
+      "gap": "path and controllerInstanceId/epoch cannot identify the same receipt after restart or migration",
+      "transaction": "singleton=1 INSERT OR IGNORE commits atomically, persistent random authority and workspace IDs",
+      "retention": "same lifetime as workspace DB; copied DB identity is deliberately preserved until explicit provenance migration",
+      "recovery": "read stable identity on SessionRegistry construction; SSH cannot override; new workspace DB mints new IDs",
+      "migration": "additive singleton table; existing event streams receive durable identity without being rewritten"
+    },
+    {
+      "name": "turn_projection_checkpoints",
+      "owner": "existing memory Database/DurableTurnEventLog; original DesktopChatSSEBody projector",
+      "gap": "context history is mutable/compacted and visible frames alone cannot establish continuous raw event coverage after a source gap",
+      "transaction": "original Database BEGIN IMMEDIATE compares continuous bounded raw digest, original ingress/model metadata, authority and producer generation, then publishes complete stable frames and coverage atomically; one immutable revision per turn; byte conflicts refused",
+      "identity": "original stream(session,turn) and stable authority/workspace; revision/source/frame digests pin bounded pages; wire epoch excluded",
+      "retention": "SSH never prunes raw events; same original DB backup/migration/workspace archival lifecycle; disposable only while source remains; external gaps require previously confirmed evidence, future automated prune requires review",
+      "recovery": "at most64 frames/512KiB per page; Mac full digest/conflict checks then replay after coverage; no execution owner acquisition, terminal choice, model/tool permission or retry",
+      "migration": "additive CREATE TABLE IF NOT EXISTS; source and frames each at most4MiB/20,000 records with SQL length checks before source JSON load; no second usage or terminal table"
+    },
+    {
+      "name": "jobs canonical intent/projection and remote_jobs request/proof columns",
+      "owner": "existing JobsManager/JobStore/RemoteJobStore and original Database",
+      "gap": "execution location alone cannot identify controller-independent lifetime; a handle written only after launch leaves ACK-loss and process-identity gaps",
+      "transaction": "Original JobStore BEGIN IMMEDIATE + partial unique session/source request claim; canonical payload conflicts refuse before queueing. RemoteJobStore separately claims submission before launch. No distributed transaction or added business authority.",
+      "identity": "original workspace/local_job_id/immutable target; process proof UID/host/boot/PID birth/PGID/session/nonce; request/hash binds the pre-launch intent",
+      "retention": "existing workspace DB backup/migration/archival lifecycle; uncertain claims are retained, never TTL-deleted to permit relaunch",
+      "recovery": "Same JobStore claim observes the original business ID and repairs only missing RunStore projections, never schedules again. Original projection version/digest/identity conflicts refuse. External observation shutdown/timeout/EOF does not cancel. Explicit cancellation waits for verified exit; original job events dedupe exit and terminal projection. Bound same-host transport reuses RemoteExecutor. Slurm and scientific wiring remain Stage3 work.",
+      "migration": "Additive jobs.lifetime/source_request_id/payload_hash/projection_json/hard_timeout_s and remote_jobs request/proof columns. The nullable execution limit is immutable and included in original admission/submission hashes before launch; legacy NULL stays unlimited, native science supplies3600 seconds. Canonical request <=2MiB; immutable Run projection <=512KiB UTF-8 bytes, SQL BLOB length gate before JSON parse. Legacy empty identity stays absent."
+    },
+    {
+      "name": "job_events.source_event_id",
+      "owner": "original JobStore/JobsManager and existing job_events table; RunStore remains projection",
+      "gap": "A restarted observer can read the same scientific worker source events again",
+      "transaction": "Existing Database transaction writes source identity with the original event. Partial unique(job_id,source_event_id); repeated exact payload/type returns original seq; conflicting source bytes refuse before projection side effects.",
+      "identity": "Original business job + immutable remote submission row + worker event seq; physical worker never selects job terminal.",
+      "retention": "Source events retain original job/workspace archival lifetime; excluded from old1000-row disposable view pruning. At most4MiB UTF-8 payload bytes/20,000 source events per job, checked in SQL before insertion.",
+      "recovery": "Original worker events and verified artifact metadata project into original stores after proven process terminal; exact source IDs suppress replay; no execution or approval rescheduling.",
+      "migration": "Additive TEXT NOT NULL default empty + partial unique index; old CLI events preserve empty source and original retention."
+    }
+  ],
+  "effortEstimateBasis": "Engineering planning intervals in person-days, not elapsed-time promises or measured implementation effort. Scope includes adapters, tests, migration and shared safety work. v2 comparison keeps science/SSH/migration scope identical and additionally ports control semantics and Notebook native client. Based on named existing seams and changed contracts; uncertainty is recorded per package. Re-estimate requires explicit review if a package upper bound, profile cap or allowed seam is exceeded.",
+  "effortTotals": {
+    "v3PersonDays": {
+      "low": 57,
+      "high": 114
+    },
+    "v2SameScopePersonDays": {
+      "low": 98,
+      "high": 196
+    }
+  },
+  "workPackages": [
+    {
+      "id": "W01",
+      "name": "Shared assembly and exports",
+      "sources": [
+        "omicsclaw/entry/assembly.py:build_app, build_budget, WorkspaceKernelBinding",
+        "omicsclaw/entry/desktop/__init__.py:__getattr__",
+        "omicsclaw/entry/desktop/server.py:public helper mounts"
+      ],
+      "classification": [
+        "local change: capability/model limits/science interpreter",
+        "mechanical export change",
+        "new adapter: ssh/controller and JsonPeer"
+      ],
+      "contracts": [
+        "DeploymentCapabilities",
+        "same agent registry/hook-gate order; no second build_app"
+      ],
+      "reusedTests": [
+        "tests/entry/test_assembly.py",
+        "tests/entry/test_controller_boundary.py",
+        "tests/launch/test_grammar.py"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 3,
+          "high": 6
+        },
+        "v2SameScope": {
+          "low": 15,
+          "high": 30
+        }
+      },
+      "uncertainty": "Extract server helpers only when a real route needs them; avoid copying mounts."
+    },
+    {
+      "id": "W02",
+      "name": "Providers and all model callers",
+      "sources": [
+        "omicsclaw/provider/{factory,openai_provider,anthropic_provider}.py",
+        "omicsclaw/entry/{assembly,subagent,shadow_review}.py",
+        "omicsclaw/entry/desktop/{title,providers}.py",
+        "App src/lib/{provider-settings,secret-store}.ts"
+      ],
+      "classification": [
+        "local change: public client factory retained by bind",
+        "new adapter: restricted RPC HTTP transport and Mac bridge",
+        "local change later: review call/factory injection and Mac config authority"
+      ],
+      "contracts": [
+        "ModelSnapshot",
+        "connection-bound bridge; Stage2 caller/turn capabilities pending",
+        "provider PUT: Backend.env -> Mac settings"
+      ],
+      "reusedTests": [
+        "tests/provider/",
+        "tests/entry/test_controller_protocol.py",
+        "tests/entry/test_shadow_review.py",
+        "tests/entry/test_desktop_providers.py"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 5,
+          "high": 10
+        },
+        "v2SameScope": {
+          "low": 12,
+          "high": 24
+        }
+      },
+      "uncertainty": "SDK upgrade may require an explicit public httpx2 transport plus current codec update; pin is controller-only, no broad provider rewrite."
+    },
+    {
+      "id": "W03",
+      "name": "Admission and durable observation",
+      "sources": [
+        "omicsclaw/entry/session.py:SessionRegistry._enqueue, observe",
+        "omicsclaw/memory/{database,turn_events}.py",
+        "omicsclaw/entry/desktop/turn_observation.py:DesktopChatSSEBody",
+        "omicsclaw/entry/desktop/event_service.py:ProjectionCoverage"
+      ],
+      "classification": [
+        "local change: receipt and stable authority identity in existing memory DB",
+        "new adapter: lookup/replay of original logs"
+      ],
+      "contracts": [
+        "additive turn_ingress and turn_authority_identity",
+        "canonical JSON hash; persistence before lane scheduling",
+        "no RPC-owned turn status or retry state",
+        "additive immutable turn_projection_checkpoints with continuous raw coverage, original TurnUsage fold and transactional source/owner generation checks; SSH no-prune",
+        "Original jobs canonical claim + immutable RunStore projection: no launch before durable intent; first-store crash leaves unknown original job, missing Run/Job link repair never queues; version/digest/identity conflicts refuse. SQL UTF-8 byte guard <=512KiB. RemoteJobStore launch binding remains a separate original evidence authority.",
+        "Scientific worker source_event_id lives in original job_events, not another event authority; SQL UTF-8 sum/count admission bounds and same job lifetime, no-prune source retention.",
+        "Original jobs nullable immutable hard_timeout_s is an execution limit, distinct from observer/transport timeout. Native science default3600 seconds is disclosed in original approval; legacy direct runner/CLI defaults remain NULL. Original Linux session leader writes exit evidence only after proven group cleanup; unavailable pidfd/identity or supervisor failure stays unknown. Slurm uses native minute-rounded --time, separate scheduler proof; real Slurm remains pending.",
+        "Fresh verified recovery clears observation-only errors, retains historical detach events and derives Linux started_at from same-boot birth ticks/CLK_TCK plus btime (about one-second precision). Missing scheduler StartTime remains unknown; submit time is not start time."
+      ],
+      "reusedTests": [
+        "tests/entry/test_durable_ingress.py",
+        "tests/memory/",
+        "tests/entry/test_stream.py",
+        "tests/entry/test_controller_confirmed_snapshot.py",
+        "tests/entry/test_controller_durable_failure.py"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 4,
+          "high": 8
+        },
+        "v2SameScope": {
+          "low": 8,
+          "high": 16
+        }
+      },
+      "uncertainty": "Receipt retention/migration and unknown post-crash outcome presentation; no automatic replay of side effects."
+    },
+    {
+      "id": "W04",
+      "name": "Workspace ownership and EOF",
+      "sources": [
+        "omicsclaw/entry/session.py:shutdown/abandon grace",
+        "omicsclaw/entry/approval.py",
+        "omicsclaw/entry/desktop/notebooks_manager.py"
+      ],
+      "classification": [
+        "new adapter: flock workspace fence",
+        "reuse: existing session/approval/kernel lease lifecycle"
+      ],
+      "contracts": [
+        "finite stdio process; no resident attach broker",
+        "owner metadata must gain host/user/start-time identity in Stage2",
+        "external job and kernel shutdown need lifetime classification"
+      ],
+      "reusedTests": [
+        "tests/entry/test_session.py",
+        "tests/entry/test_controller_boundary.py",
+        "App controller-ssh-live.test.ts"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 3,
+          "high": 6
+        },
+        "v2SameScope": {
+          "low": 5,
+          "high": 10
+        }
+      },
+      "uncertainty": "NFS/site lock semantics need site tests; known kernel/workspace leases cannot fence every workspace writer alone."
+    },
+    {
+      "id": "W05",
+      "name": "Multiple targets and durable jobs",
+      "sources": [
+        "omicsclaw/remote/plane.py:RemotePlaneBinding(spawner=...), RemoteExecutor",
+        "omicsclaw/remote/{jobs,kernel,store,ssh}.py",
+        "omicsclaw/remote/bridge.py:RemoteJobsBridge",
+        "omicsclaw/entry/assembly.py:open_remote_plane"
+      ],
+      "classification": [
+        "local change: pass existing spawner through assembly",
+        "new adapter: restricted Mac SSH/SFTP broker",
+        "local change: explicit location/lifetime handle fields"
+      ],
+      "contracts": [
+        "target alias/root capability registry",
+        "no Mac key transfer or agent forwarding",
+        "existing RemoteJobStore/submit/reconcile own terminal state"
+      ],
+      "reusedTests": [
+        "tests/remote/test_tools.py",
+        "tests/remote/test_desktop_remote_hosts.py",
+        "tests/remote/"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 7,
+          "high": 14
+        },
+        "v2SameScope": {
+          "low": 8,
+          "high": 16
+        }
+      },
+      "uncertainty": "Cross-host event/provenance references and Slurm real-site gate; source API seam exists but production Mac broker is not implemented."
+    },
+    {
+      "id": "W06",
+      "name": "Science runner and complete skill resources",
+      "sources": [
+        "omicsclaw/entry/desktop/jobs_manager.py:register_runner, SkillApiRunner, CodeRunRunner",
+        "skills/_sdk",
+        "skills/*:API/Notebook/R resources"
+      ],
+      "classification": [
+        "local change: disable default in-process runners",
+        "new adapter: ExternalScriptRunner prototype and later external worker protocol",
+        "reuse: JobStore/RunStore/approvals/events and algorithms"
+      ],
+      "contracts": [
+        "selected science interpreter/payload digest",
+        "full actual args + code hash in original approval",
+        "no scientific object imports into control"
+      ],
+      "reusedTests": [
+        "tests/entry/test_external_science_runner.py",
+        "tests/sdk/",
+        "all existing skill example/API/R selections"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 6,
+          "high": 12
+        },
+        "v2SameScope": {
+          "low": 7,
+          "high": 14
+        }
+      },
+      "uncertainty": "Prototype is short foreground process only; full structured SDK adapter, payload closure and background job reconciliation remain Stage3."
+    },
+    {
+      "id": "W07",
+      "name": "Kernels and declared extensions",
+      "sources": [
+        "omicsclaw/entry/assembly.py:WorkspaceKernelBinding",
+        "omicsclaw/entry/desktop/notebooks_manager.py",
+        "omicsclaw/memory/notebook.py",
+        "omicsclaw/mcp",
+        "omicsclaw/attachments"
+      ],
+      "classification": [
+        "local change: explicit science interpreter binding",
+        "new adapters: durable kernel handle/reconciliation and worker isolation",
+        "reuse: Notebook CAS/lease and MCP/attachment schemas"
+      ],
+      "contracts": [
+        "Notebook client profile; ipykernel stays science",
+        "MCP stdlib transport; plugin processes measured separately",
+        "scientific/parse-heavy attachment processing in worker"
+      ],
+      "reusedTests": [
+        "tests/sdk/notebook/",
+        "tests/mcp/",
+        "tests/attachments/",
+        "tests/entry/test_desktop_notebooks.py"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 8,
+          "high": 16
+        },
+        "v2SameScope": {
+          "low": 16,
+          "high": 32
+        }
+      },
+      "uncertainty": "Stateful kernel identity, live apps, extension auth and restart tests; real MCP server and attachment paths not proven by empty configuration."
+    },
+    {
+      "id": "W08",
+      "name": "Storage location and injection",
+      "sources": [
+        "omicsclaw/entry/assembly.py:open_memory, open_remote_plane, WorkspaceKernelBinding",
+        "omicsclaw/entry/desktop/jobs_manager.py:JobsManager.__init__",
+        "omicsclaw/runs/store.py:RunStore",
+        "omicsclaw/attachments/store.py:AttachmentStore"
+      ],
+      "classification": [
+        "local change: one storage root or existing store injection",
+        "reuse: all store definitions and migrations"
+      ],
+      "contracts": [
+        "fixed workspace paths inventoried below",
+        "state/<workspaceId> design cannot silently detach old stores",
+        "store move/copy/ownership conflict rules"
+      ],
+      "reusedTests": [
+        "tests/memory/",
+        "tests/entry/test_desktop_jobs.py",
+        "tests/attachments/"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 3,
+          "high": 6
+        },
+        "v2SameScope": {
+          "low": 5,
+          "high": 10
+        }
+      },
+      "uncertainty": "RunStore path and assembly-created artifact/notebook databases do not all have current public injection; add local seams instead of cloning managers. No dedicated attachment store test exists today; Stage4 must add behavior tests for injected roots and ownership."
+    },
+    {
+      "id": "W09",
+      "name": "Mac routes, configuration and projections",
+      "sources": [
+        "App src/app/api/**/route.ts (88 files)",
+        "App src/lib/{db,backend,backend-config,backend-operation-binding,secret-store}.ts",
+        "App electron/main.ts:ensureAppSecretKey",
+        "Core desktop shared handlers"
+      ],
+      "classification": [
+        "local change: route transport/authority adaptation",
+        "new adapter: typed SSH client and stable event projection",
+        "reuse: React/Electron, original wire projector and secret codec"
+      ],
+      "contracts": [
+        "per-route concrete body/query/response/schema links in App docs/ssh-controller-route-authority.json",
+        "Mac config secrets/drafts authority; remote accepted history/jobs state",
+        "safeStorage AES-GCM reused; no implicit plaintext fallback for new model keys",
+        "bounded receipt/part opaque message pagination, confirmed snapshot revision/digest pins and chronological streamed export; old HTTP rowid separate until Stage5"
+      ],
+      "reusedTests": [
+        "App existing route/unit suites",
+        "controller-bridge.test.ts",
+        "controller-ssh-live.test.ts",
+        "Desktop compatibility selection",
+        "App controller-history-pagination.test.ts",
+        "App controller-confirmed-snapshot.test.ts"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 8,
+          "high": 16
+        },
+        "v2SameScope": {
+          "low": 12,
+          "high": 24
+        }
+      },
+      "uncertainty": "Mixed legacy App DB and backend authority requires data/projection changes, not just URL replacement; immutable caller/turn capability is Stage2 work."
+    },
+    {
+      "id": "W10",
+      "name": "Component and dual environment supply",
+      "sources": [
+        "scripts/build_controller.py",
+        "omicsclaw/entry/ssh/profiles",
+        "App scripts/assert-package-boundary.mjs",
+        "existing env supply/executors"
+      ],
+      "classification": [
+        "new adapter: deterministic source manifest and hashed profile supply",
+        "local change later: bootstrap/update/rollback/afterPack gates"
+      ],
+      "contracts": [
+        "source-only internal import closure; clean feature commit verification",
+        "independent CPython; no full wheel/server/console scripts",
+        "profile budgets and cache held fixed"
+      ],
+      "reusedTests": [
+        "tests layering/boundary",
+        "clean import/SDK slices",
+        "package-boundary and supply/update fault gates"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 5,
+          "high": 10
+        },
+        "v2SameScope": {
+          "low": 5,
+          "high": 10
+        }
+      },
+      "uncertainty": "Different OS/ABI/site policies require separate locks/validation; signature/Intel resources absent; no whole env hidden in optional directories."
+    },
+    {
+      "id": "W11",
+      "name": "Data migration and old mode retirement",
+      "sources": [
+        "App src/lib/{profile-migration,db,backend-config}.ts",
+        "App electron/main.ts runtime activation",
+        "Core desktop stored sessions/jobs/kernel handles"
+      ],
+      "classification": [
+        "local change: one-time explicit provenance import and mode removal after gates",
+        "reuse: current backup/schema primitives"
+      ],
+      "contracts": [
+        "request and origin identity preserved",
+        "partial/unknown remains explicit, no cache retry/finalization",
+        "Desktop old HTTP/LocalPython/DirectURL removed only after all acceptance"
+      ],
+      "reusedTests": [
+        "migration/backup/rollback tests",
+        "all route/desktop regression",
+        "release boundary gates"
+      ],
+      "effortPersonDays": {
+        "v3": {
+          "low": 5,
+          "high": 10
+        },
+        "v2SameScope": {
+          "low": 5,
+          "high": 10
+        }
+      },
+      "uncertainty": "Legacy active jobs/kernels must first be identified and reconciled; test on backed-up actual data before deletion."
+    }
+  ],
+  "modelCallers": [
+    {
+      "caller": "main turns",
+      "source": "entry/assembly.py:build_app -> provider injection -> agent runner",
+      "authority": "Mac registered snapshot, main model and limits",
+      "stage1": "actual bound vendor SDK + Mac/OpenSSH fixture loop",
+      "pending": "Stage2 provider settings import and turn-scoped capability"
+    },
+    {
+      "caller": "summary/compaction",
+      "source": "entry/assembly.py:bind_subagents/summarizer provider.bind(model=config.summary_model)",
+      "authority": "Mac summary model allowlist plus output budget; preserved client factory",
+      "stage1": "public bind identity/unit tests; existing summary suite retained",
+      "pending": "Stage2 route snapshot must include effective summary config and caller scope"
+    },
+    {
+      "caller": "subagents",
+      "source": "entry/subagent.py:SubagentRunner provider.bind(model=definition.model); observability/provider.py:ObservedProvider.bind",
+      "authority": "Mac enabled definition/model/caller capability; same factory and budgets",
+      "stage1": "factory bind tests + existing subagent tests",
+      "pending": "caller/turn identity and aggregate parallel budgets"
+    },
+    {
+      "caller": "session title",
+      "source": "entry/desktop/title.py:provider.bind(max_tokens=1024,thinking_budget_tokens=0)",
+      "authority": "Mac title model/snapshot; bound SDK with same transport",
+      "stage1": "static caller and bind preservation; existing title suite",
+      "pending": "Stage2 title route uses shared title helper and scoped budget"
+    },
+    {
+      "caller": "shadow reviewer",
+      "source": "entry/shadow_review.py:ShadowReview._run_review_call; _review_call seam; assembly.py:ShadowReview(app)",
+      "authority": "Mac reviewer snapshot, never provider_from_env in SSH mode",
+      "stage1": "static discovery: current fallback reads env; disabled in Base config",
+      "pending": "promote existing callback seam to production injection and pass in shared assembly; CLI fallback stays unchanged"
+    },
+    {
+      "caller": "provider connection test",
+      "source": "entry/desktop/providers.py:test_provider(provider_factory=provider_for), resolve_config(env=next_start_environment)",
+      "authority": "Mac test candidate/temporary key, explicit endpoint and config",
+      "stage1": "public factory injection exists; existing provider-test behavior inventoried",
+      "pending": "Stage2 test executes through Mac bridge or Mac same codec; no remote SettingsFile/env write"
+    },
+    {
+      "caller": "CLI/IM/eval live",
+      "source": "provider/factory.py:provider_from_env; evals/live.py:bind; entry/cli",
+      "authority": "existing local deployment env, outside Desktop migration",
+      "stage1": "compatible defaults and existing suites",
+      "pending": "none; prevent new SSH caller accidentally choosing this fallback"
+    }
+  ],
+  "storageRoots": [
+    {
+      "store": "MemoryStore/SessionStore/DurableTurnEventLog",
+      "root": "<workspace>/.omicsclaw/memory.db via entry memory opening",
+      "authority": "session history, durable original events, receipt and identity",
+      "gap": "state root must be explicit for final deployment; reuse store path/injection"
+    },
+    {
+      "store": "JobStore/ArtifactStore",
+      "root": "JobsManager defaults <workspace>/.omicsclaw/jobs.db; JobStore and ArtifactStore injectable",
+      "authority": "accepted job states/events and artifacts",
+      "gap": "same Database retained; assembly WorkspaceKernelBinding/RemoteKernelBinding create ArtifactStore at fixed workspace path"
+    },
+    {
+      "store": "RunStore",
+      "root": "JobsManager hard-codes <workspace>/.omicsclaw/runs.db",
+      "authority": "run lifecycle and event sequence",
+      "gap": "needs local RunStore/path injection; no mirrored RPC terminal table"
+    },
+    {
+      "store": "NotebookStore",
+      "root": "build_app uses remembering.database; WorkspaceKernelBinding opens <workspace>/.omicsclaw/notebooks.db; notebooks_manager accepts store",
+      "authority": "Notebook CAS/cell metadata and owner lease",
+      "gap": "unify currently distinct roots through same source seam before migration; retain compatibility behavior until verified"
+    },
+    {
+      "store": "RemoteHostStore/RemoteJobStore",
+      "root": "open_remote_plane fixed <workspace>/.omicsclaw/remote.db",
+      "authority": "host knowledge and submitted external handles/reconciliation",
+      "gap": "assembly must expose spawner and storage seam; Mac broker may not become scheduler"
+    },
+    {
+      "store": "AttachmentStore",
+      "root": "state_root/attachments.db plus attachments.lock and content-addressed payloads",
+      "authority": "pinned attachment schema/claims/checksums/lifetimes",
+      "gap": "explicit storage root and science/worker processing; no parallel file claims"
+    },
+    {
+      "store": "permissions/plans/tool offloads",
+      "root": "shared AppConfig workspace state dirname .omicsclaw",
+      "authority": "existing gate/rules/plan/capture services",
+      "gap": "one storage root migration should preserve names and origin; no manager rewrite"
+    }
+  ],
+  "profiles": [
+    {
+      "name": "Base",
+      "source": "shared assembly, engine/context/permission/planning/session/memory/subagent and JobsManager without runners",
+      "dependencies": "base-linux-x86_64.lock",
+      "initialization": "configure only; no NotebookKernel, MCP or attachment handler construction",
+      "shutdown": "EOF stops model/approval/admission, shared sessions drain; original DB closes",
+      "measured": "19 independent installed distributions; Python 82.627 MiB + env 25.031 MiB; real Mac SSH SDK fixture peak 67.539 MiB; fresh import forbidden sets empty",
+      "pending": "production supply/update and cold-handshake repeated full source validation"
+    },
+    {
+      "name": "Notebook/Jupyter increment",
+      "source": "WorkspaceKernelBinding/PersistentKernelManager/NotebookStore and existing Notebook manager",
+      "dependencies": "full-linux-x86_64.lock (Base+jupyter-client 8.8.0 and transitive client deps)",
+      "initialization": "explicit requested capability + selected science interpreter; no default chat initialization",
+      "shutdown": "finite prototype closes kernel; persistent kernel handle semantics remain Stage3/4",
+      "measured": "env 26.212 MiB logical; one science-kernel cell 1.290s, control RSS 50.558 MiB",
+      "pending": "persistent cells/lease/liveapp/restart/Slurm; this is representative, not full-profile acceptance"
+    },
+    {
+      "name": "MCP/attachments/declared extensions",
+      "source": "existing mcp stdlib transports and attachments schema/store/renderers",
+      "dependencies": "MCP controller needs no external mcp SDK; declared servers/parse-heavy processors are isolated worker payloads",
+      "initialization": "only explicit enabled extensions; static source closure may contain stdlib modules, no default manager/child construction",
+      "shutdown": "existing manager aclose, capability refs revoked, worker lifetimes declared",
+      "measured": "MCP empty config only; no real negotiated server/attachment full path claim",
+      "estimate": "0-8 MiB incremental control deps/source/buffers; full control env remains <=50 MiB; no science parser import accepted"
+    },
+    {
+      "name": "Science skills/SDK/R/resources",
+      "source": "selected skill APIs plus skills/_sdk and declared domain/_lib/R/resource closure; same algorithms",
+      "dependencies": "separate hashed science env/payload; no controller backflow",
+      "initialization": "original JobsManager.register_runner, explicit selected interpreter, approved actual arguments/digest",
+      "shutdown": "foreground prototype owned child dies; independent nohup/Slurm lifetime supplied later by existing remote handle logic",
+      "measured": "2.655 MiB prototype payload; actual sc-filter SDK child succeeded; existing scientific env reused (full logical size measured separately)",
+      "pending": "clean complete selected payload/science supply, all CLI/API/Notebook/R selectors and persistent handles; not hidden in control full numbers"
+    }
+  ],
+  "modelProtocolBaseline": {
+    "sdk": [
+      "openai==2.33.0",
+      "anthropic==0.125.0",
+      "httpx==0.28.1"
+    ],
+    "publicInterfaces": "AsyncOpenAI/AsyncAnthropic(http_client=public AsyncClient(public AsyncBaseTransport)); no private SDK client mutation or global alias",
+    "semantics": "existing Python codecs retained: stream text/tool args/usage/errors/cache/thinking behavior follows current adapter tests",
+    "knownGap": "Anthropic returned thinking signatures discarded in current adapter; not fixed by transport. SDK1.13 httpx2 and removed temperature API is a version upgrade, not evidence language rewrite required.",
+    "stage1ResourceContract": "connection-scoped registered provider/revision/model/path only; SDK request body <=512KiB; open+opening<=8; read<=32KiB; provider chunk<=1MiB; frame<=1MiB; deadline 1..3600 finite; outputTokens positive below context; OpenAI n must be 1 so no multiplied output budget; contradictory max token fields rejected",
+    "stage2Required": "requestId/turnId/controllerId and named caller capability; explicit effective summary/title/review/test/subagent models, settings revision and aggregate output budgets; no ambient auth; current Stage1 is not all-caller acceptance",
+    "retryBaseline": "SDKClientFactory preserves ProviderConfig.max_retries and tested 429 retry with each real SDK. Stage1 bridged_provider fixes zero only for deterministic slices; effective Mac caller config/overall RequestDeadline reconciliation remains Stage2."
+  },
+  "fullControlEstimate": {
+    "scope": "all known promised controller capabilities; worker science and MCP plugin processes counted separately in overall footprint, never hidden as control dependencies",
+    "sourceMiB": {
+      "measuredBase": 3.188,
+      "cap": 4.5,
+      "estimateAll": 4.2
+    },
+    "pythonMiB": {
+      "measured": 82.627,
+      "cap": 100
+    },
+    "envMiB": {
+      "measuredBase": 25.031,
+      "measuredNotebookIncrement": 1.181,
+      "estimateAllUpper": 44,
+      "capBase": 40,
+      "capFull": 50
+    },
+    "installedTotalMiB": {
+      "estimateAllUpper": 148.2,
+      "capBase": 150,
+      "capFull": 160
+    },
+    "rssMiB": {
+      "measuredBasePeakFixture": 67.539,
+      "measuredNotebookCell": 50.558,
+      "estimateFullPeakUpper": 155,
+      "capBase": 140,
+      "capFull": 160,
+      "scenario": "one admitted agent stream + bounded reverse RPC handlers/buffers + up to existing 8 job coordinators; scientific arrays/kernels/plugins in separate processes. Enforce streaming and replay bounds in Stage2/3; estimate must be measured before final release."
+    },
+    "coldSupplyMiB": {
+      "pythonDownloadObservedApprox": 29.4,
+      "estimateFullUpper": 100,
+      "cap": 120,
+      "basis": "standalone CPython tar 29.4 + uv binary reserve20 + <=25 client wheels/archive +2 component +24 retry/cache overhead; complete production cold-supply duration is pending Stage2"
+    },
+    "cache": "new supplier must use task/profile cache directory and bound it to 80 MiB; global historical shared uv cache cannot be attributed to this slice",
+    "comparison": "same independent Python old full wheel+HTTP control env 47.106 MiB vs Base25.031/representative26.212; old idle HTTP RSS55.746 MiB and startup1.569s. This is a modest control footprint reduction, not the 277MiB accidental Mac bundle claim. Science environment dominates overall installed compute size and is separately reported."
+  },
+  "goNoGo": {
+    "recommendation": "candidate remains technically viable for stage-by-stage implementation, subject to independent Stage1 code review and exact check results; no final go before review",
+    "reasons": [
+      "same build_app/managers/stores reused and no second business scheduler",
+      "real Mac Node/OpenSSH + actual SDK fixture model/approval/tool/projection + durable restart can avoid Mac Python and product HTTP",
+      "public SDK transport bridge preserves codecs at a bounded controller-only SDK pin",
+      "named local seams + new infra total estimate below same-scope TypeScript port, while intervals overlap and are estimates"
+    ],
+    "hardReassessment": [
+      "new persistent business terminal authority",
+      "resident attach broker",
+      "provider-wide codec rewrite beyond W02",
+      "any frozen profile/resource cap or package high cost exceeded",
+      "site refuses finite SSH Python component"
+    ],
+    "unverified": [
+      "live external-model credentials",
+      "all profile peak measurements",
+      "true Slurm scheduler",
+      "Intel Mac physical run",
+      "production signature identity",
+      "all Desktop routes migrated",
+      "legacy modes removed"
+    ]
+  },
+  "overallFootprint": {
+    "measuredScienceEnvironmentLogicalBytes": 18602924558,
+    "scienceMeasurement": "Existing selected /opt/conda/envs/OmicsClaw tree; regular non-symlink file logical sizes. It contains user-installed science packages and an original product checkout install. Worker probe did not import controller; clean science supply remains Stage3.",
+    "measuredPythonLogicalBytes": 86641021,
+    "measuredBaseEnvironmentLogicalBytes": 26246788,
+    "measuredNotebookEnvironmentLogicalBytes": 27485190,
+    "fullControlInstalledCapBytes": 167772160,
+    "controllerCacheCapBytes": 83886080,
+    "fullControlIncludingCacheCapBytes": 251658240,
+    "stateAndData": "User history/SQLite/content-addressed attachments/science datasets/jobs are separate growing state/data, reported with origin/quotas and never hidden in installed-control totals. Existing science tree dominates overall footprint; no claim it was installed by this slice."
+  }
+}

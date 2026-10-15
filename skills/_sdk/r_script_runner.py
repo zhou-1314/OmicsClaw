@@ -13,11 +13,10 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
-__all__ = ["R_SCRIPTS_DIR", "RScriptRunner", "RScriptError", "RScriptTimeoutError"]
+__all__ = ["R_SCRIPTS_DIR", "RScriptError", "RScriptRunner", "RScriptTimeoutError"]
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,12 @@ R_SCRIPTS_DIR = Path(__file__).resolve().parent / "r_scripts"
 
 def _preferred_rscript_executable(default: str = "Rscript") -> str:
     """Prefer the active conda environment's Rscript when available."""
+    explicit = os.environ.get("OMICSCLAW_RSCRIPT", "").strip()
+    if explicit:
+        selected = Path(explicit)
+        if not selected.is_absolute() or not selected.is_file():
+            raise ValueError("explicit Rscript is unavailable")
+        return str(selected)
     candidates: list[Path] = []
     conda_prefix = os.environ.get("CONDA_PREFIX", "").strip()
     if conda_prefix:
@@ -81,7 +86,7 @@ class RScriptResult:
     returncode: int
     stdout: str
     stderr: str
-    output_dir: Optional[Path] = None
+    output_dir: Path | None = None
     elapsed_seconds: float = 0.0
     skipped: bool = False
 
@@ -130,6 +135,7 @@ class RScriptRunner:
         try:
             result = subprocess.run(
                 [self.r_executable, "--version"],
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -157,6 +163,7 @@ class RScriptRunner:
         try:
             result = subprocess.run(
                 [self.r_executable, "-e", checks],
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -231,16 +238,22 @@ class RScriptRunner:
         timeout = timeout or self.timeout
 
         # Idempotency: skip if all expected outputs already exist
-        if skip_if_exists and expected_outputs and output_dir:
-            if all((Path(output_dir) / f).exists() for f in expected_outputs):
-                logger.info("Skipping R script %s — outputs already exist", script_path.name)
-                return RScriptResult(
-                    returncode=0,
-                    stdout="",
-                    stderr="",
-                    output_dir=Path(output_dir),
-                    skipped=True,
-                )
+        if (
+            skip_if_exists
+            and expected_outputs
+            and output_dir
+            and all((Path(output_dir) / f).exists() for f in expected_outputs)
+        ):
+            logger.info(
+                "Skipping R script %s — outputs already exist", script_path.name
+            )
+            return RScriptResult(
+                returncode=0,
+                stdout="",
+                stderr="",
+                output_dir=Path(output_dir),
+                skipped=True,
+            )
 
         cmd = [self.r_executable, str(script_path)] + [str(a) for a in (args or [])]
 
@@ -255,6 +268,7 @@ class RScriptRunner:
         try:
             proc = subprocess.run(
                 cmd,
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -326,7 +340,11 @@ class RScriptRunner:
             parent_prefix = r_exec_path.parent.parent
             if parent_prefix.exists():
                 resolved_prefix = str(parent_prefix)
-        conda_prefix = resolved_prefix or env.get("CONDA_PREFIX") or (sys.prefix if Path(sys.prefix).exists() else None)
+        conda_prefix = (
+            resolved_prefix
+            or env.get("CONDA_PREFIX")
+            or (sys.prefix if Path(sys.prefix).exists() else None)
+        )
         if conda_prefix:
             env["CONDA_PREFIX"] = conda_prefix
 
@@ -341,7 +359,14 @@ class RScriptRunner:
                 env.setdefault("PYTHON_BIN", candidate)
                 break
 
-        if conda_prefix:
+        managed = env.get("OMICSCLAW_R_LIBS", "").strip()
+        if managed:
+            library = Path(managed)
+            if not library.is_absolute() or not library.is_dir():
+                raise ValueError("managed R library is unavailable")
+            env["R_LIBS_USER"] = str(library)
+            env["R_LIBS"] = str(library)
+        elif conda_prefix:
             r_libs_user = Path(conda_prefix) / "lib" / "R" / "omicsclaw-library"
             r_libs_user.mkdir(parents=True, exist_ok=True)
             env.setdefault("OMICSCLAW_R_LIBS", str(r_libs_user))
@@ -354,7 +379,12 @@ class RScriptRunner:
             else:
                 try:
                     probe = subprocess.run(
-                        [self.r_executable, "-e", 'cat(path.expand(Sys.getenv("R_LIBS_USER")))'],
+                        [
+                            self.r_executable,
+                            "-e",
+                            'cat(path.expand(Sys.getenv("R_LIBS_USER")))',
+                        ],
+                        check=False,
                         capture_output=True,
                         text=True,
                         timeout=10,
@@ -365,7 +395,9 @@ class RScriptRunner:
                         lib_paths.append(default_r_libs_user)
                 except (FileNotFoundError, subprocess.TimeoutExpired):
                     pass
-            env["R_LIBS_USER"] = os.pathsep.join(dict.fromkeys(p for p in lib_paths if p))
+            env["R_LIBS_USER"] = os.pathsep.join(
+                dict.fromkeys(p for p in lib_paths if p)
+            )
 
         # Disable reticulate's managed ephemeral Python selection when possible.
         env.setdefault("RETICULATE_USE_MANAGED_VENV", "no")
@@ -406,5 +438,5 @@ class RScriptRunner:
                 f.write(f"\n=== STDOUT ===\n{stdout}\n")
                 f.write(f"\n=== STDERR ===\n{stderr}\n")
             logger.info("R debug log saved to %s", log_path)
-        except Exception:
-            pass  # Best-effort — don't fail the error path
+        except OSError as exc:
+            logger.warning("R debug log could not be written: %s", exc)

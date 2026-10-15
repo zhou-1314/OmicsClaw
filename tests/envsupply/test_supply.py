@@ -37,7 +37,6 @@ from omicsclaw.envsupply import (
 )
 from omicsclaw.remote import kernel as remote_kernel
 
-
 # ---- the pins are shared, not forked -------------------------------------------
 
 
@@ -93,9 +92,7 @@ def test_the_idempotent_no_ops_are_the_same_commands_a_retry_sends():
 
 def test_the_stack_and_extras_ride_one_quoted_pip_line():
     script = build_env_install_script(DEFAULT_ENV_DIR, packages=("squidpy",))
-    pip_line = next(
-        line for line in script.splitlines() if '"$UV" pip install' in line
-    )
+    pip_line = next(line for line in script.splitlines() if '"$UV" pip install' in line)
     for package in (*KERNEL_BASE_PACKAGES, *CORE_STACK_PACKAGES, "squidpy"):
         assert package in pip_line
     # bare names need no quotes, but a dotted name still lands whole
@@ -109,9 +106,7 @@ def test_the_mirrors_prefix_their_own_download_lines_once():
     python_line = next(
         line for line in script.splitlines() if '"$UV" python install' in line
     )
-    pip_line = next(
-        line for line in script.splitlines() if '"$UV" pip install' in line
-    )
+    pip_line = next(line for line in script.splitlines() if '"$UV" pip install' in line)
     assert "UV_PYTHON_INSTALL_MIRROR=" in python_line
     assert "UV_INDEX_URL=" in pip_line
     assert DEFAULT_UV_INDEX_URL in pip_line
@@ -160,12 +155,11 @@ def test_manual_commands_are_runnable_as_pasted():
     # review m5: the mirrors ride as VAR=value prefixes on the exact
     # commands the script would run — pasting the card hits the same
     # mirrors, not the official CDN behind a comment
-    python_line, venv_line, pip_line, verify = manual_env_commands(
-        DEFAULT_ENV_DIR
+    python_line, venv_line, pip_line, verify = manual_env_commands(DEFAULT_ENV_DIR)
+    assert (
+        python_line.startswith("UV_PYTHON_INSTALL_MIRROR=")
+        and "uv python install" in python_line
     )
-    assert python_line.startswith(
-        "UV_PYTHON_INSTALL_MIRROR="
-    ) and "uv python install" in python_line
     assert venv_line.startswith("uv venv")
     assert pip_line.startswith("UV_INDEX_URL=") and "uv pip install" in pip_line
     assert "# with UV_INDEX_URL" not in pip_line
@@ -239,9 +233,7 @@ def _probe_stdout(found: dict[str, bool]) -> str:
 
 
 def test_a_ready_interpreter_is_one_subprocess_and_reports_no_gaps():
-    runner = _FakeProbeRunner(
-        stdout=_probe_stdout({"ipykernel": True, "scanpy": True})
-    )
+    runner = _FakeProbeRunner(stdout=_probe_stdout({"ipykernel": True, "scanpy": True}))
     probe = probe_interpreter(
         "~/.omicsclaw/envs/main/bin/python",
         packages=("ipykernel", "scanpy"),
@@ -314,3 +306,85 @@ def test_a_real_interpreter_answers_the_structured_probe():
     probe = probe_interpreter(sys.executable, packages=("ipykernel", "json"))
     assert probe.exists is True
     assert "json" not in probe.missing
+
+
+def test_install_timeout_stops_its_owned_descendant_before_late_write(tmp_path):
+    import shlex
+    import sys
+    import time
+
+    from omicsclaw.envsupply.script import INSTALL_TIMEOUT_EXIT, default_install_runner
+
+    marker = tmp_path / "late-owned-write"
+    source = (
+        "import time;from pathlib import Path;time.sleep(.4);Path("
+        + repr(str(marker))
+        + ").write_text('late')"
+    )
+    script = shlex.quote(sys.executable) + " -c " + shlex.quote(source) + " & wait"
+    code = default_install_runner(["sh", "-c", script], timeout=0.1)
+    time.sleep(0.6)
+    assert code == INSTALL_TIMEOUT_EXIT and not marker.exists()
+
+
+def test_install_output_is_bounded_even_without_newlines():
+    import sys
+
+    from omicsclaw.envsupply.script import default_install_runner
+
+    widths = []
+    code = default_install_runner(
+        [sys.executable, "-c", "import os;os.write(1,b'x'*(4*1024*1024+1))"],
+        on_line=lambda line: widths.append(len(line.encode())),
+        timeout=5,
+    )
+    assert code == 125 and max(widths, default=0) <= 65536
+
+
+def test_install_utf8_character_split_at_fragment_boundary_remains_intact():
+    import sys
+
+    from omicsclaw.envsupply.script import default_install_runner
+
+    expected = "x" * 16383 + "汉🙂tail"
+    seen = []
+    code = default_install_runner(
+        [
+            sys.executable,
+            "-c",
+            "import os;os.write(1," + repr((expected + "\n").encode()) + ")",
+        ],
+        on_line=seen.append,
+    )
+    assert code == 0 and "".join(seen) == expected
+
+
+def test_install_callback_failure_stops_the_owned_session(tmp_path):
+    import shlex
+    import sys
+    import time
+
+    import pytest
+
+    from omicsclaw.envsupply.script import default_install_runner
+
+    marker = tmp_path / "callback-late-write"
+    source = (
+        "import time;from pathlib import Path;time.sleep(.4);Path("
+        + repr(str(marker))
+        + ").write_text('late')"
+    )
+    script = (
+        shlex.quote(sys.executable)
+        + " -c "
+        + shlex.quote(source)
+        + " & echo ready; wait"
+    )
+
+    def broken(_):
+        raise ValueError("owned callback failure")
+
+    with pytest.raises(ValueError, match="owned callback failure"):
+        default_install_runner(["sh", "-c", script], on_line=broken)
+    time.sleep(0.6)
+    assert not marker.exists()

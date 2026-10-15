@@ -16,15 +16,10 @@ skill code next to the data) is C3's persistent-kernel territory, not
 this bridge's — saying so here is cheaper than discovering it in a
 stack trace.
 
-**Cancellation cancels remotely too.** The manager cancels the runner's
-asyncio task; the bridge catches that, sends the remote cancel, and
-re-raises — so "cancel" means the same thing to the user whichever side
-of the SSH connection the work is on. The one asymmetry left is the
-manager's local timeout: a remote job that outruns
-``default_timeout_s`` is marked failed locally while it keeps running
-remotely, and its handle row stays in-flight for the reconciler to
-report the truth later. That bound is the price of reusing P1's
-lifecycle whole rather than forking a second one.
+Observation timeout or controller shutdown detaches this runner while
+the admitted job keeps running. JobsManager sends an explicit cancel
+through the plane and waits for observed terminal evidence. The existing
+stores and reconciler remain responsible for job state.
 """
 
 from __future__ import annotations
@@ -58,16 +53,22 @@ class RemoteJobsBridge:
     beyond choosing it when ``record.runtime`` is not ``"local"``.
     """
 
+    lifetime = "external"
+
     def __init__(
         self,
         plane: RemotePlaneBinding,
         *,
         poll_interval_s: float = POLL_INTERVAL_S,
         log_chunk_chars: int = LOG_CHUNK_CHARS,
+        target_alias: str = "",
+        target_root: str = "",
     ) -> None:
         self._plane = plane
         self._poll_interval_s = float(poll_interval_s)
         self._log_chunk_chars = int(log_chunk_chars)
+        self.target_alias = target_alias
+        self.target_root = target_root
 
     @property
     def plane(self) -> RemotePlaneBinding:
@@ -81,7 +82,11 @@ class RemoteJobsBridge:
         capabilities: tuple[str, ...] = ("remote_exec", "remote_submit"),
     ) -> TargetSnapshot:
         """Resolve and freeze one target before its job row is inserted."""
-        return await self._plane.resolve_target(alias, capabilities=capabilities)
+        return await self._plane.resolve_target(
+            alias,
+            capabilities=capabilities,
+            **({"target_root": self.target_root} if self.target_root else {}),
+        )
 
     # ---- the runner contract ------------------------------------------------
 
@@ -128,8 +133,8 @@ class RemoteJobsBridge:
         """Submit, poll, stream the log, and land on the remote verdict.
 
         :raises RemoteJobFailed: the remote job finished non-zero.
-        :raises asyncio.CancelledError: the manager cancelled the job;
-            the remote cancel has been sent first.
+        :raises asyncio.CancelledError: observation was detached; this does
+            not authorize a job cancellation.
         """
         # Dispatch is driven exclusively by the immutable creation snapshot.
         # Legacy rows are populated by the one-time target migration before
@@ -154,7 +159,13 @@ class RemoteJobsBridge:
             label=f"desktop job {record.id}",
             local_job_id=record.id,
             target_workdir=target_workdir,
+            hard_timeout_s=record.hard_timeout_s,
+            deadline_python=str(record.inputs.get("deadline_python") or ""),
         )
+        return await self.observe(outcome, record, ctx, command=command)
+
+    async def observe(self, outcome, record, ctx, *, command=""):
+        """Observe an already admitted handle through the original event path."""
         ctx.tool_started(
             "remote_submit",
             command,
@@ -166,47 +177,61 @@ class RemoteJobsBridge:
         )
 
         sent = 0
-        try:
-            while True:
-                await asyncio.sleep(self._poll_interval_s)
-                report = await self._plane.status(outcome.job_ref)
-                executor = self._plane.executor_for(outcome.host)
-                tail = await executor.tail_log(
-                    outcome.workdir, sent, self._log_chunk_chars
+        while True:
+            await asyncio.sleep(self._poll_interval_s)
+            report = await self._plane.status(outcome.job_ref)
+            from .jobs import verified_state
+
+            row = self._plane.job_store().get(outcome.job_ref)
+            observer = getattr(ctx, "observe_execution", None)
+            if callable(observer):
+                observer(outcome.job_ref, report)
+            verified = (
+                row is not None and verified_state(row.handle(), report) != "unknown"
+            )
+            if not verified:
+                ctx.progress(
+                    "job identity is not confirmed; observation remains pending"
                 )
-                if tail:
-                    ctx.tool_output(tail)
-                    sent += len(tail)
-                if report.state in ("pending", "running"):
+                continue
+            executor = self._plane.executor_for(outcome.host)
+            tail = await executor.tail_log(outcome.workdir, sent, self._log_chunk_chars)
+            if tail:
+                ctx.tool_output(tail)
+                sent += len(tail)
+            if report.state in ("pending", "running"):
+                continue
+            if report.state in {"done", "failed", "canceled"}:
+                if type(report.exit_code) is not int:
+                    ctx.progress(
+                        "job exit is not confirmed; observation remains pending"
+                    )
                     continue
-                if report.state in {"done", "failed", "canceled"}:
-                    ctx.emit(
-                        "execution.finished",
-                        {
-                            "exit_code": report.exit_code,
-                            "evidence_ref": outcome.job_ref,
-                        },
-                    )
-                if report.state == "failed":
-                    raise RemoteJobFailed(
-                        f"remote job {outcome.job_ref} failed with exit code "
-                        f"{report.exit_code}"
-                    )
-                if report.state == "canceled":
-                    return {"status": "canceled"}
-                if report.state == "done":
-                    for payload in remote_output_payloads(
-                        outcome.host, outcome.workdir, record.inputs.get("outputs", [])
-                    ):
-                        ctx.emit("artifact.created", payload)
-                    return None
-                # unknown: the host went quiet mid-poll. Say so and keep
-                # the loop — the handle is durable and the reconciler
-                # will settle it even if this process dies waiting.
-                ctx.progress(f"host status unknown ({report.detail[:120]})")
-        except asyncio.CancelledError:
-            await self._plane.cancel(outcome.job_ref)
-            raise
+                ctx.emit(
+                    "execution.finished",
+                    {
+                        "exit_code": report.exit_code,
+                        "evidence_ref": outcome.job_ref,
+                        "identity_digest": report.identity_digest,
+                    },
+                )
+            if report.state == "failed":
+                raise RemoteJobFailed(
+                    f"remote job {outcome.job_ref} failed with exit code "
+                    f"{report.exit_code}"
+                )
+            if report.state == "canceled":
+                return {"status": "canceled"}
+            if report.state == "done":
+                for payload in remote_output_payloads(
+                    outcome.host, outcome.workdir, record.inputs.get("outputs", [])
+                ):
+                    ctx.emit("artifact.created", payload)
+                return None
+            # unknown: the host went quiet mid-poll. Say so and keep
+            # the loop — the handle is durable and the reconciler
+            # will settle it even if this process dies waiting.
+            ctx.progress(f"host status unknown ({report.detail[:120]})")
 
 
 def _alias_from_runtime(runtime: str) -> str:

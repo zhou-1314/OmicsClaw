@@ -16,6 +16,9 @@ def test_unknown_remote_is_rechecked_and_syncs_run(tmp_path):
 
     class Executor:
         async def status(self, handle):
+            outcome.identity_verified = True
+            outcome.identity_digest = handle.proof_digest()
+            outcome.exit_code = 0 if outcome.state == "done" else None
             return outcome
 
     plane.executor_for = lambda alias: Executor()
@@ -39,6 +42,16 @@ def test_unknown_remote_is_rechecked_and_syncs_run(tmp_path):
             workdir="/tmp",
             pgid=123,
             local_job_id="desktop",
+            process_identity={
+                "uid": 0,
+                "pid": 123,
+                "pgid": 123,
+                "sid": 123,
+                "start_ticks": 1,
+                "host_id": "localhost",
+                "boot_id": "a" * 32,
+                "nonce": "b" * 32,
+            },
         )
     )
     asyncio.run(manager.reconcile_remote_jobs())
@@ -176,6 +189,42 @@ def test_artifact_provenance_uses_job_snapshot(tmp_path):
     )
     path = tmp_path / "output.json"
     path.write_text("{}")
+    # This is a simulated, complete observation for the provenance unit case.
+    # A remote location alone does not prove that an output was produced.
+    from omicsclaw.tools.builtin.remote import StatusReport
+
+    plane = RemotePlaneBinding(
+        Database(tmp_path / "provenance-remote.db"), workspace=tmp_path
+    )
+    manager._remote_runtime = RemoteJobsBridge(plane)
+    handle = RemoteJobHandle(
+        kind="nohup",
+        host="localhost",
+        workdir=str(tmp_path),
+        pgid=123,
+        local_job_id="desktop",
+        process_identity={
+            "uid": 1000,
+            "pid": 123,
+            "pgid": 123,
+            "sid": 123,
+            "start_ticks": 1,
+            "host_id": "localhost",
+            "boot_id": "a" * 32,
+            "nonce": "b" * 32,
+        },
+    )
+    ref = plane.job_store().record(handle)
+    manager._observe_external_fact(
+        "desktop",
+        str(ref),
+        StatusReport(
+            state="done",
+            exit_code=0,
+            identity_verified=True,
+            identity_digest=handle.proof_digest(),
+        ),
+    )
     manager._emit("desktop", "artifact.created", {"path": str(path)})
     artifact = manager.run_store.list("artifact")[0]
     assert artifact.code_ref.startswith("sha256:")
@@ -185,8 +234,7 @@ def test_artifact_provenance_uses_job_snapshot(tmp_path):
     assert artifact.input_artifact_ids == ["input"]
 
 
-def test_recovered_remote_cancel_requires_host_confirmation(tmp_path):
-    from omicsclaw.entry.desktop.jobs_manager import JobError
+def test_recovered_remote_cancel_remains_pending_without_host_confirmation(tmp_path):
 
     plane = RemotePlaneBinding(Database(tmp_path / "remote.db"), workspace=tmp_path)
     manager = JobsManager(
@@ -210,8 +258,41 @@ def test_recovered_remote_cancel_requires_host_confirmation(tmp_path):
         return SimpleNamespace(state="unknown")
 
     plane.cancel = offline_cancel
-    import pytest
+    assert asyncio.run(manager.cancel_job("desktop")) == "cancel_requested"
+    assert manager.get_job("desktop").status == "cancel_requested"
+    assert not any(
+        kind in {"job.done", "job.failed", "execution.finished"}
+        for _, kind, _ in manager.replay_events("desktop", 0)
+    )
 
-    with pytest.raises(JobError, match="remote_cancel_unconfirmed"):
-        asyncio.run(manager.cancel_job("desktop"))
-    assert manager.get_job("desktop").status == "running"
+
+def test_legacy_missing_birth_proof_cannot_project_a_reported_terminal(tmp_path):
+    plane = RemotePlaneBinding(Database(tmp_path / "remote.db"), workspace=tmp_path)
+
+    class Executor:
+        async def status(self, handle):
+            return SimpleNamespace(state="done", exit_code=0)
+
+    plane.executor_for = lambda alias: Executor()
+    manager = JobsManager(
+        SimpleNamespace(config=SimpleNamespace(workspace=tmp_path)),
+        remote_runtime=RemoteJobsBridge(plane),
+    )
+    manager.store.insert_job(
+        JobRecord(id="missing-proof", runtime="remote:localhost", status="running")
+    )
+    plane.job_store().record(
+        RemoteJobHandle(
+            kind="nohup",
+            host="localhost",
+            workdir="/tmp",
+            pgid=123,
+            local_job_id="missing-proof",
+        )
+    )
+    asyncio.run(manager.reconcile_remote_jobs())
+    assert manager.get_job("missing-proof").status == "unknown"
+    assert not any(
+        kind in {"job.done", "execution.finished"}
+        for _, kind, _ in manager.replay_events("missing-proof", 0)
+    )

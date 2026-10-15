@@ -11,12 +11,31 @@ import asyncio
 import os
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Self, TypeVar
 
 T = TypeVar("T")
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS turn_authority_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    authority_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS turn_ingress (
+    session_id TEXT NOT NULL,
+    source_request_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (session_id, source_request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_turn_ingress_history ON turn_ingress(session_id,created_at,source_request_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
     session_id  TEXT PRIMARY KEY,
     created_at  REAL NOT NULL,
@@ -69,6 +88,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     skill       TEXT NOT NULL DEFAULT '',
     inputs_json TEXT NOT NULL DEFAULT '{}',
     runtime     TEXT NOT NULL DEFAULT 'local',
+    lifetime    TEXT NOT NULL DEFAULT '',
+    source_request_id TEXT NOT NULL DEFAULT '',
+    payload_hash TEXT NOT NULL DEFAULT '',
+    projection_json TEXT NOT NULL DEFAULT '{}',
     target_alias TEXT NOT NULL DEFAULT '',
     target_workdir TEXT NOT NULL DEFAULT '',
     capabilities_json TEXT NOT NULL DEFAULT '[]',
@@ -106,6 +129,7 @@ CREATE TABLE IF NOT EXISTS job_events (
     seq          INTEGER NOT NULL,
     type         TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}',
+    source_event_id TEXT NOT NULL DEFAULT '',
     created_at   REAL NOT NULL,
     PRIMARY KEY (job_id, seq),
     FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
@@ -132,6 +156,22 @@ CREATE TABLE IF NOT EXISTS turn_events (
 
 CREATE INDEX IF NOT EXISTS idx_turn_events_stream_seq
     ON turn_events (stream_id, seq);
+
+CREATE TABLE IF NOT EXISTS turn_projection_checkpoints (
+    stream_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    authority_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    owner_generation INTEGER NOT NULL,
+    receipt_hash TEXT NOT NULL,
+    last_seq INTEGER NOT NULL,
+    last_subframe INTEGER NOT NULL,
+    source_digest TEXT NOT NULL,
+    frame_digest TEXT NOT NULL,
+    frames_json TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id              TEXT PRIMARY KEY,
@@ -183,7 +223,10 @@ CREATE TABLE IF NOT EXISTS remote_jobs (
     local_job_id TEXT NOT NULL DEFAULT '',
     target_alias TEXT NOT NULL DEFAULT '',
     target_workdir TEXT NOT NULL DEFAULT '',
-    capabilities_json TEXT NOT NULL DEFAULT '[]'
+    capabilities_json TEXT NOT NULL DEFAULT '[]',
+    source_request_id TEXT NOT NULL DEFAULT '',
+    payload_hash TEXT NOT NULL DEFAULT '',
+    proof_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_jobs_local
@@ -388,47 +431,82 @@ class Database:
         with self._lock:
             self._conn.close()
 
-    def __enter__(self) -> "Database":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Apply additive columns to databases created by older releases."""
+    ingress_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(turn_ingress)")
+    }
+    if "payload_json" not in ingress_columns:
+        try:
+            conn.execute(
+                "ALTER TABLE turn_ingress ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}' "
+            )
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
     columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "runtime" not in columns:
         try:
-            conn.execute("ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'")
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'"
+            )
         except sqlite3.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
     for table, additions in {
         "jobs": {
+            "lifetime": "TEXT NOT NULL DEFAULT ''",
+            "source_request_id": "TEXT NOT NULL DEFAULT ''",
+            "payload_hash": "TEXT NOT NULL DEFAULT ''",
+            "projection_json": "TEXT NOT NULL DEFAULT '{}'",
+            "hard_timeout_s": "REAL",
             "target_alias": "TEXT NOT NULL DEFAULT ''",
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
         },
         "remote_jobs": {
+            "source_request_id": "TEXT NOT NULL DEFAULT ''",
+            "payload_hash": "TEXT NOT NULL DEFAULT ''",
+            "proof_json": "TEXT NOT NULL DEFAULT '{}'",
             "target_alias": "TEXT NOT NULL DEFAULT ''",
             "target_workdir": "TEXT NOT NULL DEFAULT ''",
             "capabilities_json": "TEXT NOT NULL DEFAULT '[]'",
         },
+        "job_events": {"source_event_id": "TEXT NOT NULL DEFAULT ''"},
     }.items():
         columns = {row[1] for row in conn.execute("PRAGMA table_info(" + table + ")")}
         for name, declaration in additions.items():
             if name in columns:
                 continue
             try:
-                conn.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + declaration)
+                conn.execute(
+                    "ALTER TABLE " + table + " ADD COLUMN " + name + " " + declaration
+                )
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
     # Row backfills belong to migrate_remote_targets; dry-run reports
     # candidates without mutating user data.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_job_request "
+        "ON remote_jobs(source_request_id) WHERE source_request_id != ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_request "
+        "ON jobs(session_id,source_request_id) WHERE source_request_id != ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_source_event "
+        "ON job_events(job_id,source_event_id) WHERE source_event_id != ''"
+    )
     conn.commit()
-
 
 
 def _create_private(path: str) -> bool:
@@ -437,7 +515,9 @@ def _create_private(path: str) -> bool:
     :returns: ``True`` when this call created the file.
     """
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE)
+        descriptor = os.open(
+            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE
+        )
     except FileExistsError:
         return False
     os.close(descriptor)

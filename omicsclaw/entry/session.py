@@ -42,8 +42,11 @@ until the day it becomes SQLite. So the registry, which is the side that
 the same reason :meth:`InMemorySessionStore.save` suspends once on
 purpose.
 
-**What is not here.** No authentication, no rate limiting, no durable
-log, no cross-process anything. A sender allowlist is
+With durable events enabled, the shared memory database records admission
+before lane execution. Restarted callers inspect that receipt and the existing
+event log; admission never grants an automatic retry of uncertain work.
+
+**What is not here.** No authentication or rate limiting. A sender allowlist is
 :class:`~omicsclaw.entry.ingress.SenderPolicy`'s, one layer out, and it
 is out there because a registry that decided who may talk to it would be
 a registry every surface had to configure identically.
@@ -53,18 +56,21 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import json
 import logging
 import re
 import time
 import uuid
 from collections import OrderedDict, deque
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping, Protocol, Sequence
+from typing import Protocol
 
 from omicsclaw.context import CompactionState
-from omicsclaw.schema import Message
 from omicsclaw.memory.turn_events import DurableTurnEventLog
+from omicsclaw.schema import Message
 
 from .assembly import AgentApp
 from .events import Terminal
@@ -328,9 +334,9 @@ class SessionRegistry:
         "_app",
         "_by_request",
         "_closed",
+        "_event_log",
         "_grace_s",
         "_handles",
-        "_event_log",
         "_lanes",
         "_sessions",
         "_store",
@@ -444,6 +450,19 @@ class SessionRegistry:
     ) -> TurnHandle:
         if self._closed:
             raise RegistryClosed("this registry is shutting down")
+        payload_hash = ""
+        if source_request_id and self._event_log is not None:
+            payload_hash = self._request_payload_hash(text, values, compaction_only)
+            prior = self._validate_request_hash(
+                session_id, source_request_id, payload_hash
+            )
+            if (
+                prior is not None
+                and (session_id, source_request_id) not in self._by_request
+            ):
+                raise SubmissionRefused(
+                    "request was already admitted; observe its durable state"
+                )
         if source_request_id:
             seen = self._by_request.get((session_id, source_request_id))
             if seen is not None:
@@ -463,9 +482,20 @@ class SessionRegistry:
                 f"waiting, which is its limit of {limit}"
             )
 
+        turn_id = new_turn_id()
+        if payload_hash:
+            receipt = self._event_log.claim_request(
+                session_id,
+                source_request_id,
+                payload_hash,
+                turn_id,
+                {"text": text, "values": values or {}, "compact": compaction_only},
+            )
+            if receipt["turn_id"] != turn_id:
+                raise SubmissionRefused("request was concurrently admitted")
         handle = TurnHandle(
             session_id=session_id,
-            turn_id=new_turn_id(),
+            turn_id=turn_id,
             text=text,
             values=values,
             ring_size=self._app.config.delta_ring_size,
@@ -501,14 +531,72 @@ class SessionRegistry:
         :class:`~omicsclaw.entry.ingress.SenderPolicy`'s and has already
         happened by the time a message reaches here.
         """
-        return await self.submit(
+        handle, _newly_admitted = await self.admit(message)
+        return handle
+
+    async def admit(
+        self, message: InboundMessage, *, compaction_only: bool = False
+    ) -> tuple[TurnHandle, bool]:
+        """Return the handle and whether this call admitted it, without suspending.
+
+        The same shared enqueue/receipt path serves every surface. A repeated
+        delivery can observe its handle without repeating entry-side policy.
+        """
+        existed = (
+            bool(message.source_request_id)
+            and (message.session_id, message.source_request_id) in self._by_request
+        )
+        handle = self._enqueue(
             message.session_id,
             message.text,
             values=message.values,
             source_request_id=message.source_request_id,
+            compaction_only=compaction_only,
         )
+        return handle, not existed
 
     # ---- observation -----------------------------------------------------
+
+    @property
+    def durable_identity(self):
+        """Stable authority/workspace identity, or None without durable capability."""
+        return self._event_log.identity if self._event_log is not None else None
+
+    def request_receipt(self, session_id: str, source_request_id: str) -> dict | None:
+        """Read admission evidence without queuing or retrying a turn."""
+        if self._event_log is None:
+            return None
+        return self._event_log.request_receipt(session_id, source_request_id)
+
+    @staticmethod
+    def _request_payload_hash(text, values, compaction_only):
+        return hashlib.sha256(
+            json.dumps(
+                {"text": text, "values": values or {}, "compact": compaction_only},
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+
+    def _validate_request_hash(self, session_id, source_request_id, payload_hash):
+        receipt = self.request_receipt(session_id, source_request_id)
+        if receipt is not None and receipt["payload_hash"] != payload_hash:
+            raise SubmissionRefused("request identity has a different payload")
+        return receipt
+
+    def validate_admitted_intent(
+        self, message: InboundMessage, *, compaction_only=False
+    ):
+        """Read the original canonical receipt without queuing or applying policy."""
+        if self._event_log is None:
+            raise SubmissionRefused("durable admission capability required")
+        return self._validate_request_hash(
+            message.session_id,
+            message.source_request_id,
+            self._request_payload_hash(message.text, message.values, compaction_only),
+        )
 
     def observe(self, turn_id: str, *, after_seq: int = 0) -> TurnObservation:
         """Open a cursor over an exchange named by id.
@@ -773,7 +861,7 @@ class SessionRegistry:
         except Exception as exc:  # noqa: BLE001 - see the docstring
             _log.exception("turn %s ended outside its own task", handle.turn_id)
             self._end_in_the_air(handle, "failed", exc)
-        except BaseException as exc:  # noqa: BLE001 - see the docstring
+        except BaseException as exc:
             _log.exception("turn %s ended on %s", handle.turn_id, type(exc).__name__)
             self._end_in_the_air(handle, "failed", exc)
             raise

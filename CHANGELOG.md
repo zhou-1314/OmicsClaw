@@ -1,6 +1,48 @@
 ## 2026-10-13 — Main integration acceptance
 
+- SSH controller work is merged for manual testing (2026-10-15): the shared stdio/model/approval path and completed scientific job recovery and execution-limit changes retain the native sandbox changes on main. Automatic dual environment preparation, complete Notebook/MCP parity and retirement of the old backend modes remain unfinished. The partial integration guide is [SSH controller](docs/engineering/2026-10-14-ssh-controller.md).
+
+
 CI provisions the R kernel used by Desktop code execution. Compaction acceptance explicitly checks EMERGENCY history write-back, and the process-entry inventory includes the offline remote-target migration command. The scripted memory check requires the next exchange to receive the précis in its user context and keeps it out of the system prompt.
+## 2026-10-15: Isolated science worker and pinned supply seams
+
+A finite scientific worker calls the original SkillApiRunner with separately verified complete skill code and resources. Form and agent admission share JobsManager, its canonical intent and approval gate, and the original external submission plane. Verified worker events and output hashes project through original job events and RunStore with stable source identity. Explicit R executable/library settings keep the scientific launch out of user-prefix library writes while legacy defaults remain available.
+
+Pinned environment supply uses the original install runner, hash-locked requirements and ABI/import checks in an owned temporary venv. A bounded lock serializes supply; ready appears only after validation of the published path, and an incomplete matching publication can be verified and resumed. Production bootstrap/configuration, original representative skills, full scheduler/multi-target contracts and final profile measurements remain Stage3 work.
+
+## 2026-10-15: Shared external job recovery and observation lifetime
+
+JobsManager admits canonical requests in the original job table and repairs missing immutable Run projections without scheduling the job again. Same-host external execution reuses RemoteExecutor through a bound native transport. Controller shutdown and observation timeout detach; explicit cancellation waits for observed exit. Original job events dedupe exit and terminal projections, and late observation cannot regress a cancellation request or confirmed terminal. Real owned-process tests cover controller SIGKILL, EOF and cancel; the scientific worker and production transport chain remain Stage3 work.
+
+## 2026-10-15: Canonical external submission and process fencing
+
+RemotePlane persists complete canonical submission intent before staging or launch. Exclusive remote sentinels and immutable process evidence let duplicate requests and lost acknowledgements observe the original handle without rewriting or submitting again. Stable input hashes and staged-byte verification precede launch. Missing or mismatched process identity cannot signal a group, cancellation acknowledgements query actual status, and terminal files require the original user, host boot and nonce. Full JobsManager lifetime/restart behavior and scientific supply remain Stage3 work.
+
+## 2026-10-15: Persistent external job metadata
+
+Job records now distinguish execution location from in-process or external lifetime, so an explicitly external job on the controller host is excluded from the old local-orphan sweep. RemoteJobStore can atomically claim a canonical submission request in its existing table, preserving the original unknown handle on repetition and refusing conflicting intent. Handles retain immutable process birth/UID/boot/group/session/nonce evidence across serialization. These are the first Stage3 storage seams; verified launch, recovery, cancellation and scientific supply remain in progress.
+
+## 2026-10-15: SSH review repairs
+
+SSH activation now fences configuration saves and opens; ordinary duplicates reuse canonical intent validation, and lost admission acknowledgements recover the original first-title CAS. Trusted Mac build records pin archive, source files and manifest together. Native secret imports read stable regular files through EOF. Public SDK clients share equivalent transport settings with a finite per-role cache and explicit close; successful proxy completions retain their original bytes.
+
+Durable write failure stops unconfirmed business frames and cancels the turn with a bounded transport diagnostic. Original-projector checkpoints in the same memory database support confirmed gap recovery; raw coverage includes TURN_END usage and all terminal subframes. Stable receipt/part pagination and streamed export remove the total-history1000-turn cap. Source logs remain retained. These repairs require a new fixed-source independent Stage2 review before Stage3.
+
+## 2026-10-14 — Shared Desktop coordination over SSH
+
+The headless controller and HTTP facade now share chat admission, workspace, health and job submission coordination. Six named model callers use Mac-owned nonsecret snapshots through the existing public SDK factories. Durable source requests and event subframes support history reconstruction after a connection or Mac cache loss. The finite SSH owner records host, user, process birth and nonce; the source manifest identifies the complete import closure without the HTTP server or scientific libraries.
+
+Desktop transport adapters expose stored jobs, runs, usage, file reads and the skill catalogue through the existing managers and stores. Missing science, Notebook, extension and multi-target capabilities are explicit until their migration stages finish. Stage2 still requires independent review; automatic environment supply, persistent external science jobs and kernels, data migration and old-mode removal remain pending.
+
+## 2026-10-14 — SSH controller cancellation and admission repair
+
+The stdio peers now revoke known in-flight calls and recognize bounded canceled-request responses without accepting arbitrary unsolicited responses. Mac fetch and stream reads stop on cancellation, timeout and EOF. Shared session admission reports whether a turn is new, so an old legal request cannot restore a later revoked permission profile or create another observer. Model reads use the remaining snapshot deadline.
+
+The Mac replaces failed HTTP diagnostic bodies with bounded status-derived errors and filters known credentials from success bytes and allowed headers before reverse RPC. Actual SDK status/retry and two-dialect Mac/OpenSSH cancellation and canary fixtures cover these boundaries. The route inventory now names chat's destructured fields and provider/Notebook payload validators. The migration remains at the Stage1 independent review gate; production configuration, caller coverage and legacy retirement remain pending.
+
+## 2026-10-14 — SSH controller feasibility slice
+
+Added a finite stdio controller over the shared application, session and job managers. Desktop Node can bridge model calls and approval events without client Python or a remote HTTP backend. Public provider factories survive binding; durable admission receipts refuse process-restart resubmission. Independent source manifests and hashed control profiles separate science execution. This is the first migration stage, not a released Desktop mode. See `docs/engineering/2026-10-14-ssh-controller.md`.
 
 ## 2026-10-13 — Hosted Notebook live apps
 
@@ -36,11 +78,41 @@ Chats can explicitly bind to a notebook and share its local Python kernel. Appro
 - TurnStream can dual-write projected wire events and recover reconnect cursors from durable storage; true retention loss remains an explicit `GAP`. Writes use an ordered async worker, ring fallback, and `flush_durable()` before a turn is awaited.
 - WorkspaceKernelBinding optionally records persistent-kernel cell lifecycle in NotebookStore with provenance and trust labels. The registry integration is a gray rollout behind `OMICSCLAW_DURABLE_TURN_EVENTS=1`.
 
+# Changelog
+
 ## 2026-10-12 — Durable notebook P0
 
 - Added additive SQLite-backed notebook cells and execution records with revision checks, session epochs, and idempotent command/execution writes.
 
-# Changelog
+## 2026-10-09 — 研究展望由 GeneBench-Pro 引出
+
+- 将研究展望扩为七页，依次说明论文背景、评测设计、诊断到行动的缺口、OmicsClaw 的研究假设及验证方案，全稿 33 页。
+- 补充论文来源与版本限制，区分定性观察和待验证机制；33 页正文、讲稿、页码核对通过，前 26 页导出 XML 与上一版一致。
+
+## 2026-10-09 — 组会研究展望拆为四页
+
+- 将研究问题、候选机制、成对任务评测与首期 Pilot 分页展开，全稿 30 页；同步讲稿并新增四页 PDF 节选。
+- 文字、讲稿与页码核对通过，导出无警告；前 26 页与上一版导出 XML 一致。
+
+## 2026-10-08 — 组会下一阶段对齐科学决策研究
+
+- 根据用户指定的研究对话重写最后一页：可回答性检查、科学错误恢复、结论稳定性，通过独立组学 Benchmark 和成对任务验证；标明为拟研究方向。
+- 更新讲稿、PDF 和完整包；27 页文字与讲稿核对通过，前 26 页导出 XML 与上一版一致。
+
+## 2026-10-08 — 组会图解版衔接背景与组件
+
+- 新增 `docs/presentations/OmicsClaw_VisualDesign_20261008/`，修复第 2、3 页衔接，以分析反馈循环引出运行支撑；重做 11 页图解，减少约 30% 的正文可编辑文字。
+- 按项目实现重绘适用的参考图，嵌入一张已标注示例数值的调用树；27 页的文字、讲稿、页码和图片嵌入检查通过。
+
+## 2026-10-08 — 组会背景补充 Harness 演进动机
+
+- 在核心设计版中新增可编辑背景图，解释模型工具调用与多步推理发展如何引出持续执行支撑，衔接 OmicsClaw 的分析需求；保留预设工作流与动态循环可组合的适用边界。
+- 当前为 27 页，更新讲稿和 PDF，页码、文字、讲稿及导出检查通过；原 26 页版本保留。
+
+## 2026-10-08 — 组会汇报收敛为 26 页核心设计
+
+- 新增 `docs/presentations/OmicsClaw_CoreDesign_20261008/`：以项目实际问题解释组件背景、机制与价值，移除教学材料对照和外围附录。
+- 交付可编辑 PPTX、逐页讲稿、PDF 预览和源码依据；26 页文字与讲稿核对通过，导出检查无警告。旧版保留。
 
 Milestones and repository decisions, newest first. The entries below the
 first one were moved here from the README's What's New section on
@@ -71,6 +143,8 @@ at a document that is not published. Plan documents are in
 
 - Testing now follows Risk-Matched Verification instead of a full run for every change (2026-10-08): [`SPEC.md`](SPEC.md#testing-risk-matched-verification) defines four levels by what a change can break, from prose-only edits that need no test run to contract, safety and release changes that need everything `Eval CI` runs. `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` point to it, and `CONTRIBUTING.md` no longer asks for `python -m pytest -v` before every contribution. `Eval CI` is unchanged and still runs on every pull request and push to `main`.
 
+- Expanded the group-meeting deck using all 20 chapters of Tony Bai's local Agent Harness tutorial (2026-10-08): 45 editable slides now explain component mechanisms, failure cases and design differences, including nine new detail pages and updated speaker notes. The deck reflects code `90a3bec3`, 83 function libraries, five CLI-only skills and opt-in module review. SVG and native PPTX checks passed without warnings; all slide text and notes match their sources. The [revised materials](docs/presentations/OmicsClaw_GroupMeeting_20261008_Harness/README.md) preserve the previous deck and distinguish tutorial examples from current implementation.
+
 - Published [Desktop v0.1.8](https://github.com/TianGzlab/OmicsClaw/releases/tag/v0.1.8) (2026-10-07): macOS, Windows and Linux x64/ARM64 builds passed CI and package checks. The release contains ten installers, matching SHA-256 checksums and `desktop-source.json` for App source `21a5f817509411d09fb56a2e5922fd7f72d32722` (Desktop request/SSE v3, interrupt v1). Module review is off by default and starts from the button below a completed reply; this needs Backend `1540fca7` or later. Both README download sections now link to v0.1.8. Mac packages have no Developer ID signature or notarization; installation on a physical Mac was not tested.
 
 - Made independent module review opt-in from Desktop (2026-10-07): each completed assistant reply in OmicsClaw-App has an Independent review button. The App loads the selected reply from its session and requests a review in a new turn. Desktop rejects `module-reviewer` unless that turn carries `module_review_requested: true`; later turns default to off. The runtime contract now reports validated analysis results before review and asks the reviewer only for findings, without automatic fixes or reruns. Acceptance still requires the user's instruction. Backend regression passed 765 tests with 5 skips; the final reviewer-description check passed 76. App route, button and stream checks passed 33 tests, and a browser test against a stand-in backend covered selection, double clicks, completion, reload and the next ordinary turn. The App's broader test and generated-type baseline failures are recorded in its `docs/PROJECT_MEMORY.md`. Both repositories need updating; no Mac installer was built or published.
@@ -88,6 +162,8 @@ at a document that is not published. Plan documents are in
 - Fixed the two failures in the remaining-modality delivery's remote CI (2026-10-07): six synthetic genomics fixtures were excluded by the large-data ignore rules, and the migrated phasing API rejected the header-only VCF accepted by its CLI contract. The fixtures now have exact-path exceptions; only phasing analysis accepts an empty table with the required columns. Public API and CLI regression checks passed locally; final acceptance is recorded in [0076](docs/plans/0076-remaining-modalities-migration.md).
 
 - Remaining-modality migration locally delivered (2026-10-07): 40 new function libraries cover bulk RNA-seq, genomics, proteomics, metabolomics and literature; XCMS remains a synthetic-only CLI and rejects real raw-MS input. The catalogue has 83 libraries and five CLI-only skills. All 41 new examples passed execution and fresh replay; legacy comparisons passed 121 checks, SDK/skill regression 1,307 and framework regression 5,815. Independent Standards and Spec reviews closed all findings. Numerical exceptions, backend limits and the unmerged branch status are recorded in [0076](docs/plans/0076-remaining-modalities-migration.md).
+
+- Added a Chinese OmicsClaw group-meeting deck (2026-10-07): 36 editable slides explain the framework, scientific skill interfaces, module replay and review, and their design limits, with speaker notes and a PDF source preview. Architecture counts are pinned to `43e9c034`; ongoing spatial migration is marked separately, and historical test counts are attributed to their delivery records. Built with an isolated ppt-master 6.6.0 installation; native export passed with no warnings. See the [presentation package](docs/presentations/OmicsClaw_GroupMeeting_20261007/README.md).
 
 - Spatial migration S1–S6 passed local acceptance (2026-10-07): all 17 spatial skills are classified as 16 function libraries and one CLI-only raw-processing skill. Checks passed for 96 public API tests, 56 recorded CLI/API comparisons, 18 example/replay checks, 1,259 SDK and dependency tests, and 5,403 framework tests. Independent Standards and Spec reviews closed three and two findings respectively, including IO boundaries, fallback diagnostics and seed handling. PASTE compatibility and unverified R, database, neural-backend and real-input cases remain explicit in [0075](docs/plans/0075-spatial-skill-migration.md); remote CI is not part of this local evidence.
 

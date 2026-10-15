@@ -40,13 +40,16 @@ travels" rule made concrete.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
 import posixpath
 import re
 import secrets
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -66,7 +69,6 @@ from .jobs import (
     KIND_NOHUP,
     KIND_SLURM,
     LOG_FILE,
-    PENDING,
     RemoteJobHandle,
     build_cancel_command,
     build_job_scripts,
@@ -76,6 +78,7 @@ from .jobs import (
     build_status_command,
     build_submit_command,
     detect_scheduler,
+    has_identity_proof,
     parse_status,
     parse_submit_output,
 )
@@ -92,6 +95,7 @@ from .ssh import (
     build_sftp_read_batch,
     build_ssh_argv,
     encode_login_script,
+    shell_quote,
     validate_host,
 )
 from .store import RemoteHostStore, RemoteJobStore
@@ -168,6 +172,11 @@ class RemoteExecutor:
         files: dict[str, str] | None = None,
         uploads: list[tuple[str, str]] | None = None,
         timeout: float = DEFAULT_SUBMIT_TIMEOUT_S,
+        request_id: str = "",
+        payload_hash: str = "",
+        expected_inputs: dict[str, tuple[str, int]] | None = None,
+        hard_timeout_s: float | None = None,
+        deadline_python: str = "",
     ) -> RemoteJobHandle:
         """Create *workdir*, upload *files* and *uploads*, start the job.
 
@@ -176,8 +185,35 @@ class RemoteExecutor:
         already exist — the caller's input files — verified to land
         inside *workdir* before anything moves.
         """
+        validate_workdir = getattr(self._spawner, "validate_workdir", None)
+        if callable(validate_workdir):
+            validate_workdir(workdir)
         kind = detect_scheduler(command, scheduler)
-        scripts = build_job_scripts(command, kind)
+        request_id = request_id or secrets.token_hex(16)
+        payload_hash = payload_hash or hashlib.sha256(command.encode()).hexdigest()
+        nonce = hashlib.sha256((request_id + "/" + payload_hash).encode()).hexdigest()[
+            :32
+        ]
+        scripts = build_job_scripts(
+            command,
+            kind,
+            hard_timeout_s=hard_timeout_s,
+            deadline_python=deadline_python,
+        )
+        if hard_timeout_s is not None and kind == KIND_NOHUP:
+            capability = await self.run(
+                shell_quote(deadline_python)
+                + " -I -c "
+                + shell_quote(
+                    "import os,signal; fd=os.pidfd_open(os.getpid(),0); signal.pidfd_send_signal(fd,0); os.close(fd)"
+                ),
+                timeout=PROBE_TIMEOUT_S,
+            )
+            if capability.exit_code:
+                raise RuntimeError("deadline_capability_unconfirmed")
+        scripts["_omicsclaw_nonce"] = nonce
+        if set(files or {}).intersection(scripts):
+            raise RemotePathRefused("job inputs cannot replace the execution wrapper")
         for local, remote in uploads or ():
             if not _inside_remote_dir(workdir, remote):
                 raise RemotePathRefused(
@@ -185,10 +221,53 @@ class RemoteExecutor:
                     f"directory {workdir!r}; dst is relative to that "
                     "directory and may not climb out of it"
                 )
+            relative_parts = posixpath.relpath(remote, workdir).split("/")
+            if any(
+                part.startswith("_omicsclaw_") or part in {"cmd.sh", "job.sh"}
+                for part in relative_parts
+            ):
+                raise RemotePathRefused("job inputs cannot replace execution evidence")
         await self.run(build_mkdir_command(workdir), timeout=UPLOAD_TIMEOUT_S)
+        intent = json.dumps(
+            {"request_id": request_id, "payload_hash": payload_hash, "kind": kind},
+            sort_keys=True,
+        )
+        claim = await self.run(
+            f"cd -- {shell_quote(workdir)} || exit 1; umask 077; "
+            "if mkdir ./_omicsclaw_submission_claim 2>/dev/null; then "
+            f"printf '%s' {shell_quote(intent)} > ./_omicsclaw_submission_claim/intent.tmp && "
+            "mv -- ./_omicsclaw_submission_claim/intent.tmp ./_omicsclaw_submission_claim/intent.json "
+            "&& printf '%s' CLAIMED; "
+            f'elif [ "$(head -c 4096 ./_omicsclaw_submission_claim/intent.json 2>/dev/null)" = {shell_quote(intent)} ]; '
+            "then printf '%s' OBSERVED; else printf '%s' CONFLICT; exit 1; fi",
+            timeout=PROBE_TIMEOUT_S,
+        )
+        template = RemoteJobHandle(
+            kind=kind,
+            host=self.host,
+            workdir=workdir,
+            request_id=request_id,
+            payload_hash=payload_hash,
+        )
+        if claim.exit_code != 0 or claim.output != "CLAIMED":
+            if claim.exit_code == 0 and claim.output == "OBSERVED":
+                return await self.recover_in(template)
+            raise RuntimeError("remote_submission_claim_unconfirmed")
         await self._upload(workdir, {**scripts, **(files or {})}, uploads)
+        for remote, (expected_hash, expected_size) in (expected_inputs or {}).items():
+            quoted = shell_quote(remote)
+            verified = await self.run(
+                f"[ -f {quoted} ] && [ ! -L {quoted} ] && "
+                f'[ "$(stat -c %s -- {quoted})" = {expected_size} ] && '
+                f"_hash=$(sha256sum -- {quoted}) && _hash=${{_hash%% *}} && "
+                f'[ "$_hash" = {shell_quote(expected_hash)} ]',
+                timeout=UPLOAD_TIMEOUT_S,
+            )
+            if verified.exit_code != 0:
+                raise RemoteTransferError("input_integrity_unconfirmed")
         outcome = await self.run(
-            build_submit_command(workdir, kind), timeout=timeout
+            build_submit_command(workdir, kind, hard_timeout_s=hard_timeout_s),
+            timeout=timeout,
         )
         number = parse_submit_output(kind, outcome.output)
         if number <= 0:
@@ -196,17 +275,116 @@ class RemoteExecutor:
                 f"submission on {self.host} produced no usable "
                 f"{'job id' if kind == KIND_SLURM else 'pgid'}: {outcome.output!r}"
             )
-        return RemoteJobHandle(
-            kind=kind,
-            host=self.host,
-            workdir=workdir,
-            job_id=str(number) if kind == KIND_SLURM else None,
-            pgid=number if kind == KIND_NOHUP else None,
-            submitted_at=time.time(),
-        )
+        if kind == KIND_SLURM:
+            recovered = await self.recover_in(replace(template, job_id=str(number)))
+            if recovered.scheduler_identity is None:
+                raise RuntimeError("scheduler_submission_identity_unconfirmed")
+            return recovered
+        recovered = await self.recover_in(template)
+        if recovered.pgid != number or recovered.process_identity is None:
+            raise RuntimeError("submission_identity_unconfirmed")
+        return recovered
+
+    async def recover_in(self, handle: RemoteJobHandle) -> RemoteJobHandle:
+        """Read immutable submission evidence without staging or launching work."""
+        if handle.kind == KIND_SLURM and handle.request_id and handle.payload_hash:
+            from .scheduler import parse_observation, probe_command
+
+            try:
+                acknowledgement = await self.run(
+                    f"cd -- {shell_quote(handle.workdir)} && "
+                    "[ -f ./_omicsclaw_scheduler_ack ] && [ ! -L ./_omicsclaw_scheduler_ack ] && "
+                    "head -c 4096 ./_omicsclaw_submission_claim/intent.json && printf '\\n' && "
+                    "head -c 4096 ./_omicsclaw_scheduler_ack",
+                    timeout=PROBE_TIMEOUT_S,
+                )
+                intent_raw, ack = acknowledgement.output.split("\n", 1)
+                if acknowledgement.exit_code or json.loads(intent_raw) != {
+                    "request_id": handle.request_id,
+                    "payload_hash": handle.payload_hash,
+                    "kind": KIND_SLURM,
+                }:
+                    return handle
+                job_id = str(parse_submit_output(KIND_SLURM, ack))
+                if job_id == "0" or handle.job_id and handle.job_id != job_id:
+                    return handle
+                output = await self.run(probe_command(job_id), timeout=PROBE_TIMEOUT_S)
+                nonce = hashlib.sha256(
+                    (handle.request_id + "/" + handle.payload_hash).encode()
+                ).hexdigest()[:32]
+                proof, _ = parse_observation(output.output, job_id=job_id, nonce=nonce)
+                if proof is not None:
+                    return replace(
+                        handle,
+                        job_id=job_id,
+                        cluster=proof["cluster"],
+                        scheduler_identity=proof,
+                        submitted_at=handle.submitted_at or time.time(),
+                    )
+            except (RemoteHostUnreachable, ValueError, TypeError):
+                return handle
+            return handle
+        if (
+            handle.kind != KIND_NOHUP
+            or not handle.request_id
+            or not handle.payload_hash
+        ):
+            return handle
+        try:
+            outcome = await self.run(
+                f"cd -- {shell_quote(handle.workdir)} && "
+                "head -c 4096 ./_omicsclaw_submission_claim/intent.json && printf '\\n' && "
+                "head -c 4096 ./_omicsclaw_process.json",
+                timeout=PROBE_TIMEOUT_S,
+            )
+        except RemoteHostUnreachable:
+            return handle
+        if outcome.exit_code != 0:
+            return handle
+        try:
+            raw_intent, raw_proof = outcome.output.split("\n", 1)
+            intent, proof = json.loads(raw_intent), json.loads(raw_proof)
+            if intent != {
+                "request_id": handle.request_id,
+                "payload_hash": handle.payload_hash,
+                "kind": handle.kind,
+            }:
+                return handle
+            nonce = hashlib.sha256(
+                (handle.request_id + "/" + handle.payload_hash).encode()
+            ).hexdigest()[:32]
+            if not isinstance(proof, dict) or proof.get("nonce") != nonce:
+                return handle
+            return replace(handle, pgid=proof.get("pgid"), process_identity=proof)
+        except (ValueError, TypeError):
+            return handle
 
     async def status(self, handle: RemoteJobHandle) -> StatusReport:
         """Ask the host; an unreachable host answers ``unknown``, not an error."""
+        if not has_identity_proof(handle) or handle.host != self.host:
+            return StatusReport(state="unknown", detail="unverified_process_identity")
+        if handle.kind == KIND_SLURM:
+            from .scheduler import parse_observation, probe_command
+
+            try:
+                outcome = await self.run(
+                    probe_command(handle.job_id, handle.cluster),
+                    timeout=PROBE_TIMEOUT_S,
+                )
+            except RemoteHostUnreachable:
+                return StatusReport(detail="scheduler_unreachable")
+            _, report = parse_observation(
+                outcome.output,
+                job_id=handle.job_id,
+                nonce=handle.scheduler_identity["nonce"],
+                expected=handle.scheduler_identity,
+            )
+            return replace(
+                report,
+                identity_digest=handle.proof_digest()
+                if report.identity_verified
+                else "",
+            )
         try:
             outcome = await self.run(
                 build_status_command(handle), timeout=PROBE_TIMEOUT_S
@@ -215,27 +393,52 @@ class RemoteExecutor:
             return StatusReport(state="unknown", detail=str(exc))
         state, exit_code = parse_status(handle.kind, outcome.output)
         detail = outcome.output.strip()[:200]
-        return StatusReport(state=state, exit_code=exit_code, detail=detail)
+        started = re.search(
+            r"^__OMICSCLAW_STARTED_AT__=([0-9]+\.[0-9]{6})$",
+            outcome.output,
+            re.MULTILINE,
+        )
+        return StatusReport(
+            state=state,
+            exit_code=exit_code,
+            detail=detail,
+            identity_verified=state != "unknown",
+            identity_digest=handle.proof_digest() if state != "unknown" else "",
+            started_at=float(started.group(1))
+            if started and state != "unknown"
+            else None,
+        )
 
     async def cancel(self, handle: RemoteJobHandle) -> StatusReport:
         """Stop the job; report what the host said, not what we hoped."""
+        if not has_identity_proof(handle) or handle.host != self.host:
+            return StatusReport(state="unknown", detail="unverified_process_identity")
+        if handle.kind == KIND_SLURM:
+            from .scheduler import cancel_command
+
+            report = await self.status(handle)
+            if not report.identity_verified or report.state not in {
+                "pending",
+                "running",
+            }:
+                return report
+            command = cancel_command(handle.scheduler_identity)
+        else:
+            command = build_cancel_command(handle)
         try:
-            outcome = await self.run(
-                build_cancel_command(handle), timeout=PROBE_TIMEOUT_S
-            )
+            outcome = await self.run(command, timeout=PROBE_TIMEOUT_S)
         except RemoteHostUnreachable as exc:
             return StatusReport(state="unknown", detail=str(exc))
-        return StatusReport(
-            state="canceled" if outcome.exit_code == 0 else "unknown",
-            detail=outcome.output.strip()[:200],
-        )
+        if outcome.exit_code != 0:
+            return StatusReport(
+                state="unknown", detail="cancel_identity_or_signal_unconfirmed"
+            )
+        return await self.status(handle)
 
     async def sizes(self, workdir: str, names: list[str]) -> list[int]:
         """Byte sizes of *names* under *workdir*; ``-1`` where unknown."""
         paths = [remote_join(workdir, name) for name in names]
-        outcome = await self.run(
-            build_size_command(paths), timeout=PROBE_TIMEOUT_S
-        )
+        outcome = await self.run(build_size_command(paths), timeout=PROBE_TIMEOUT_S)
         sizes: list[int] = []
         for line in outcome.output.strip().splitlines():
             token = line.strip()
@@ -254,14 +457,18 @@ class RemoteExecutor:
         )
         return outcome.output
 
-    async def list_tree(self, root: str, *, depth: int, boundary: str) -> tuple[list[dict[str, Any]], bool]:
+    async def list_tree(
+        self, root: str, *, depth: int, boundary: str
+    ) -> tuple[list[dict[str, Any]], bool]:
         """List regular files and directories through read-only SFTP."""
         boundary_real = await self._sftp_realpath(boundary)
         if not await self._sftp_is_directory(boundary):
             raise RemotePathRefused(f"target boundary {boundary!r} is not a directory")
         root_real = await self._sftp_realpath(root)
         if not _inside_remote_dir(boundary_real, root_real):
-            raise RemotePathRefused(f"target path {root!r} escapes boundary {boundary!r}")
+            raise RemotePathRefused(
+                f"target path {root!r} escapes boundary {boundary!r}"
+            )
         if not await self._sftp_is_directory(root):
             raise RemotePathRefused(f"cannot list target path {root!r}")
 
@@ -294,7 +501,9 @@ class RemoteExecutor:
             raise RemotePathRefused(f"target boundary {boundary!r} is not a directory")
         candidate_real = await self._sftp_realpath(path)
         if not _inside_remote_dir(boundary_real, candidate_real):
-            raise RemotePathRefused(f"cannot read target file {path!r}: outside boundary")
+            raise RemotePathRefused(
+                f"cannot read target file {path!r}: outside boundary"
+            )
         metadata = await self._sftp_lstat(path)
         if metadata["type"] != "file":
             raise RemotePathRefused(f"cannot read target file {path!r}")
@@ -325,16 +534,25 @@ class RemoteExecutor:
         if total_size > REMOTE_FILE_PREVIEW_MAX_BYTES:
             raise ValueError("preview_too_large")
         from .ssh import sftp_quote
-        with tempfile.NamedTemporaryFile(prefix="omicsclaw-preview-", delete=False) as sink:
+
+        with tempfile.NamedTemporaryFile(
+            prefix="omicsclaw-preview-", delete=False
+        ) as sink:
             local = sink.name
         try:
             await self._sftp(
-                build_sftp_read_batch([f"get -- {sftp_quote(path)} {sftp_quote(local)}"]),
+                build_sftp_read_batch(
+                    [f"get -- {sftp_quote(path)} {sftp_quote(local)}"]
+                ),
                 PROBE_TIMEOUT_S,
             )
-            with open(local, "rb") as source:
-                source.seek(start)
-                return source.read(max_bytes)
+
+            def read_range():
+                with Path(local).open("rb") as source:
+                    source.seek(start)
+                    return source.read(max_bytes)
+
+            return await asyncio.to_thread(read_range)
         finally:
             try:
                 Path(local).unlink()
@@ -355,6 +573,7 @@ class RemoteExecutor:
 
     async def _sftp_realpath(self, path: str) -> str:
         from .ssh import sftp_quote
+
         output = await self._sftp_request([f"realpath {sftp_quote(path)}"])
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if not lines:
@@ -363,19 +582,20 @@ class RemoteExecutor:
 
     async def _sftp_listing(self, path: str) -> list[dict[str, Any]]:
         from .ssh import sftp_quote
+
         output = await self._sftp_request([f"ls -ln {sftp_quote(path)}"])
         result = []
         for line in output.splitlines():
             parsed = _parse_sftp_listing_line(line)
             if parsed is not None:
                 prefix = path.rstrip("/") + "/"
-                if parsed["name"].startswith(prefix):
-                    parsed["name"] = parsed["name"][len(prefix) :]
+                parsed["name"] = parsed["name"].removeprefix(prefix)
                 result.append(parsed)
         return result
 
     async def _sftp_lstat(self, path: str) -> dict[str, Any]:
         from .ssh import sftp_quote
+
         output = await self._sftp_request([f"ls -ldn {sftp_quote(path)}"])
         for line in output.splitlines():
             parsed = _parse_sftp_listing_line(line)
@@ -402,9 +622,42 @@ class RemoteExecutor:
         """Write *files* locally, then push them — and *uploads* — in one
         SFTP batch. A batch that does not exit zero is a failed upload,
         not a silent one."""
+        directories = set()
+        for _, remote in uploads or ():
+            parts = posixpath.relpath(remote, workdir).split("/")[:-1]
+            for depth in range(1, len(parts) + 1):
+                directories.add("/".join(parts[:depth]))
+        if len(directories) > 256:
+            raise RemotePathRefused("input_directory_budget")
+        if directories:
+            commands = [
+                f"cd -- {shell_quote(workdir)} || exit 1",
+                "umask 077",
+                "_root=$(pwd -P)",
+                "_uid=$(id -u)",
+            ]
+            for directory in sorted(
+                directories, key=lambda value: (value.count("/"), value)
+            ):
+                quoted = shell_quote("./" + directory)
+                commands.append(
+                    f"if [ ! -e {quoted} ]; then mkdir -m 700 -- {quoted} || exit 1; fi"
+                )
+                commands.append(
+                    f"[ -d {quoted} ] && [ ! -L {quoted} ] && "
+                    f'[ "$(stat -c %u -- {quoted})" = "$_uid" ] && '
+                    f'[ "$(realpath -- {quoted})" = "$_root/"{shell_quote(directory)} ] || exit 1'
+                )
+            command = "; ".join(commands)
+            if len(command.encode()) > 128 * 1024:
+                raise RemotePathRefused("input_directory_command_budget")
+            result = await self.run(command, timeout=UPLOAD_TIMEOUT_S)
+            if result.exit_code:
+                raise RemotePathRefused("input_directory_identity_unconfirmed")
         pairs: list[tuple[str, str]] = []
         with tempfile.TemporaryDirectory(
-            prefix=f"omicsclaw-upload-{secrets.token_hex(4)}-"
+            prefix=f"omicsclaw-upload-{secrets.token_hex(4)}-",
+            dir=getattr(self._spawner, "staging_root", None),
         ) as staging:
             for name, content in files.items():
                 local = Path(staging) / name
@@ -439,6 +692,41 @@ class RemoteExecutor:
             raise RemoteTransferError(
                 f"sftp on {self.host} exited {outcome.exit_code}: {tail}"
             )
+
+
+def _submission_input_evidence(pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Hash bounded stable files; the staged bytes must match before launch."""
+    evidence = []
+    total = 0
+    destinations = set()
+    for local, destination in pairs:
+        if destination in destinations:
+            raise RemotePathRefused("duplicate_input_destination")
+        destinations.add(destination)
+        digest = hashlib.sha256()
+        size = 0
+        with Path(local).open("rb") as stream:
+            before = os.fstat(stream.fileno())
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                size += len(chunk)
+                total += len(chunk)
+                if size > MAX_INPUT_FILE_BYTES or total > MAX_INPUT_TOTAL_BYTES:
+                    raise RemotePathRefused("submission_input_budget_exceeded")
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+        current = Path(local).stat()
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        identity = tuple(getattr(before, key) for key in fields)
+        if (
+            size != before.st_size
+            or identity != tuple(getattr(after, key) for key in fields)
+            or identity != tuple(getattr(current, key) for key in fields)
+        ):
+            raise RemoteTransferError("submission_input_changed")
+        evidence.append(
+            {"destination": destination, "sha256": digest.hexdigest(), "size": size}
+        )
+    return evidence
 
 
 _SFTP_LONG_RE = re.compile(
@@ -559,9 +847,7 @@ class RemotePlaneBinding:
 
     async def exec(self, host: str, command: str, timeout: float) -> ExecOutcome:
         validate_host(host)
-        return await RemoteExecutor(host, self._spawner).run(
-            command, timeout=timeout
-        )
+        return await RemoteExecutor(host, self._spawner).run(command, timeout=timeout)
 
     async def submit(
         self,
@@ -575,46 +861,129 @@ class RemotePlaneBinding:
         label: str = "",
         local_job_id: str = "",
         target_workdir: str = "",
+        request_id: str = "",
+        supplied_files: dict[str, str] | None = None,
+        hard_timeout_s: float | None = None,
+        deadline_python: str = "",
     ) -> SubmitOutcome:
         validate_host(host)
+        from .jobs import validate_hard_timeout
+
+        hard_timeout_s = validate_hard_timeout(hard_timeout_s)
         resolved_inputs = self._resolve_inputs(inputs)
         executor = RemoteExecutor(host, self._spawner)
+        request_id = request_id or (
+            "job:" + local_job_id if local_job_id else secrets.token_hex(16)
+        )
+        original = self._jobs.by_request(request_id)
         workdir = target_workdir.strip()
+        if not workdir and original is not None:
+            workdir = original.workdir
         if not workdir:
             probe = await self._probe_into_store(executor, host)
             workdir = remote_join(
                 probe.scratch_root(),
-                "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
+                "omicsclaw/"
+                + time.strftime("%Y%m%d-%H%M%S")
+                + "-"
+                + secrets.token_hex(3),
             )
-        uploads = [
-            (local, remote_join(workdir, dst)) for local, dst in resolved_inputs
-        ]
+        uploads = [(local, remote_join(workdir, dst)) for local, dst in resolved_inputs]
         files: dict[str, str] = {}
+        for name, content in (supplied_files or {}).items():
+            if (
+                not isinstance(name, str)
+                or "/" in name
+                or "\\" in name
+                or name in {"", ".", "..", OUTPUTS_FILE}
+                or not isinstance(content, str)
+            ):
+                raise RemotePathRefused("invalid_supplied_job_file")
+            files[name] = content
+        if sum(len(value.encode()) for value in files.values()) > 2 * 1024 * 1024:
+            raise RemotePathRefused("supplied_job_file_budget")
         if outputs:
             files[OUTPUTS_FILE] = "\n".join(outputs) + "\n"
-        handle = await executor.submit_in(
-            workdir,
-            command,
-            scheduler=scheduler,
-            files=files,
-            uploads=uploads,
-            timeout=timeout,
+        input_evidence = await asyncio.to_thread(
+            _submission_input_evidence, resolved_inputs
         )
-        handle = RemoteJobHandle(
-            kind=handle.kind,
-            host=handle.host,
-            workdir=handle.workdir,
-            job_id=handle.job_id,
-            pgid=handle.pgid,
-           submitted_at=handle.submitted_at,
-           local_job_id=local_job_id,
+        canonical = {
+            "host": host,
+            "command": command,
+            "inputs": input_evidence,
+            "outputs": outputs,
+            "scheduler": scheduler,
+            "timeout": timeout,
+            "label": label,
+            "local_job_id": local_job_id,
+            "workdir": workdir,
+        }
+        if supplied_files:
+            canonical["files"] = {
+                name: hashlib.sha256(content.encode()).hexdigest()
+                for name, content in sorted(supplied_files.items())
+            }
+        if hard_timeout_s is not None:
+            canonical["hard_timeout_s"] = hard_timeout_s
+            canonical["deadline_python"] = deadline_python
+        payload_hash = hashlib.sha256(
+            json.dumps(
+                canonical,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        unbound = RemoteJobHandle(
+            kind=detect_scheduler(command, scheduler),
+            host=host,
+            workdir=workdir,
+            local_job_id=local_job_id,
             target_alias=host,
             target_workdir=workdir,
             capabilities=("remote_exec", "remote_submit"),
-       )
-        row_id = self._jobs.record(handle, status=PENDING)
+        )
+        row = self._jobs.claim_submission(request_id, payload_hash, unbound)
+        handle = row.handle()
+        if row.newly_claimed:
+            launched = await executor.submit_in(
+                workdir,
+                command,
+                scheduler=scheduler,
+                files=files,
+                uploads=uploads,
+                timeout=timeout,
+                request_id=request_id,
+                payload_hash=payload_hash,
+                expected_inputs={
+                    remote_join(workdir, item["destination"]): (
+                        item["sha256"],
+                        item["size"],
+                    )
+                    for item in input_evidence
+                },
+                hard_timeout_s=hard_timeout_s,
+                deadline_python=deadline_python,
+            )
+            handle = replace(
+                launched,
+                local_job_id=local_job_id,
+                target_alias=host,
+                target_workdir=workdir,
+                capabilities=unbound.capabilities,
+            )
+        elif handle.pgid is None and handle.job_id is None:
+            handle = await executor.recover_in(handle)
+        if handle.process_identity is not None or handle.job_id is not None:
+            row = self._jobs.bind_submission(row.id, handle)
+        return self._submission_outcome(row)
+
+    @staticmethod
+    def _submission_outcome(row) -> SubmitOutcome:
+        handle = row.handle()
         return SubmitOutcome(
-            job_ref=str(row_id),
+            job_ref=str(row.id),
             kind=handle.kind,
             job_id=handle.job_id,
             pgid=handle.pgid,
@@ -628,6 +997,7 @@ class RemotePlaneBinding:
         alias: str,
         *,
         capabilities: tuple[str, ...] = ("remote_exec", "remote_submit"),
+        target_root: str = "",
     ) -> TargetSnapshot:
         """Resolve a target once, including the workdir used by its job.
 
@@ -636,10 +1006,15 @@ class RemotePlaneBinding:
         configuration after a job has been created.
         """
         validate_host(alias)
+        validate_workdir = getattr(self._spawner, "validate_workdir", None)
+        if target_root and callable(validate_workdir):
+            validate_workdir(target_root)
         executor = RemoteExecutor(alias, self._spawner)
-        probe = await self._probe_into_store(executor, alias)
+        probe = (
+            await self._probe_into_store(executor, alias) if not target_root else None
+        )
         workdir = remote_join(
-            probe.scratch_root(),
+            target_root or probe.scratch_root(),
             "omicsclaw/" + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3),
         )
         return TargetSnapshot(alias, workdir, tuple(capabilities))
@@ -650,15 +1025,22 @@ class RemotePlaneBinding:
             return StatusReport(
                 state="unknown", detail="no such job_ref", job_ref=job_ref
             )
-        report = await RemoteExecutor(row.host_alias, self._spawner).status(
-            row.handle()
-        )
+        executor = RemoteExecutor(row.host_alias, self._spawner)
+        handle = row.handle()
+        if row.source_request_id and handle.pgid is None and handle.job_id is None:
+            handle = await executor.recover_in(handle)
+            if has_identity_proof(handle):
+                row = self._jobs.bind_submission(row.id, handle)
+        report = await executor.status(row.handle())
         self._jobs.update_status(row.id, report.state)
         return StatusReport(
             state=report.state,
             exit_code=report.exit_code,
             detail=report.detail,
             job_ref=job_ref,
+            identity_verified=report.identity_verified,
+            identity_digest=report.identity_digest,
+            started_at=report.started_at,
         )
 
     async def cancel(self, job_ref: str) -> StatusReport:
@@ -672,7 +1054,12 @@ class RemotePlaneBinding:
         )
         self._jobs.update_status(row.id, report.state)
         return StatusReport(
-            state=report.state, detail=report.detail, job_ref=job_ref
+            state=report.state,
+            detail=report.detail,
+            exit_code=report.exit_code,
+            job_ref=job_ref,
+            identity_verified=report.identity_verified,
+            identity_digest=report.identity_digest,
         )
 
     async def fetch(
@@ -697,9 +1084,7 @@ class RemotePlaneBinding:
             )
         executor = RemoteExecutor(host, self._spawner)
         sizes = await executor.sizes(workdir, names)
-        missing = [
-            name for name, size in zip(names, sizes) if size is None or size < 0
-        ]
+        missing = [name for name, size in zip(names, sizes) if size is None or size < 0]
         if missing:
             # A size the host could not answer means the file is not
             # there (or not stat-able); downloading anyway would either
@@ -773,10 +1158,14 @@ class RemotePlaneBinding:
         if card is None:
             raise KeyError(alias)
         if card.parse_error:
-            raise RemotePathRefused("remote_files_unsupported: host probe is incomplete")
+            raise RemotePathRefused(
+                "remote_files_unsupported: host probe is incomplete"
+            )
         scratch = card.scratch_root or ""
         if not scratch or scratch in {"~", ".", "./"}:
-            raise RemotePathRefused("workdir_unavailable: probe did not return an absolute scratch root")
+            raise RemotePathRefused(
+                "workdir_unavailable: probe did not return an absolute scratch root"
+            )
         root = workdir.strip() or scratch
         if not _inside_remote_dir(scratch, root):
             raise RemotePathRefused(
@@ -793,11 +1182,19 @@ class RemotePlaneBinding:
             raise RemotePathRefused(
                 f"target path {path!r} escapes the target workdir {root!r}"
             )
-        entries, has_more = await self.executor_for(alias).list_tree(candidate, boundary=root, depth=depth)
+        entries, has_more = await self.executor_for(alias).list_tree(
+            candidate, boundary=root, depth=depth
+        )
         return root, entries, has_more
 
     async def read_target_file(
-        self, alias: str, *, workdir: str = "", path: str = "", start: int = 0, count: int | None = None
+        self,
+        alias: str,
+        *,
+        workdir: str = "",
+        path: str = "",
+        start: int = 0,
+        count: int | None = None,
     ) -> tuple[str, bytes, int]:
         root = self.target_root(alias, workdir)
         candidate = remote_join(root, path)
@@ -813,15 +1210,21 @@ class RemotePlaneBinding:
             count = total - start
         if count < 0 or count > REMOTE_FILE_PREVIEW_MAX_BYTES:
             raise ValueError("target preview range exceeds the hard byte limit")
-        content = await executor.read_bytes(candidate, boundary=root, start=start, max_bytes=count)
+        content = await executor.read_bytes(
+            candidate, boundary=root, start=start, max_bytes=count
+        )
         return root, content, total
 
-    async def stat_target_file(self, alias: str, *, workdir: str = "", path: str = "") -> tuple[str, int]:
+    async def stat_target_file(
+        self, alias: str, *, workdir: str = "", path: str = ""
+    ) -> tuple[str, int]:
         """Stat one target file without reading any bytes (serve preflight)."""
         root = self.target_root(alias, workdir)
         candidate = remote_join(root, path)
         if not _inside_remote_dir(root, candidate) or candidate == root:
-            raise RemotePathRefused(f"target file path {path!r} is outside the target workdir {root!r}")
+            raise RemotePathRefused(
+                f"target file path {path!r} is outside the target workdir {root!r}"
+            )
         return root, await self.executor_for(alias).stat_file(candidate, boundary=root)
 
     def list_host_cards(self) -> list[HostCard]:
@@ -832,10 +1235,7 @@ class RemotePlaneBinding:
         opens a socket on an event loop's behalf — the same line
         :meth:`host_card` draws.
         """
-        return [
-            self._card_from_record(record)
-            for record in self._hosts.list_records()
-        ]
+        return [self._card_from_record(record) for record in self._hosts.list_records()]
 
     def executor_for(self, host_alias: str) -> RemoteExecutor:
         """An executor for a stored alias; the reconciler's transport."""
@@ -870,7 +1270,7 @@ class RemotePlaneBinding:
         for src, dst in inputs:
             root = self._workspace
             candidate = Path(src)
-            local = (candidate if candidate.is_absolute() else root / candidate)
+            local = candidate if candidate.is_absolute() else root / candidate
             local = local.resolve()
             if local != root and root not in local.parents:
                 raise RemotePathRefused(
@@ -909,11 +1309,7 @@ class RemotePlaneBinding:
             # instead of refused. The prefix assertion in submit_in is
             # the second lock; this one keeps the first lock honest.
             normalized_dst = posixpath.normpath(dst)
-            if (
-                normalized_dst.startswith("/")
-                or normalized_dst == ".."
-                or normalized_dst.startswith("../")
-            ):
+            if normalized_dst.startswith(("/", "../")) or normalized_dst == "..":
                 raise RemotePathRefused(
                     f"input dst {dst!r} is not a name inside the job's "
                     "work directory; it may not be absolute and may not "
@@ -938,7 +1334,7 @@ class RemotePlaneBinding:
             )
         root = self._workspace
         candidate = Path(dest)
-        local = (candidate if candidate.is_absolute() else root / candidate)
+        local = candidate if candidate.is_absolute() else root / candidate
         local = local.resolve()
         if local != root and root not in local.parents:
             raise RemotePathRefused(
@@ -947,9 +1343,7 @@ class RemotePlaneBinding:
             )
         return local
 
-    async def _probe_into_store(
-        self, executor: RemoteExecutor, host: str
-    ) -> HostProbe:
+    async def _probe_into_store(self, executor: RemoteExecutor, host: str) -> HostProbe:
         record = self._hosts.get(host)
         if record is not None:
             probe = _probe_from_json(record.probed_json)
@@ -989,7 +1383,7 @@ class RemotePlaneBinding:
         """
         text = source.strip()
         if text.startswith("remote://"):
-            rest = text[len("remote://"):]
+            rest = text[len("remote://") :]
             host, _, path = rest.partition("/")
             if not valid_host(host) or not path:
                 raise RemoteHostRefused(
@@ -1002,13 +1396,9 @@ class RemotePlaneBinding:
             if row is not None:
                 handle = row.handle()
                 executor = self.executor_for(row.host_alias)
-                listed = await executor.read_relative(
-                    handle.workdir, OUTPUTS_FILE
-                )
+                listed = await executor.read_relative(handle.workdir, OUTPUTS_FILE)
                 names = [
-                    line.strip()
-                    for line in listed.splitlines()
-                    if line.strip()
+                    line.strip() for line in listed.splitlines() if line.strip()
                 ] or [LOG_FILE]
                 return row.host_alias, handle.workdir, names
         return "", "", []
@@ -1029,9 +1419,9 @@ __all__ = [
     "FETCH_TIMEOUT_S",
     "OUTPUTS_FILE",
     "PROBE_TIMEOUT_S",
+    "UPLOAD_TIMEOUT_S",
     "RemoteExecutor",
     "RemotePlaneBinding",
     "TargetSnapshot",
-    "UPLOAD_TIMEOUT_S",
     "remote_join",
 ]

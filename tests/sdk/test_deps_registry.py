@@ -22,9 +22,7 @@ import subprocess
 
 import pytest
 
-from skills._sdk import deps
-from skills._sdk import external_env
-from skills._sdk import r_script_runner
+from skills._sdk import deps, external_env, r_script_runner
 from tests.sdk._scan import REPO_ROOT, is_test_path, python_files
 
 DEPS_PATH = REPO_ROOT / "skills" / "_sdk" / "deps.py"
@@ -43,16 +41,51 @@ def _norm(name: str) -> str:
 def _literal():
     tree = ast.parse(DEPS_PATH.read_text(encoding="utf-8"))
     for node in tree.body:
-        target = node.target if isinstance(node, ast.AnnAssign) else (
-            node.targets[0] if isinstance(node, ast.Assign) else None)
+        target = (
+            node.target
+            if isinstance(node, ast.AnnAssign)
+            else (node.targets[0] if isinstance(node, ast.Assign) else None)
+        )
         if isinstance(target, ast.Name) and target.id == "DEPENDENCIES":
-            assert isinstance(node, ast.AnnAssign), "DEPENDENCIES must be an annotated assignment"
+            assert isinstance(node, ast.AnnAssign), (
+                "DEPENDENCIES must be an annotated assignment"
+            )
             return ast.literal_eval(node.value)
     raise AssertionError("no DEPENDENCIES assignment")
 
 
 def test_the_registry_is_a_literal_equal_to_the_import():
     assert _literal() == deps.DEPENDENCIES
+
+
+def test_explicit_r_interpreter_is_the_only_dependency_probe_candidate(
+    tmp_path, monkeypatch
+):
+    selected = tmp_path / "science-Rscript"
+    selected.write_text("owned probe fixture")
+    monkeypatch.setenv("OMICSCLAW_RSCRIPT", str(selected))
+    calls = []
+
+    def probe(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="Rscript selected", stderr=""
+        )
+
+    monkeypatch.setattr(deps.subprocess, "run", probe)
+    assert deps._check_r_available() and calls == [[str(selected), "--version"]]
+
+
+def test_unavailable_explicit_r_does_not_probe_a_different_environment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OMICSCLAW_RSCRIPT", str(tmp_path / "missing-Rscript"))
+
+    def wrong_environment(*args, **kwargs):
+        raise AssertionError("explicit missing R must not fall back")
+
+    monkeypatch.setattr(deps.subprocess, "run", wrong_environment)
+    assert deps._check_r_available() is False
 
 
 def test_size_keys_and_uniqueness():
@@ -82,16 +115,34 @@ def test_every_entry_follows_the_field_contract():
         assert value["kind"] in {"pip", "git", "r"}, key
         assert all(isinstance(value[f], str) and value[f] for f in REQUIRED_FIELDS), key
         if "also" in value:
-            assert isinstance(value["also"], list) and all(isinstance(x, str) for x in value["also"])
+            assert isinstance(value["also"], list) and all(
+                isinstance(x, str) for x in value["also"]
+            )
         if value["kind"] == "pip":
-            assert value["install"] == "pip install " + " ".join([key, *value.get("also", [])]), key
+            assert value["install"] == "pip install " + " ".join(
+                [key, *value.get("also", [])]
+            ), key
         assert '-e ".[' not in value["install"], key
 
 
 def test_the_special_entries_are_exactly_these():
     table = deps.DEPENDENCIES
-    assert {k for k, v in table.items() if v["kind"] == "git"} == {"STAGATE-pyG", "pybanksy", "STalign"}
-    assert {k for k, v in table.items() if v["kind"] == "r"} == {"xcms", "metaboanalyst", "Matrix", "numbat", "CellChat", "DESeq2", "sva", "survival", "WGCNA"}
+    assert {k for k, v in table.items() if v["kind"] == "git"} == {
+        "STAGATE-pyG",
+        "pybanksy",
+        "STalign",
+    }
+    assert {k for k, v in table.items() if v["kind"] == "r"} == {
+        "xcms",
+        "metaboanalyst",
+        "Matrix",
+        "numbat",
+        "CellChat",
+        "DESeq2",
+        "sva",
+        "survival",
+        "WGCNA",
+    }
     assert {k for k, v in table.items() if "also" in v} == {"singler"}
     assert table["singler"]["also"] == ["singlecellexperiment"]
     assert {k for k, v in table.items() if "alt_env" in v} == {"pybanksy"}
@@ -124,18 +175,30 @@ def _call_names() -> set[str]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         aliases, direct = {"dm", "sc_dep_manager"}, set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "skills._sdk" and node.level == 0:
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "skills._sdk"
+                and node.level == 0
+            ):
                 aliases |= {a.asname or a.name for a in node.names if a.name == "deps"}
             elif isinstance(node, ast.ImportFrom) and node.module == "skills._sdk.deps":
                 direct |= {a.asname or a.name for a in node.names}
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, str)):
+            if not (
+                isinstance(node, ast.Call)
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
                 continue
             f = node.func
-            if isinstance(f, ast.Name) and (f.id in API or f.id in direct):
-                names.add(node.args[0].value)
-            elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in aliases:
+            if (
+                isinstance(f, ast.Name)
+                and (f.id in API or f.id in direct)
+                or isinstance(f, ast.Attribute)
+                and isinstance(f.value, ast.Name)
+                and f.value.id in aliases
+            ):
                 names.add(node.args[0].value)
     return names
 
@@ -170,7 +233,9 @@ def test_r_entries_are_probed_through_rscript(monkeypatch):
     missing: list[str] = []
     monkeypatch.setattr(deps, "_check_r_available", lambda: True)
     monkeypatch.setattr(
-        r_script_runner.RScriptRunner, "get_missing_packages", lambda self, pkgs: list(missing)
+        r_script_runner.RScriptRunner,
+        "get_missing_packages",
+        lambda self, pkgs: list(missing),
     )
     _fresh_caches()
     assert deps.is_available("xcms") is True
@@ -203,7 +268,9 @@ def test_r_entries_have_no_python_module():
     [(lambda env: True, True), (lambda env: False, False), ("raise", False)],
     ids=["env-present", "env-absent", "env-probe-raises"],
 )
-def test_alt_env_is_consulted_when_the_module_is_missing(monkeypatch, env_answer, expected):
+def test_alt_env_is_consulted_when_the_module_is_missing(
+    monkeypatch, env_answer, expected
+):
     asked: list[str] = []
 
     def probe(env):
@@ -220,4 +287,6 @@ def test_alt_env_is_consulted_when_the_module_is_missing(monkeypatch, env_answer
 
 def test_the_four_domain_managers_are_gone():
     for domain in ("spatial", "singlecell", "proteomics", "metabolomics"):
-        assert not (REPO_ROOT / "skills" / domain / "_lib" / "dependency_manager.py").exists()
+        assert not (
+            REPO_ROOT / "skills" / domain / "_lib" / "dependency_manager.py"
+        ).exists()

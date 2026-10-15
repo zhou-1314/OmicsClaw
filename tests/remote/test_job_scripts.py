@@ -79,6 +79,44 @@ class TestJobScripts:
         assert files["job.sh"].startswith("#!/usr/bin/env bash\n")
 
 
+def _verified_nohup(pgid):
+    return RemoteJobHandle(
+        kind=KIND_NOHUP,
+        host="h",
+        workdir="/w",
+        pgid=pgid,
+        process_identity={
+            "uid": 1000,
+            "host_id": "fixture",
+            "boot_id": "b" * 32,
+            "pid": pgid,
+            "start_ticks": 123,
+            "pgid": pgid,
+            "sid": pgid,
+            "nonce": "c" * 32,
+        },
+    )
+
+
+def _verified_slurm(job_id):
+    # Complete simulated scheduler proof; no Linux process identity is used.
+    return RemoteJobHandle(
+        kind=KIND_SLURM,
+        host="h",
+        workdir="/w",
+        job_id=job_id,
+        cluster="fixture",
+        scheduler_identity={
+            "uid": 1000,
+            "user": "owner",
+            "cluster": "fixture",
+            "job_id": job_id,
+            "submit_time": "2026-10-15T10:00:00",
+            "nonce": "c" * 32,
+        },
+    )
+
+
 class TestCommands:
     def test_mkdir_is_700_and_refuses_odd_arguments(self):
         command = build_mkdir_command("/scratch/my dir")
@@ -88,7 +126,9 @@ class TestCommands:
 
     def test_slurm_submit_is_parsable(self):
         command = build_submit_command("/w", KIND_SLURM)
-        assert "sbatch --parsable ./job.sh" in command
+        assert "sbatch --parsable --job-name=omicsclaw_$_nonce" in command
+        assert "--comment=omicsclaw_$_nonce ./job.sh" in command
+        assert "_omicsclaw_launch_claim" in command
         assert "cd -- '/w'" in command
 
     def test_nohup_submit_setsid_and_waits_for_the_pgid(self):
@@ -99,23 +139,28 @@ class TestCommands:
         assert command.rstrip().endswith("echo 0")
 
     def test_nohup_status_probes_the_group_then_the_exit_file(self):
-        handle = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=4242)
+        handle = _verified_nohup(4242)
         command = build_status_command(handle)
         assert "kill -0 -- -4242" in command
         assert "_omicsclaw_exit_code" in command
         assert "__OMICSCLAW_LOST__" in command
 
     def test_slurm_status_queues_then_accounts(self):
-        handle = RemoteJobHandle(kind=KIND_SLURM, host="h", workdir="/w", job_id="99")
+        handle = _verified_slurm("99")
         command = build_status_command(handle)
-        assert "squeue -h -j 99 -o %T" in command
-        assert "sacct -n -X -j 99 -o State" in command
+        assert "scontrol --clusters='fixture' --oneliner show job 99" in command
+        assert "--jobs=99" in command
+        assert "JobIDRaw,Cluster,User,UID,Submit,JobName%80,State,ExitCode" in command
 
     def test_cancel_matches_the_kind(self):
-        slurm = RemoteJobHandle(kind=KIND_SLURM, host="h", workdir="/w", job_id="7")
-        nohup = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=77)
-        assert build_cancel_command(slurm) == "scancel 7"
-        assert build_cancel_command(nohup) == "kill -TERM -- -77"
+        slurm = _verified_slurm("7")
+        nohup = _verified_nohup(77)
+        assert "scancel --clusters='fixture' --user='owner'" in build_cancel_command(
+            slurm
+        )
+        assert "SubmitTime=" in build_cancel_command(slurm)
+        assert "kill -TERM -- -77" in build_cancel_command(nohup)
+        assert "/proc/77/stat" in build_cancel_command(nohup)
 
     def test_size_command_falls_back_to_wc(self):
         command = build_size_command(["/w/a", "/w/b"])
@@ -219,11 +264,11 @@ def test_group_signal_commands_refuse_a_nonpositive_pgid(bad):
 
 
 def test_a_positive_pgid_still_builds_the_group_commands():
-    handle = RemoteJobHandle(kind=KIND_NOHUP, host="h", workdir="/w", pgid=4242)
+    handle = _verified_nohup(4242)
     assert "kill -0 -- -4242" in build_status_command(handle)
-    assert build_cancel_command(handle) == "kill -TERM -- -4242"
+    assert "kill -TERM -- -4242" in build_cancel_command(handle)
+    assert "/proc/4242/stat" in build_cancel_command(handle)
     # slurm handles never take the group path, whatever their pgid says
-    slurm = RemoteJobHandle(
-        kind=KIND_SLURM, host="h", workdir="/w", job_id="7", pgid=None
-    )
-    assert build_cancel_command(slurm) == "scancel 7"
+    slurm = _verified_slurm("7")
+    assert "scancel --clusters='fixture'" in build_cancel_command(slurm)
+    assert "kill -TERM" not in build_cancel_command(slurm)

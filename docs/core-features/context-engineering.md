@@ -146,7 +146,7 @@ class Section:
 | 7 | `environment` | `## Environment` | 工作区路径、平台、`date.today()` | 总是 |
 | 8 | `memory` | `## Long-term memory` | `Precis.read()`（`.omicsclaw/MEMORY.md`） | `memory=true` 且已有记忆条目 |
 
-排序原则：静态文本在前，易变的放后面——最后一段被改动时让缓存前缀失效得最少。长期记忆段排在环境段之后，因为 `memory_write` 会在会话中途改写它，而环境段只在跨天时变化。环境段写的是**日期而不是时间戳**：时间戳会让每一轮的缓存前缀都失效。
+排序原则：静态文本在前，易变的放后面——最后一段被改动时让缓存前缀失效得最少。precis_via_augmentor=false 时长期记忆段排在环境段之后；默认开关为 true，长期记忆从 system prompt 移到 augmentor，避免 memory_write 改写 system 前缀。环境段写的是**日期而不是时间戳**：时间戳会让每一轮的缓存前缀都失效。
 
 ### 4.3 项目指令如何注入
 
@@ -178,7 +178,7 @@ class Section:
 
 ### 4.5 "每次重读"的代价：缓存前缀
 
-每个段都是 closure、每次渲染都重新调用，这是"写了就能看见"的来源，也是 prompt 缓存失效的来源。易变块（skill 目录、长期记忆、执行计划说明、沙箱状态）都在 system prompt 里，任何一个变化都会让缓存前缀整体失效。这是 2026-09-18 的 owner 裁定（取消旧层"稳定段进 system、易变段挂在 user 轮"的双 placement），`prompt.py` 模块文档明确写着："看到缓存命中率低，先读这一段再动手"。工具定义那一半前缀不受影响：`AgentApp.tools_snapshot` 在 `build_app` 时取一次，字节稳定。
+每个 system prompt 段都是 closure、每次渲染都重新调用，这是"写了就能看见"的来源，也是 prompt 缓存失效的来源。长期记忆有一个明确例外：默认 `precis_via_augmentor=True` 时不进入 system prompt，而由 `VolatileBlock` 在内容变化时追加到本次发送副本；关闭开关才恢复 system prompt 段。技能目录、执行计划说明和沙箱状态仍按各自接线进入 system 或 augmentor。工具定义那一半前缀不受影响：`AgentApp.tools_snapshot` 在 `build_app` 时取一次，字节稳定。
 
 ---
 

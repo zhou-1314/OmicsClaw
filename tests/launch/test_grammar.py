@@ -242,6 +242,14 @@ def test_the_environment_handed_to_main_reaches_the_surface(env, expected, capsy
 
 
 MODULE_GUARDS = {
+    "remote/deadline.py": (
+        "Finite execution-limit supervisor for one owned job session; parses only "
+        "its existing job handle and timeout and never creates business state."
+    ),
+    "entry/ssh/__main__.py": (
+        "Finite SSH controller launcher. Parses an explicit workspace only; "
+        "the Mac supplies model authority over stdio and it uses shared build_app."
+    ),
     "launch/__main__.py": "the shell; plan 0037 §5.1",
     "__main__.py": (
         "python -m omicsclaw, repointed at this shell on the owner's "
@@ -287,7 +295,7 @@ def _guarded_modules() -> set[str]:
     found: set[str] = set()
     for path in sorted(_PACKAGE.rglob("*.py")):
         relative = path.relative_to(_PACKAGE)
-        tree =ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.If):
                 continue

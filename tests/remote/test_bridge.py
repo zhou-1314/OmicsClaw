@@ -70,10 +70,16 @@ class _ScriptedExecutor:
 
     async def status(self, handle: RemoteJobHandle) -> StatusReport:
         if self._plane.state == "running":
-            return StatusReport(state="running")
+            return StatusReport(
+                state="running",
+                identity_verified=True,
+                identity_digest=handle.proof_digest(),
+            )
         return StatusReport(
             state=self._plane.state,
             exit_code=0 if self._plane.state == "done" else 3,
+            identity_verified=True,
+            identity_digest=handle.proof_digest(),
         )
 
     async def tail_log(self, workdir: str, offset: int, limit: int) -> str:
@@ -94,9 +100,7 @@ class _ScriptedPlane(RemotePlaneBinding):
     async def status(self, job_ref: str) -> StatusReport:
         # The bridge polls through this method; the reconciler through
         # executor_for().status — both read the same knob.
-        return await self._scripted.status(
-            RemoteJobHandle(kind="nohup", host="", workdir="")
-        )
+        return await self._scripted.status(self.job_store().get(job_ref).handle())
 
 
 def _manager(spawner: FakeSpawner, tmp_path, *, plane: _ScriptedPlane | None = None):
@@ -132,6 +136,53 @@ def _terminal(manager: JobsManager, job_id: str):
 
 
 class TestRemoteRouting:
+    def test_observation_timeout_does_not_signal_or_finish_external_business_job(
+        self, spawner, tmp_path
+    ):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            manager.default_timeout_s = 0.03
+            record = await manager.create_job(
+                inputs={"command": "sleep 10"}, runtime="remote:hpc1"
+            )
+            await _until(
+                lambda: (
+                    manager._live.get(record.id) is not None
+                    and manager._live[record.id].task.done()
+                )
+            )
+            events = _events(manager.store, record.id)
+            assert (
+                manager.get_job(record.id).status,
+                any("kill -TERM" in command for command in spawner.ssh_commands()),
+                any(
+                    kind in {"job.done", "job.failed", "execution.finished"}
+                    for kind, _ in events
+                ),
+            ) == ("unknown", False, False)
+
+        run(main())
+
+    def test_owner_shutdown_only_detaches_external_observation(self, spawner, tmp_path):
+        async def main():
+            manager = _manager(spawner, tmp_path)
+            record = await manager.create_job(
+                inputs={"command": "sleep 10"}, runtime="remote:hpc1"
+            )
+            await _until(lambda: manager.plane.job_store().by_local_job(record.id))
+            await manager.shutdown_observations()
+            events = _events(manager.store, record.id)
+            assert (
+                manager.get_job(record.id).status,
+                any("kill -TERM" in command for command in spawner.ssh_commands()),
+                any(
+                    kind in {"job.done", "job.failed", "execution.finished"}
+                    for kind, _ in events
+                ),
+            ) == ("unknown", False, False)
+
+        run(main())
+
     def test_a_remote_job_submits_and_finishes(self, spawner, tmp_path):
         async def main():
             manager = _manager(spawner, tmp_path)
@@ -154,6 +205,7 @@ class TestRemoteRouting:
             record = await manager.create_job(
                 inputs={"command": "echo hi"}, runtime="remote:hpc1"
             )
+            await _until(lambda: manager.get_job(record.id).status == "running")
             manager.plane.state = "done"
             await _terminal(manager, record.id)
             return [t for t, _ in _events(manager.store, record.id)]
@@ -328,6 +380,9 @@ class TestValidationAndRefusal:
         assert caught.value.code.startswith("invalid_inputs")
 
     def test_remote_inputs_are_forwarded_as_pairs(self, spawner, tmp_path):
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "counts.csv").write_text("count\n1\n")
+
         async def main():
             manager = _manager(spawner, tmp_path)
             seen = {}
@@ -373,6 +428,14 @@ class TestCancellationAndRestart:
             )
             await _until(lambda: manager.get_job(record.id).status == "running")
             outcome = manager.cancel(record.id)
+            await _until(
+                lambda: any(
+                    "kill -TERM -- -4242" in command
+                    for command in spawner.ssh_commands()
+                )
+            )
+            assert manager.get_job(record.id).status == "cancel_requested"
+            manager.plane.state = "canceled"
             finished = await _terminal(manager, record.id)
             return (
                 outcome,
@@ -381,7 +444,7 @@ class TestCancellationAndRestart:
             )
 
         outcome, status, cancelled_remotely = run(main())
-        assert outcome == "canceled"
+        assert outcome == "cancel_requested"
         assert status == "canceled"
         assert cancelled_remotely
 

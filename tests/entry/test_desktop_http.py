@@ -297,7 +297,11 @@ def test_chat_stream_returns_sse_with_the_turn_id(tmp_path: pathlib.Path):
             422,
             "unsupported_ingress_schema_version",
         ),
-        (body(workspace="/nowhere/else"), 409, "workspace_does_not_match_backend_runtime"),
+        (
+            body(workspace="/nowhere/else"),
+            409,
+            "workspace_does_not_match_backend_runtime",
+        ),
         (body(workspace="/tmp/a\x00b"), 422, "invalid_workspace"),
     ],
 )
@@ -356,7 +360,9 @@ def test_a_resume_never_starts_an_exchange(tmp_path: pathlib.Path):
     resumed = http.post("/chat/stream", json=body(resume=True, content="hello"))
 
     assert resumed.status_code == 200
-    assert resumed.headers["X-OmicsClaw-Turn-Id"] == compact.headers["X-OmicsClaw-Turn-Id"]
+    assert (
+        resumed.headers["X-OmicsClaw-Turn-Id"] == compact.headers["X-OmicsClaw-Turn-Id"]
+    )
     assert [frame["type"] for frame in frames_of(resumed.text)] == [
         "status",
         "result",
@@ -365,7 +371,9 @@ def test_a_resume_never_starts_an_exchange(tmp_path: pathlib.Path):
     assert provider.calls == 0
 
 
-def test_a_resume_does_not_change_the_session_permission_profile(tmp_path: pathlib.Path):
+def test_a_resume_does_not_change_the_session_permission_profile(
+    tmp_path: pathlib.Path,
+):
     """Only a message may carry the profile a session runs in; a resume
     that repeats the original body, or a forged one, changes nothing."""
     from omicsclaw.entry.desktop.interactions import DesktopInteractions
@@ -439,9 +447,21 @@ def test_permission_answers_an_unknown_request_as_expired(tmp_path: pathlib.Path
 @pytest.mark.parametrize(
     ("document", "code"),
     [
-        ({"permissionRequestId": "f" * 32 + "#1", "decision": {"behavior": "allow"}}, "invalid_request_id"),
-        ({"request_id": "f" * 32 + "#1", "decision": {"behavior": "yes"}}, "invalid_decision"),
-        ({"request_id": "f" * 32 + "#1", "decision": {"behavior": "allow", "scope": "forever"}}, "unsupported_scope"),
+        (
+            {"permissionRequestId": "f" * 32 + "#1", "decision": {"behavior": "allow"}},
+            "invalid_request_id",
+        ),
+        (
+            {"request_id": "f" * 32 + "#1", "decision": {"behavior": "yes"}},
+            "invalid_decision",
+        ),
+        (
+            {
+                "request_id": "f" * 32 + "#1",
+                "decision": {"behavior": "allow", "scope": "forever"},
+            },
+            "unsupported_scope",
+        ),
     ],
 )
 def test_permission_refuses_a_malformed_decision(
@@ -491,6 +511,7 @@ def test_the_doctor_answers_the_app_s_checklist_shape(tmp_path: pathlib.Path):
     counts as ``warn`` or ``fail`` puts an Electron activation in
     ``needs-attention``."""
     payload = client(tmp_path).get("/env/doctor").json()
+    assert isinstance(payload["sandbox"]["active"], bool)
     assert set(payload) == {
         "generated_at",
         "workspace_dir",
@@ -499,10 +520,15 @@ def test_the_doctor_answers_the_app_s_checklist_shape(tmp_path: pathlib.Path):
         "failure_count",
         "warning_count",
         "checks",
+        "sandbox",
     }
     assert payload["workspace_dir"] == str(tmp_path)
     for check in payload["checks"]:
-        assert set(check) == {"name", "status", "summary", "details"}
+        fields = {"name", "status", "summary", "details"}
+        if check["name"] == "sandbox":
+            fields.add("sandbox")
+            assert check["sandbox"]["active"] == payload["sandbox"]["active"]
+        assert set(check) == fields
         assert check["status"] in {"ok", "warn", "fail", "info"}
 
 
@@ -633,7 +659,9 @@ def test_the_tree_route_refusals(
 
 def test_serve_answers_the_whole_file(tmp_path: pathlib.Path):
     ws = files_workspace(tmp_path)
-    response = client(tmp_path).get("/files/serve", params={"path": str(ws / "data/a.csv")})
+    response = client(tmp_path).get(
+        "/files/serve", params={"path": str(ws / "data/a.csv")}
+    )
     assert response.status_code == 200
     assert response.content == b"x,y\n1,2\n"
     assert response.headers["content-type"] == "text/csv"
@@ -666,7 +694,9 @@ def test_serve_ignores_a_range_on_an_empty_file(tmp_path: pathlib.Path):
     answers 416 for any range on an empty file."""
     files_workspace(tmp_path)
     response = client(tmp_path).get(
-        "/files/serve", params={"path": "empty.txt"}, headers={"Range": "bytes=0-262143"}
+        "/files/serve",
+        params={"path": "empty.txt"},
+        headers={"Range": "bytes=0-262143"},
     )
     assert response.status_code == 200
     assert response.content == b""
@@ -959,19 +989,19 @@ def test_a_real_server_resumes_a_dropped_stream_from_its_last_id(
 
 
 def test_health_advertises_optional_capabilities_without_changing_v3(tmp_path):
-    payload = client(tmp_path).get('/health').json()
-    assert payload['capabilities'] == {
-        'files_tree': True,
-        'files_serve': True,
-        'artifacts': True,
-        'kernel': True,
-       'kernel_r': r_available(),
-       'remote_execution': False,
-        'remote_execution_aliases': False,
-        'remote_execution_files': False,
-        'remote_execution_files_transport': 'sftp-readonly',
-   }
-    assert payload['contracts']['desktop_chat']['request_schema_version'] == 3
-    assert payload['contracts']['desktop_chat']['sse_schema_version'] == 3
-    assert 'commit' in payload['build']
-    assert 'dirty' in payload['build']
+    payload = client(tmp_path).get("/health").json()
+    assert payload["capabilities"] == {
+        "files_tree": True,
+        "files_serve": True,
+        "artifacts": True,
+        "kernel": True,
+        "kernel_r": r_available(),
+        "remote_execution": False,
+        "remote_execution_aliases": False,
+        "remote_execution_files": False,
+        "remote_execution_files_transport": "sftp-readonly",
+    }
+    assert payload["contracts"]["desktop_chat"]["request_schema_version"] == 3
+    assert payload["contracts"]["desktop_chat"]["sse_schema_version"] == 3
+    assert "commit" in payload["build"]
+    assert "dirty" in payload["build"]

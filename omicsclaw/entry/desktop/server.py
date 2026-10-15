@@ -62,29 +62,43 @@ answer 422.
 import asyncio
 import logging
 import secrets
-import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
 from omicsclaw.entry.assembly import AgentApp
-from omicsclaw.entry.events import TurnEvent, TurnEventType
 from omicsclaw.entry.ingress import SenderPolicy
 from omicsclaw.entry.session import (
     QueueFull,
     RegistryClosed,
-    SessionRegistry,
     SubmissionRefused,
 )
-from omicsclaw.entry.stream import ObserverCapacityError, TurnObservation
-from omicsclaw.entry.turn import TurnHandle
-from omicsclaw.kernel.session import r_available
 from omicsclaw.memory.artifacts import ArtifactStore
-from omicsclaw.version import __version__, build_identity
+from omicsclaw.version import __version__
+
+from .runtime_service import (
+    health_payload as health_payload,
+    unauthenticated_health_payload as unauthenticated_health_payload,
+    BACKEND_PROCESS_EPOCH as BACKEND_PROCESS_EPOCH,
+)
+
+from .chat_service import (
+    ChatStream as ChatStream,
+    _compaction as _compaction,
+    _maybe_fire_shadow_review as _maybe_fire_shadow_review,
+    _observe as _observe,
+    _observed_body as _observed_body,
+    _retained_exchange as _retained_exchange,
+    _same_workspace as _same_workspace,
+    change_workspace as change_workspace,
+    open_chat_stream as open_chat_stream,
+    workspace_payload as workspace_payload,
+    ChatAdmission as ChatAdmission,
+    admit_chat as admit_chat,
+)
 
 from .artifacts import mount_artifacts_routes
 from .catalog import mcp_servers, skill_catalog, skill_detail
-from .doctor import _sandbox_snapshot, doctor_report, effective_model
+from .doctor import _sandbox_snapshot, doctor_report
 from .files import (
     byte_span,
     content_disposition,
@@ -105,21 +119,15 @@ from .jobs_manager import JobsManager
 from .providers import SettingsFile, provider_listing, save_provider, test_provider
 from .remote_hosts import mount_remote_host_routes
 from .title import generate_title
-from .turn_observation import KEEPALIVE_INTERVAL_S, DesktopChatSSEBody
+from .turn_observation import KEEPALIVE_INTERVAL_S
 from .turn_submission import (
     DEFAULT_MAX_REQUEST_BYTES,
     HANDOFF_SESSION_ID,
     DesktopIngressError,
-    decode_chat_stream_request,
     parse_chat_stream_document,
 )
 from .wire_contract import (
     CONNECTION_EPOCH,
-    DESKTOP_CAPABILITIES,
-    SERVED_PATHS,
-    desktop_artifacts_contract,
-    desktop_chat_contract,
-    desktop_jobs_contract,
 )
 
 __all__ = [
@@ -139,13 +147,6 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-BACKEND_PROCESS_EPOCH: Final = secrets.token_hex(32)
-"""A nonce minted once per process, reported by ``/health``.
-
-A desktop client compares it across polls to notice that the backend it is
-talking to has been restarted — which invalidates every ``turn_id`` and
-``request_id`` it is holding, since sessions' exchanges live in memory.
-"""
 
 CONTROL_MAX_REQUEST_BYTES: Final = 64 * 1024
 """Largest body ``/chat/permission``, ``/chat/abort``,
@@ -166,362 +167,6 @@ SSE_HEADERS: Final[Mapping[str, str]] = {
 miss: an nginx in front of the backend buffers the whole response without
 it, which turns a token-by-token stream into one silent wait followed by
 the complete answer."""
-
-
-@dataclass(frozen=True, slots=True)
-class ChatStream:
-    """An admitted request: which exchange it resolved to, and its frames."""
-
-    turn_id: str
-    session_id: str
-    body: DesktopChatSSEBody
-    resumed: bool
-    """Whether this request resolved to an exchange already started, by
-    ``resume`` or by redelivering its ``source_request_id``, rather than
-    starting one."""
-
-
-async def open_chat_stream(
-    app: AgentApp,
-    document: Mapping[str, Any],
-    *,
-    policy: SenderPolicy | None = None,
-    after_seq: int = 0,
-    keepalive_s: float | None = KEEPALIVE_INTERVAL_S,
-    interactions: DesktopInteractions | None = None,
-    epoch: int | None = None,
-) -> ChatStream:
-    """Admit one parsed request and return the stream of its frames.
-
-    The whole of ``/chat/stream`` above the HTTP boundary, with no
-    framework in its signature.
-
-    *after_seq* is the resume cursor, the body's ``after_seq`` as the HTTP
-    route reads it; it defaults to "everything the ring still holds". A
-    redelivered ``source_request_id`` on the same session resolves to the
-    same exchange, and a new observation over it is opened at that
-    cursor.
-
-    With ``resume: true`` in the body, the exchange is found by
-    ``(session_id, source_request_id)`` alone and observed from
-    *after_seq*; ``content`` and ``permission_profile`` are not read, and
-    nothing is started or queued, so a restarted backend or an exchange no
-    longer retained can never turn a reconnect into a second run of the
-    message.
-
-    *interactions* is the server's
-    :class:`~omicsclaw.entry.desktop.interactions.DesktopInteractions`:
-    the request is recorded in it so ``/chat/abort`` can find the
-    exchange, a ``permission_profile`` in the body is applied to the
-    session in it before the exchange starts, and the body consults it for
-    session grants and ``full_access``. ``None`` uses a fresh one that
-    nothing else shares.
-
-    Content equal to :data:`COMPACT_COMMAND` queues
-    :meth:`~omicsclaw.entry.SessionRegistry.compact` for the session
-    rather than a message; a redelivered ``source_request_id`` resolves
-    to the same compaction while it is retained.
-
-    :raises DesktopIngressError: the request was refused. No exchange is
-        created on any refusal path, including the sender policy's. A
-        resume that finds no retained exchange is 409
-        ``exchange_not_retained``; an exchange that already has as many
-        observers as it allows is 429 ``too_many_observers``.
-    :raises RuntimeError: the app has no session registry, which means
-        :func:`~omicsclaw.entry.attach_sessions` was never called.
-    """
-    request = decode_chat_stream_request(document)
-
-    if request.workspace.strip() and not _same_workspace(
-        request.workspace, app.config.workspace
-    ):
-        # A request naming a different workspace is not one this backend
-        # can serve; answering it from the configured one would run tools
-        # against files the caller did not mean.
-        raise DesktopIngressError(
-            "workspace_does_not_match_backend_runtime", status_code=409
-        )
-
-    inbound = request.to_inbound()
-    if policy is not None and not policy.admits(inbound):
-        _log.warning("desktop ingress refused a sender outside the allowlist")
-        raise DesktopIngressError("sender_not_allowed", status_code=403)
-
-    registry = app.sessions
-    if registry is None:
-        raise RuntimeError(
-            "this AgentApp has no session registry; call attach_sessions(app) "
-            "before serving /chat/stream"
-        )
-    if interactions is None:
-        interactions = DesktopInteractions(app)
-
-    if request.resume:
-        handle = _retained_exchange(
-            registry,
-            interactions.turn_for(request.session_id, request.source_request_id),
-        )
-        return ChatStream(
-            turn_id=handle.turn_id,
-            session_id=handle.session_id,
-            resumed=True,
-            body=_observed_body(
-                app, handle, after_seq, keepalive_s, interactions, epoch
-            ),
-        )
-
-    if request.permission_profile:
-        interactions.set_permission_profile(
-            request.session_id, request.permission_profile
-        )
-
-    known = interactions.turn_for(request.session_id, request.source_request_id)
-    compacting = request.content.strip() == COMPACT_COMMAND
-    if compacting:
-        handle = await _compaction(registry, request.session_id, known)
-    else:
-        handle = await registry.deliver(inbound)
-    interactions.remember_request(
-        handle.session_id, request.source_request_id, handle.turn_id
-    )
-    _maybe_fire_shadow_review(app, registry, handle.session_id)
-    return ChatStream(
-        turn_id=handle.turn_id,
-        session_id=handle.session_id,
-        resumed=known == handle.turn_id,
-        body=_observed_body(app, handle, after_seq, keepalive_s, interactions, epoch),
-    )
-
-
-def _maybe_fire_shadow_review(
-    app: AgentApp, registry: SessionRegistry, session_id: str
-) -> None:
-    """Evaluate the shadow-review checkpoint and fire it, if crossed.
-
-    Runs after the exchange exists, so the verdict's notice frame has a
-    live stream to land in; the review itself is a background task and
-    can never hold up the turn that just started.
-    """
-    reviewer = app.shadow_review
-    if reviewer is None:
-        return
-    records = reviewer.evaluate(session_id)
-    if not records:
-        return
-    session = registry.session(session_id)
-    history = session.history if session is not None else ()
-
-    def publish(verdict: Any) -> None:
-        event = TurnEvent.shadow_review_verdict(
-            verdict.verdict, verdict.note, session_id=session_id
-        )
-        for handle in registry.running():
-            if handle.session_id == session_id:
-                # The stream seals at EXCHANGE_END and ignores late
-                # frames, so a verdict that arrives after the exchange
-                # is a silent no-op here — the note still rides the
-                # next turn through the nudge.
-                handle.stream.publish(event)
-
-    reviewer.fire(session_id, records, history=history, publisher=publish)
-
-
-def _retained_exchange(registry: SessionRegistry, turn_id: str | None) -> TurnHandle:
-    """The exchange a resume names, if the registry still retains it.
-
-    :raises DesktopIngressError: 409 ``exchange_not_retained`` otherwise.
-    """
-    if turn_id is not None:
-        try:
-            return registry.handle(turn_id)
-        except KeyError:
-            pass
-    raise DesktopIngressError("exchange_not_retained", status_code=409)
-
-
-def _observed_body(
-    app: AgentApp,
-    handle: TurnHandle,
-    after_seq: int,
-    keepalive_s: float | None,
-    interactions: DesktopInteractions,
-    epoch: int | None = None,
-) -> DesktopChatSSEBody:
-    """A new SSE body over *handle*, observed from *after_seq*.
-
-    A compaction exchange is handed to the body so that it reports its
-    outcome, unless the ``COMPACTION`` event that already reported it is
-    at or before the cursor.
-
-    :raises DesktopIngressError: 429 ``too_many_observers``.
-    """
-    observation = _observe(handle, after_seq)
-    compaction = handle if handle.compaction_only else None
-    if compaction is not None and any(
-        event.type is TurnEventType.COMPACTION and event.seq <= after_seq
-        for event in handle.stream.retained()
-    ):
-        compaction = None
-    return DesktopChatSSEBody(
-        observation,
-        keepalive_s=keepalive_s,
-        after_seq=after_seq,
-        approvals=handle.approvals,
-        interactions=interactions,
-        provider=app.provider.name,
-        model=effective_model(app),
-        compaction=compaction,
-        epoch=epoch,
-    )
-
-
-def _observe(handle: TurnHandle, after_seq: int) -> TurnObservation:
-    try:
-        return handle.observe(after_seq=after_seq)
-    except ObserverCapacityError as exc:
-        raise DesktopIngressError("too_many_observers", status_code=429) from exc
-
-
-async def _compaction(
-    registry: SessionRegistry, session_id: str, known: str | None
-) -> TurnHandle:
-    """The compaction *known* names if it is still retained, else a new one."""
-    if known is not None:
-        try:
-            handle: TurnHandle = registry.handle(known)
-        except KeyError:
-            pass
-        else:
-            if handle.compaction_only:
-                return handle
-    return await registry.compact(session_id)
-
-
-def health_payload(app: AgentApp) -> dict[str, Any]:
-    """What ``GET /health`` answers. Pure, so a test needs no HTTP.
-
-    ``contracts.desktop_chat`` is the wire contract; a client checks its
-    versions before it speaks, and refuses a backend whose versions it
-    does not implement. Its ``abandon_grace_s`` is the session registry's,
-    ``None`` for an app without one.
-
-    ``provider``, ``model``, ``skills_count``, ``python_executable``,
-    ``skill_python_executable``, ``omicsclaw_dir`` and ``launch_id`` are
-    all required by the desktop client's health validator: a payload with
-    any of them must carry every one. ``model`` is the model the provider
-    calls (:func:`~omicsclaw.entry.desktop.doctor.effective_model`), not
-    only the one the deployment named.
-    ``skill_python_executable`` is this interpreter, because no skill runs
-    in a subprocess of its own. ``omicsclaw_dir`` is the workspace, which
-    skills (unless ``skills_dir`` is set) and ``.mcp.json`` are resolved
-    against. ``launch_id`` is
-    :attr:`~omicsclaw.entry.config.AppConfig.launch_id`, which a managed
-    launch compares with the id it passed.
-    """
-    return {
-        "status": "ok",
-        "version": __version__,
-        "backend_process_epoch": BACKEND_PROCESS_EPOCH,
-        "connection_epoch": CONNECTION_EPOCH,
-        "capabilities": {
-            **DESKTOP_CAPABILITIES,
-            "kernel_r": r_available(),
-            # C1's product switch, as this process actually runs it: the
-            # plane exists exactly when ``remote_execution`` was on and the
-            # store opened (``build_app`` binds ``app.remote``), so this is
-            # "the remote tools, the remote jobs runtime and the
-            # ``/remote/hosts`` face are all live" — the same per-app fact
-            # ``kernel_r`` is, and additive in the health payload the same
-            # way: a client that does not know the key ignores it.
-            "remote_execution": getattr(app, "remote", None) is not None,
-            "remote_execution_aliases": getattr(app, "remote", None) is not None,
-            "remote_execution_files": getattr(app, "remote", None) is not None,
-            # Read-only target files use the probe's POSIX shell transport;
-            # a host whose probe is incomplete answers remote_files_unsupported
-            # instead of silently assuming GNU utilities or SFTP semantics.
-            "remote_execution_files_transport": "sftp-readonly",
-        },
-        "build": dict(build_identity()),
-        "provider": app.provider.name,
-        "model": effective_model(app),
-        "skills_count": len(app.skills.skills),
-        "python_executable": sys.executable,
-        "skill_python_executable": sys.executable,
-        "omicsclaw_dir": str(app.config.workspace),
-        "launch_id": app.config.launch_id,
-        "served_paths": list(SERVED_PATHS),
-        "sandbox": _sandbox_snapshot(app),
-        "contracts": {
-            "desktop_chat": desktop_chat_contract(
-                abandon_grace_s=(
-                    app.sessions.abandon_grace_s if app.sessions is not None else None
-                )
-            ),
-            "desktop_jobs": desktop_jobs_contract(),
-            "desktop_artifacts": desktop_artifacts_contract(),
-        },
-    }
-
-
-def unauthenticated_health_payload(launch_id: str = "") -> dict[str, Any]:
-    """The reduced answer given to an unauthenticated ``/health`` probe.
-
-    A desktop launcher polls this route to learn whether the backend is up
-    *and* whether it needs a token, before it has one; answering it with
-    provider and model would publish the deployment's configuration to
-    anybody who can reach the port. ``launch_id`` is kept because it is how
-    a launcher tells its own child from a leftover backend squatting the
-    port; the launcher minted it, so publishing it costs nothing.
-    """
-    return {
-        "status": "ok",
-        "version": __version__,
-        "launch_id": launch_id,
-        "auth_required": True,
-    }
-
-
-def workspace_payload(app: AgentApp) -> dict[str, Any]:
-    """What ``GET /workspace`` answers: ``{workspace, trusted_dirs}``.
-
-    ``trusted_dirs`` is always ``[]``.
-    """
-    return {"workspace": str(app.config.workspace), "trusted_dirs": []}
-
-
-def change_workspace(app: AgentApp, document: Mapping[str, Any]) -> dict[str, Any]:
-    """``PUT /workspace``: accept ``{workspace}`` naming the current one.
-
-    Two spellings of one directory (``~``, ``..``, a trailing slash, a
-    symlink) are the same workspace. Returns :func:`workspace_payload`.
-
-    :raises DesktopIngressError: 422 ``workspace_required`` when
-        ``workspace`` is missing or empty; 422 ``invalid_workspace`` when
-        it is not a resolvable path; 409
-        ``workspace_change_requires_restart`` when it names another
-        directory.
-    """
-    declared = document.get("workspace")
-    if not isinstance(declared, str) or not declared.strip():
-        raise DesktopIngressError("workspace_required")
-    if not _same_workspace(declared, app.config.workspace):
-        raise DesktopIngressError("workspace_change_requires_restart", status_code=409)
-    return workspace_payload(app)
-
-
-def _same_workspace(declared: str, workspace: Path | str) -> bool:
-    """Whether the client's *declared* path names the served *workspace*.
-
-    :raises DesktopIngressError: 422 ``invalid_workspace`` when *declared*
-        cannot be resolved to a path at all: an embedded NUL, a ``~user``
-        naming no user, or a symlink loop on Python versions whose
-        :meth:`~pathlib.Path.resolve` raises for one.
-    """
-    try:
-        resolved = Path(declared.strip()).expanduser().resolve()
-    except (ValueError, OSError, RuntimeError) as exc:
-        raise DesktopIngressError("invalid_workspace") from exc
-    return resolved == Path(workspace).expanduser().resolve()
 
 
 def is_json_media_type(content_type: str) -> bool:
@@ -776,13 +421,19 @@ def create_desktop_app(
         persist = bool(document.get("persist", False))
         if not isinstance(domain, str) or not domain.strip():
             return JSONResponse(
-                {"detail": "domain must be a non-empty string", "error": "invalid_domain"},
+                {
+                    "detail": "domain must be a non-empty string",
+                    "error": "invalid_domain",
+                },
                 status_code=400,
             )
         binding = getattr(app, "sandbox", None)
         if binding is None or not hasattr(binding, "allow_domain"):
             return JSONResponse(
-                {"detail": "sandbox binding unavailable", "error": "sandbox_unavailable"},
+                {
+                    "detail": "sandbox binding unavailable",
+                    "error": "sandbox_unavailable",
+                },
                 status_code=400,
             )
         try:
@@ -804,13 +455,18 @@ def create_desktop_app(
             raw_body = await _read_body(request, CONTROL_MAX_REQUEST_BYTES)
             if raw_body.strip():
                 try:
-                    doc = parse_chat_stream_document(raw_body, max_request_bytes=CONTROL_MAX_REQUEST_BYTES)
+                    doc = parse_chat_stream_document(
+                        raw_body, max_request_bytes=CONTROL_MAX_REQUEST_BYTES
+                    )
                     domain = doc.get("domain")
                 except Exception:  # noqa: BLE001
                     domain = None
         if not isinstance(domain, str) or not domain.strip():
             return JSONResponse(
-                {"detail": "domain must be a non-empty string", "error": "invalid_domain"},
+                {
+                    "detail": "domain must be a non-empty string",
+                    "error": "invalid_domain",
+                },
                 status_code=400,
             )
         binding = getattr(app, "sandbox", None)

@@ -32,6 +32,7 @@ _LOUD_POLICY = ToolPolicy(
     writes_workspace=True,
     writes_config=True,
     touches_network=True,
+    ask_every_time=True,
     allowed_in_background=True,
     tags=frozenset({"destructive", "omics"}),
 )
@@ -153,6 +154,7 @@ def test_a_blank_policy_grants_nothing():
     assert blank.writes_workspace is False
     assert blank.writes_config is False
     assert blank.touches_network is False
+    assert blank.ask_every_time is False
     assert blank.prompts_for_itself is False
     assert blank.rule_argument is None
     assert blank.tags == frozenset()
@@ -205,6 +207,7 @@ def test_the_policy_fields_are_exactly_the_ones_classified_above():
         "writes_workspace",
         "writes_config",
         "touches_network",
+        "ask_every_time",
         "prompts_for_itself",
         "allowed_in_background",
         "rule_argument",
@@ -239,3 +242,10 @@ def test_a_policy_is_frozen_and_hashable():
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("ToolPolicy is mutable")
+
+
+def test_ask_every_time_adds_a_fresh_consent_constraint_without_granting_access():
+    """Fresh consent narrows remembered grants; default ASK still gates execution."""
+    policy = ToolPolicy(ask_every_time=True)
+    assert policy.approval_mode is ApprovalMode.ASK
+    assert policy.risk_level is RiskLevel.HIGH

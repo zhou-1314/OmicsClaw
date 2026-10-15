@@ -30,7 +30,7 @@ from omicsclaw.entry.compaction import build_compactor
 from omicsclaw.entry.config import AppConfig
 from omicsclaw.memory import Database, SqliteCompactionArchive
 from omicsclaw.provider import Completion
-from omicsclaw.schema import Message, Role
+from omicsclaw.schema import Message, Role, ToolCall
 from omicsclaw.tools.context import use_tool_context
 
 WAIT_S = 10.0
@@ -333,6 +333,42 @@ def test_a_row_too_large_to_fit_is_shortened_and_says_so(tmp_path):
     row = json.loads(answer)
     assert row["content_truncated"] is True
     assert row["content"]
+
+
+def test_a_row_with_huge_tool_calls_stays_under_the_cap(tmp_path):
+    from omicsclaw.entry.memory import SEARCH_RESULT_MAX_BYTES
+
+    database = Database()
+    archive = SqliteCompactionArchive(database)
+    _run(
+        archive.append(
+            "s1",
+            1,
+            (
+                Message(
+                    role=Role.ASSISTANT,
+                    content="",
+                    tool_calls=(
+                        ToolCall(
+                            id="call_huge",
+                            name="bash",
+                            arguments=json.dumps({"script": "A" * 20_000}),
+                        ),
+                    ),
+                ),
+            ),
+            start_position=1,
+        )
+    )
+    read = _tool(database, ARCHIVE_READ_TOOL_NAME)
+    with use_tool_context(values={"session_id": "s1"}):
+        answer = _run(read.execute(_call({"id": 1})))
+    database.close()
+
+    assert len(answer.encode("utf-8")) <= SEARCH_RESULT_MAX_BYTES
+    row = json.loads(answer)
+    assert row["tool_calls"] == []
+    assert row["tool_calls_truncated"] is True
 
 
 def test_read_of_an_unknown_id_is_a_message_not_an_error(tmp_path):

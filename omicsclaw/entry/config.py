@@ -77,7 +77,6 @@ from omicsclaw.sandbox import (
     EgressMode,
     SandboxBackendName,
     SandboxConfig,
-    SandboxConfigError,
     SandboxMode,
     host_user,
 )
@@ -86,6 +85,7 @@ from omicsclaw.tools.builtin.bash import ENGINE_TIMEOUT_MARGIN
 __all__ = [
     "AppConfig",
     "AppConfigError",
+    "ExecutionLocation",
     "mem_total_gib",
     "SandboxMode",
     "SkillEnvMode",
@@ -130,6 +130,12 @@ class SkillEnvMode(StrEnum):
     on this machine: after approval it installs declared packages into an
     overlay environment, from this machine's pip configuration. Refused by
     ``oc desktop``, which has no approval channel."""
+
+
+class ExecutionLocation(StrEnum):
+    REMOTE = "remote"
+    LOCAL = "local"
+    UNSET = "unset"
 
 
 STATE_DIRNAME = ".omicsclaw"
@@ -364,6 +370,7 @@ class AppConfig:
     :attr:`approval_timeout_s`: without either, a question waits until the
     exchange ends."""
 
+    execution_location: ExecutionLocation = ExecutionLocation.UNSET
     remote_execution: bool = False
     """Whether the agent may run work on remote hosts over SSH.
 
@@ -905,6 +912,14 @@ def _as_bool(raw: str) -> bool:
     raise AppConfigError(f"{raw!r} is not a boolean (true/false)")
 
 
+def _as_execution_location(raw: str) -> ExecutionLocation:
+    value = raw.strip().lower()
+    try:
+        return ExecutionLocation(value)
+    except ValueError as exc:
+        raise AppConfigError("must be one of remote, local, unset") from exc
+
+
 def _as_skill_env(raw: str) -> SkillEnvMode:
     try:
         return SkillEnvMode(raw.strip().lower())
@@ -945,9 +960,7 @@ def _as_sandbox_backend(raw: str) -> SandboxBackendName:
         return SandboxBackendName(norm)
     except ValueError as exc:
         modes = ", ".join(mode.value for mode in SandboxBackendName)
-        raise AppConfigError(
-            f"{raw!r} is not a sandbox backend ({modes})"
-        ) from exc
+        raise AppConfigError(f"{raw!r} is not a sandbox backend ({modes})") from exc
 
 
 def _as_sandbox_egress(raw: str) -> EgressMode:
@@ -958,9 +971,7 @@ def _as_sandbox_egress(raw: str) -> EgressMode:
         return EgressMode(norm)
     except ValueError as exc:
         modes = ", ".join(mode.value for mode in EgressMode)
-        raise AppConfigError(
-            f"{raw!r} is not a sandbox egress mode ({modes})"
-        ) from exc
+        raise AppConfigError(f"{raw!r} is not a sandbox egress mode ({modes})") from exc
 
 
 def _as_csv_tuple(raw: str) -> tuple[str, ...]:
@@ -980,9 +991,7 @@ def _as_permission_mode(raw: str) -> PermissionMode:
         return PermissionMode(raw.strip().lower())
     except ValueError as exc:
         modes = ", ".join(mode.value for mode in PermissionMode)
-        raise AppConfigError(
-            f"{raw!r} is not a permission mode ({modes})"
-        ) from exc
+        raise AppConfigError(f"{raw!r} is not a permission mode ({modes})") from exc
 
 
 def _as_paths(raw: str) -> tuple[Path, ...]:
@@ -1140,13 +1149,24 @@ _OPTIONS: tuple[_Option, ...] = (
     _Option("subagents", "--subagents", ("OMICSCLAW_SUBAGENTS",), _as_bool),
     _Option("ask_user", "--ask-user", ("OMICSCLAW_ASK_USER",), _as_bool),
     _Option(
+        "execution_location",
+        "--execution-location",
+        ("OMICSCLAW_EXECUTION_LOCATION",),
+        _as_execution_location,
+    ),
+    _Option(
         "remote_execution",
         "--remote-execution",
         ("OMICSCLAW_REMOTE_EXECUTION",),
         _as_bool,
     ),
     _Option("skill_env", "--skill-env", ("OMICSCLAW_SKILL_ENV",), _as_skill_env),
-    _Option("skill_env_dir", "--skill-env-dir", ("OMICSCLAW_SKILL_ENV_DIR",), _as_optional_path),
+    _Option(
+        "skill_env_dir",
+        "--skill-env-dir",
+        ("OMICSCLAW_SKILL_ENV_DIR",),
+        _as_optional_path,
+    ),
     _Option(
         "skill_env_install_timeout_s",
         "--skill-env-install-timeout",
@@ -1510,6 +1530,16 @@ def resolve_app_config(
     values.update(_from_env(source))
     values.update(_from_argv(arguments))
     values.update(overrides)
+    if "execution_location" not in values:
+        values["execution_location"] = (
+            ExecutionLocation.REMOTE
+            if values.get("remote_execution") is True
+            else ExecutionLocation.UNSET
+        )
+    elif isinstance(values["execution_location"], str):
+        values["execution_location"] = _as_execution_location(
+            values["execution_location"]
+        )
 
     chosen = values.get("workspace")
     workspace = chosen if isinstance(chosen, Path) else Path.cwd()

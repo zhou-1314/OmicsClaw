@@ -1,0 +1,2 @@
+-r base.in
+jupyter-client==8.8.0

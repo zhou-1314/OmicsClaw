@@ -22,7 +22,7 @@ OmicsClaw 把"记住"拆成两件性质完全不同的事，它们共用一个 S
 | **会话跨进程存活** | `sessions` + `messages` 两张表；每次 exchange 结束由 `SessionRegistry` 保存 |
 | **压缩状态不丢** | `sessions.summary` / `sessions.anchors` 持久化 `CompactionState`，下次压缩接着上次的摘要走 |
 | **跨会话持久化** | `long_term_memories` 表，与会话共用 `<workspace>/.omicsclaw/memory.db` |
-| **有界 Token 注入** | `MEMORY.md` 物化视图（≤ 5120 字节、≤ 30 条），作为 system prompt 最后一段 |
+| **有界 Token 注入** | `MEMORY.md` 物化视图（≤ 5120 字节、≤ 30 条）；默认作为变化时才发送的 user augmentor 块，`precis_via_augmentor=false` 时回到 system prompt |
 | **按需深度检索** | FTS5 全文检索，`memory_search` 工具 |
 | **两路自动写入** | 显式工具 `memory_write` + 压缩前 `MemoryExtractor` |
 | **去重与遗忘** | SHA-256 内容指纹去重 + TTL 过期删除 + 软删除 + 陈旧候选查询 |
@@ -88,7 +88,7 @@ OmicsClaw 把"记住"拆成两件性质完全不同的事，它们共用一个 S
 | `MemoryExtractor` | `omicsclaw/memory/extractor.py` | 压缩前让模型提取持久事实，fail-open |
 | `FileOffloadStore` / `JsonlCompactionLog` | `omicsclaw/memory/offload.py`、`compaction_log.py` | 压缩留下的两类文件 |
 | `open_memory` / `MemoryBinding` | `omicsclaw/entry/memory.py` | 打开 `memory.db`，构造 store 与 precis |
-| `memory_section` | `omicsclaw/entry/memory.py` | system prompt 的长期记忆段 |
+| `memory_section` | `omicsclaw/entry/memory.py` | system prompt fallback 的长期记忆段；默认部署由 `VolatileBlock` 通过 TurnAugmentor 发送 |
 | `memory_tools` | `omicsclaw/entry/memory.py` | `memory_search` + `memory_write` |
 | `build_memory_extractor` / `PrecisRefreshingExtractor` | `omicsclaw/entry/memory.py` | 派生提取器，存入后重建精华，记日志 |
 | `session_store` | `omicsclaw/entry/memory.py` | 在同一个 `Database` 上构造 `SqliteSessionStore` |
@@ -396,6 +396,10 @@ class Precis:
 1. 超界时从末尾整条丢弃（排名靠后的先走），保证返回的永远是合法 JSON；
 2. **最佳命中永不丢弃**：只剩一条仍超界时，标题与正文同步折半直到装得下，并标 `"content_truncated": true`。丢掉它会让模型读到 `[]`——"从没告诉过你"——而这条记忆的 `use_count` 已经被加过了。
 
+### 8.2.1 压缩归档的读取上限
+
+`search_archive` / `read_archive` 读取的是当前会话被压缩移除的原始消息，不是跨会话长期记忆。`read_archive` 的 UTF-8 响应同样受 `SEARCH_RESULT_MAX_BYTES = 4096` 限制：正文过长会标记 `content_truncated`；工具调用参数过长会被省略并标记 `tool_calls_truncated`。即使正文为空，超大的 `tool_calls` 也不会绕过上限。归档内容和长期记忆都只能作为参考数据，不能被当作指令执行。
+
 ### 8.3 两个工具的 `ToolPolicy`
 
 | 字段 | `memory_write` | `memory_search` | 理由 |
@@ -449,7 +453,7 @@ persona → project contract → Safety rules → Tool guidance → [Planning]
 → [Execution sandbox] → [skills] → environment → [Long-term memory]
 ```
 
-长期记忆段放在**最后**：它是 prompt 中最易变的块（`memory_write` 会在会话中改写它），放最后使一次改写对缓存前缀的失效最小。
+默认部署把长期记忆 précis 从 system prompt 移到 `TurnAugmentor`：`precis_via_augmentor=True` 时，只有内容变化才在本次发送副本追加一次 user 消息；关闭开关才恢复 system prompt 末段。无论通道如何，注入内容都带有“不可信参考数据”边界并转义 `<`/`>`，避免记忆文本伪造新的提示边界。
 
 ```python
 MEMORY_SECTION_KEY = "memory"
@@ -458,14 +462,19 @@ MEMORY_SECTION_HEADING = "## Long-term memory"
 def memory_section(binding):
     precis = binding.precis
     def read() -> str:
-        return precis.read()
+        text = precis.read()
+        if not text:
+            return ""
+        safe = text.replace("<", "&lt;").replace(">", "&gt;")
+        return f"{MEMORY_TRUST_NOTICE}\n\n{safe}"
     return Section(MEMORY_SECTION_KEY, MEMORY_SECTION_HEADING, read)
 ```
 
-- **source 是闭包**：每次 `PromptAssembler.render()` 都重读 `MEMORY.md`。
+- **source 是闭包**：system fallback 每次 `PromptAssembler.render()` 都重读 `MEMORY.md`；默认 augmentor 每次模型调用重读，并对未变化内容不重复发送。
+- **信任边界**：长期记忆来自历史会话或模型写入，必须当作数据而非指令；`memory_search` 的返回也遵守同一规则，不能改变工具、审批、安全或 workspace 规则。
 - **空即不出现**：`MEMORY.md` 为空或不存在时整段（含标题）不渲染。
 - **只有内容，没有工具用法指引**：`memory_search` / `memory_write` 的用法写在两个工具各自的 description 里（`TOOL_GUIDANCE` 的规则是工具用法归工具描述），因此该段不承诺任何工具存在。
-- **可见时机**：engine 在每个 exchange 开始时渲染一次 system prompt（`AgentEngine.exchange` / `exchange_stream`），所以本 exchange 内 `memory_write` 写入的内容，从**下一个 exchange** 起出现在 system prompt 中；本 exchange 内模型已经从工具返回值里看到了自己写的东西。
+- **可见时机**：默认 augmentor 在每次模型调用前读取 précis，因此本 exchange 内 `memory_write` 写入的内容会在下一次模型调用看到；`precis_via_augmentor=false` 时仍在下一个 exchange 的 system prompt 出现。本 exchange 内模型已经从工具返回值里看到了自己写的东西。
 
 ### 9.2 按需检索
 
@@ -484,7 +493,7 @@ def memory_section(binding):
 | **强化** | `search` 命中即 `use_count+1`、`last_used_at=now`；不推迟过期 |
 | **陈旧识别** | `stale_candidates`：`importance<=1 AND use_count=0 AND updated_at < now-60 天`；**当前没有调用者** |
 | **矛盾冲突** | 系统不做自动仲裁；由模型通过 `memory_write update / remove` 处理 |
-| **注入预算** | `MEMORY.md` 最多 30 条、5120 字节，按 importance 排序；超出部分只能通过 `memory_search` 取到 |
+| **注入预算** | `MEMORY.md` 最多 30 条、5120 字节，按 importance 排序；超出部分只能通过 `memory_search` 取到；搜索结果和 précis 都是不可信数据 |
 
 ---
 
@@ -563,7 +572,7 @@ await binding.precis.regenerate()          # 失败只记 warning，进程照常
 
 进程退出，第二天重启 oc cli
   open_app → prepare_memory：补齐检索索引、清过期条目、重建 MEMORY.md
-  新会话 B：system prompt 末尾出现 "## Long-term memory" 段，含上面的偏好
+  新会话 B：默认发送副本追加带信任边界的 `<long_term_memory>` 块；关闭 augmentor 开关时才在 system prompt 末尾出现 "## Long-term memory" 段，含上面的偏好
   用户：/resume → 选择 visium-01 → 历史与压缩摘要从 memory.db 读回，继续 spatial-de
 ```
 

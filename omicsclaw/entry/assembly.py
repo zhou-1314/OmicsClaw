@@ -80,11 +80,11 @@ import platform
 import sqlite3
 import sys
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from omicsclaw.context import (
     AssembledPrompt,
@@ -98,12 +98,19 @@ from omicsclaw.context import (
     text_from_file,
 )
 from omicsclaw.engine import AgentEngine
+from omicsclaw.entry.notebook_apps import NotebookAppBridge
 from omicsclaw.hooks import (
     AuditHook,
     HookedTool,
     JsonlAuditSink,
     ToolHook,
     hook_tools,
+)
+from omicsclaw.kernel import (
+    OutputLimits,
+    PersistentKernelManager,
+    SessionKernel,
+    format_cell_summary,
 )
 from omicsclaw.mcp import (
     MCPManager,
@@ -118,7 +125,7 @@ from omicsclaw.memory.artifacts import (
     new_artifact_id,
 )
 from omicsclaw.memory.database import Database
-from omicsclaw.memory.notebook import NotebookCell, NotebookStore, ExecutionRecord
+from omicsclaw.memory.notebook import ExecutionRecord, NotebookCell, NotebookStore
 from omicsclaw.observability import Telemetry, build_telemetry
 from omicsclaw.permission import (
     GatedTool,
@@ -136,18 +143,12 @@ from omicsclaw.planning import (
 )
 from omicsclaw.provider import (
     LLMProvider,
+    ModelLimits,
     get_model_limits,
     provider_from_env,
     resolve_config,
 )
-from omicsclaw.kernel import (
-    OutputLimits,
-    PersistentKernelManager,
-    SessionKernel,
-    format_cell_summary,
-)
 from omicsclaw.remote import RemoteKernelRuntime, RemotePlaneBinding
-from omicsclaw.sandbox import EgressMode
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.artifacts import kind_and_mime_for
 from omicsclaw.skills import (
@@ -172,16 +173,14 @@ from omicsclaw.tools import (
 )
 from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
 from omicsclaw.tools.builtin.bash import BashEnvironment, without_control_credentials
+from omicsclaw.tools.builtin.live_app import LiveAppTool
 from omicsclaw.tools.builtin.manage_env import ManageEnvironmentsTool
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
-from omicsclaw.tools.builtin.live_app import LiveAppTool
-from omicsclaw.entry.notebook_apps import NotebookAppBridge
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
 from .archive import archive_tools
 from .config import AppConfig, SkillsIndex
-from .shadow_review import ShadowReview
 from .env_supply import EnvSupplyBinding, build_env_supply
 from .memory import (
     MemoryBinding,
@@ -203,15 +202,15 @@ from .sandbox import (
     sandbox_section,
     unstarted_sandbox,
 )
+from .shadow_review import ShadowReview
 from .skill_env import SkillEnvBinding, build_skill_env, log_skill_env
-from .suggestions import FOLLOW_UP_SENTINEL
 from .subagent import ChildRunner, build_subagent_registry
+from .suggestions import FOLLOW_UP_SENTINEL
 
 if TYPE_CHECKING:  # pragma: no cover - session.py imports this module
     from .session import SessionRegistry
 
 __all__ = [
-    "AgentApp",
     "COMPACTION_CONTRACT_RULES",
     "COMPACTION_SECTION_HEADING",
     "CONTRACT_FILE",
@@ -221,6 +220,7 @@ __all__ = [
     "SAFETY_RULES",
     "SHUTDOWN_GRACE_S",
     "TOOL_GUIDANCE",
+    "AgentApp",
     "build_app",
     "build_budget",
     "build_hooks",
@@ -628,6 +628,7 @@ class WorkspaceKernelBinding:
         notebook_store: NotebookStore | None = None,
         spawn_wrapper: object = None,
         sandbox: SandboxBinding | None = None,
+        python: str | None = None,
     ) -> None:
         """*remote_runtime* (C3) is the remote kernel half or ``None`` —
         ``None`` is the off answer: the manager then refuses remote
@@ -644,6 +645,7 @@ class WorkspaceKernelBinding:
             remote_runtime=remote_runtime,
             spawn_wrapper=spawn_wrapper,
             env_scrubber=without_control_credentials,
+            python=python,
         )
         self._root = root
         self._sandbox = sandbox
@@ -727,10 +729,11 @@ class WorkspaceKernelBinding:
         *location* is C3's routing argument, passed through to the
         manager verbatim — the refusals (no runtime, bad shape) are the
         manager's, so both faces answer them identically."""
-        from omicsclaw.kernel import KernelCallbacks
-        from omicsclaw.tools.context import context_value
         import hashlib
         import uuid
+
+        from omicsclaw.kernel import KernelCallbacks
+        from omicsclaw.tools.context import context_value
 
         if self._sandbox is not None and self._sandbox.active:
             self._sandbox.drain_blocked_egress_hints()
@@ -928,9 +931,7 @@ class WorkspaceKernelBinding:
                     execution_id=execution_id,
                 )
             )
-        return append_egress_blocked_hints(
-            self._sandbox, format_cell_summary(result)
-        )
+        return append_egress_blocked_hints(self._sandbox, format_cell_summary(result))
 
 
 def build_permission_gate(config: AppConfig) -> PermissionGate:
@@ -1303,6 +1304,8 @@ class RecordingPromptSource:
 def build_budget(
     model: str,
     tools: Sequence[ToolDefinition],
+    *,
+    limits: ModelLimits | None = None,
 ) -> ContextBudget:
     """The window, and the two reserves carved out of it.
 
@@ -1317,7 +1320,7 @@ def build_budget(
     optimistic answer, recorded as debt in plan 0031 §11-2 and warned
     about here because this layer is the first that ever asks.
     """
-    limits = get_model_limits(model)
+    limits = get_model_limits(model) if limits is None else limits
     if not model:
         _log.warning(
             "no model named; budgeting against the default limits "
@@ -1481,7 +1484,7 @@ class AgentApp:
     ``app.skills.skipped`` is answerable without scanning again. Empty
     when ``skills_index=off`` or when the directory does not exist."""
 
-    sessions: "SessionRegistry | None" = None
+    sessions: SessionRegistry | None = None
     """Conversations, their queues, and one task per running exchange.
 
     Lives in ``omicsclaw/entry/session.py`` and is annotated as a string
@@ -1572,7 +1575,7 @@ class AgentApp:
     Closed by :meth:`aclose`, after everything that might still be
     producing spans."""
 
-    kernels: "WorkspaceKernelBinding | None" = None
+    kernels: WorkspaceKernelBinding | None = None
     """P4's persistent-kernel binding, or ``None`` in an app constructed
     directly. Holds the one
     :class:`~omicsclaw.kernel.PersistentKernelManager` per deployment —
@@ -1614,6 +1617,12 @@ class AgentApp:
     :func:`~omicsclaw.entry.session.attach_sessions`'s ``replace``. The
     desktop server binds the artifact store to it once the jobs manager
     exists; every other surface leaves it unbound and untouched."""
+
+    provider_for_role: Callable[[str], LLMProvider] | None = None
+    """Deployment-owned caller selection. None reuses the main provider."""
+
+    resolved_model: str | None = None
+    """Explicit model authority for deployments that do not read ambient config."""
 
     def set_permission_mode(self, mode: PermissionMode) -> PermissionMode | None:
         """Switch the gate between ``default`` and ``auto-approve``.
@@ -1829,10 +1838,19 @@ async def _consent_remote_kernel_env(host: str) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DeploymentCapabilities:
+    """Explicit optional services; the default preserves CLI behavior."""
+
+    notebook: bool = True
+    science_python: str | None = None
+
+
 def build_app(
     config: AppConfig,
     *,
     tools: Sequence[Tool] | None = None,
+    additional_tools: Sequence[Tool] = (),
     hooks: Sequence[ToolHook] | None = None,
     sections: Sequence[Section] | None = None,
     mcp: MCPManager | None = None,
@@ -1840,6 +1858,11 @@ def build_app(
     telemetry: Telemetry | None = None,
     skills: SkillIndex | None = None,
     provider: LLMProvider | None = None,
+    resolved_model: str | None = None,
+    model_limits: ModelLimits | None = None,
+    capabilities: DeploymentCapabilities | None = None,
+    provider_for_role: Callable[[str], LLMProvider] | None = None,
+    review_call=None,
 ) -> AgentApp:
     """Wire one deployment. The only function that knows the order.
 
@@ -1856,6 +1879,11 @@ def build_app(
     test can describe a whole app without touching the environment, a
     migration can add a tool by passing it, and a sub-agent is this same
     call with a narrower list.
+
+    ``additional_tools`` appends deployment tools to that selection before
+    the same hook and permission gates and the stable tool snapshot. A
+    deployment can bind a tool to a manager assembled immediately afterwards
+    without replacing the foundation tools or publishing another registry.
 
     ``hooks=None`` takes the chain :func:`build_hooks` reads from the
     configuration, which is empty unless
@@ -1910,6 +1938,8 @@ def build_app(
     database wants — :func:`~omicsclaw.entry.memory.prepare_memory` is
     ``async`` and :func:`open_app` is what runs it.
     """
+    if capabilities is None:
+        capabilities = DeploymentCapabilities()
     binding = unstarted_sandbox(config) if sandbox is None else sandbox
     # Telemetry is resolved before the provider, because the provider is
     # the first thing it wraps. ``build_telemetry`` reads the OTEL_*
@@ -1921,7 +1951,11 @@ def build_app(
     # named: ``LLM_PROVIDER=deepseek`` alone leaves ``config.model`` empty
     # and runs the preset's default, and budgeting against ``""`` would
     # be the fallback window instead of that model's.
-    model = resolve_config(config.provider, config.model).model
+    model = (
+        resolve_config(config.provider, config.model).model
+        if resolved_model is None
+        else resolved_model
+    )
     backend = (
         provider_from_env(config.provider, config.model)
         if provider is None
@@ -1967,14 +2001,21 @@ def build_app(
         # :attr:`AgentApp.kernels` (the desktop jobs plane's code_run runner
         # reads it back). Lazy kernels keep this cheap for deployments that
         # never run a cell.
-        kernels = WorkspaceKernelBinding(
-            config.workspace,
-            remote_runtime=remote_kernels,
-            notebook_store=(
-                NotebookStore(remembering.database) if remembering is not None else None
-            ),
-            spawn_wrapper=binding.as_kernel_spawn_wrapper(),
-            sandbox=binding,
+        kernels = (
+            WorkspaceKernelBinding(
+                config.workspace,
+                python=capabilities.science_python,
+                remote_runtime=remote_kernels,
+                notebook_store=(
+                    NotebookStore(remembering.database)
+                    if remembering is not None
+                    else None
+                ),
+                spawn_wrapper=binding.as_kernel_spawn_wrapper(),
+                sandbox=binding,
+            )
+            if capabilities.notebook
+            else None
         )
         if tools is None:
             mounted: Sequence[Tool] = (
@@ -1999,12 +2040,16 @@ def build_app(
                     Workspace(config.workspace),
                     sink=WorkspaceArtifactSink(config.workspace),
                 ),
-                PythonKernelTool(
-                    runner=kernels,
-                    allow_remote=remote_kernels is not None,
-                ),
-                LiveAppTool(NotebookAppBridge(kernels)),
             )
+            if kernels is not None:
+                mounted = (
+                    *mounted,
+                    PythonKernelTool(
+                        runner=kernels,
+                        allow_remote=remote_kernels is not None,
+                    ),
+                    LiveAppTool(NotebookAppBridge(kernels)),
+                )
             if env_supply is not None:
                 # Appended in the one slot the wiring tests allow: after
                 # the foundation set and P4's python, before nothing —
@@ -2021,6 +2066,7 @@ def build_app(
                 )
         else:
             mounted = tools
+        mounted = (*mounted, *additional_tools)
         if mcp is not None:
             mounted = (*mounted, *mcp.tools())
         # What is mounted decides whether this deployment plans — not what
@@ -2065,7 +2111,9 @@ def build_app(
         subagents = build_subagent_registry(config)
         if subagents is not None:
             runner = ChildRunner(
-                provider=provider,
+                provider=(
+                    provider_for_role("subagent") if provider_for_role else provider
+                ),
                 parent=registry,
                 config=config,
                 sandbox=binding,
@@ -2091,8 +2139,10 @@ def build_app(
         )
 
         app_prompt = RecordingPromptSource(build_prompt(chosen))
-        budget = build_budget(model, snapshot)
-        summarizer = build_summarizer(provider, config)
+        budget = build_budget(model, snapshot, limits=model_limits)
+        summarizer = build_summarizer(
+            provider_for_role("summary") if provider_for_role else provider, config
+        )
         # The registry goes in as itself — see build_registry on why nothing
         # may wrap it without forwarding both optional Protocols.
         #
@@ -2152,12 +2202,14 @@ def build_app(
         telemetry=observing,
         kernels=kernels,
         env_supply=env_supply,
+        provider_for_role=provider_for_role,
+        resolved_model=resolved_model,
     )
     if config.shadow_review:
         # The reviewer reads the config and receives everything else as
         # arguments, so holding the pre-attach app is deliberate:
         # attach_sessions copies this field onto the attached instance.
-        app = replace(app, shadow_review=ShadowReview(app))
+        app = replace(app, shadow_review=ShadowReview(app, review_call=review_call))
     return app
 
 

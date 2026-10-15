@@ -55,6 +55,8 @@ An excerpt is for recognising the row, not reading it — the id is what
 ``read_archive`` takes, and the full text is one call away."""
 
 NO_SESSION_MESSAGE = "no session is bound to this exchange"
+TOOL_CALLS_TRUNCATED_KEY = "tool_calls_truncated"
+"""Set when a rendered row omits stored tool-call arguments to fit the cap."""
 
 _EMPTY_HINT = (
     "try a shorter exact identifier (a path fragment, a gene id); "
@@ -280,15 +282,85 @@ async def _read(archive: SqliteCompactionArchive, row_id: int) -> str:
             f"search_archive reports the id of every row it finds"
         )
     _log.info("archive.read session=%s id=%d", session, row_id)
-    answer = _as_dict(row)
-    while not _fits(answer) and answer["content"]:
-        body = str(answer["content"])
-        answer = {
-            **answer,
-            "content": truncate_utf8(body, max(len(body.encode("utf-8")) // 2, 1)),
-            CONTENT_TRUNCATED_KEY: True,
-        }
+    answer = _bounded_answer(_as_dict(row))
     return json.dumps(answer, ensure_ascii=False)
+
+
+def _bounded_answer(answer: dict[str, object]) -> dict[str, object]:
+    """Return a useful row that is guaranteed to fit the tool-result cap.
+
+    Content was the only field the original implementation shortened. A
+    malicious or simply large archived tool call can therefore keep an
+    otherwise empty row above the cap forever. Drop the least useful
+    payload first, then shorten textual fields, and keep a minimal
+    identity record as the final safety net.
+    """
+    if _fits(answer):
+        return answer
+
+    bounded = dict(answer)
+    calls = bounded.get("tool_calls")
+    if calls not in (None, [], ""):
+        bounded["tool_calls"] = []
+        bounded[TOOL_CALLS_TRUNCATED_KEY] = True
+
+    while not _fits(bounded):
+        body = bounded.get("content")
+        if not isinstance(body, str) or not body:
+            break
+        shortened = truncate_utf8(body, max(len(body.encode("utf-8")) // 2, 1))
+        if shortened == body:
+            bounded["content"] = ""
+            bounded[CONTENT_TRUNCATED_KEY] = True
+            break
+        bounded["content"] = shortened
+        bounded[CONTENT_TRUNCATED_KEY] = True
+
+    for key in ("tool_call_id", "name"):
+        value = bounded.get(key)
+        if isinstance(value, str) and len(value) > 128:
+            bounded[key] = truncate_utf8(value, 128)
+
+    if _fits(bounded):
+        return bounded
+
+    # A final binary search preserves as much content as the cap allows
+    # after all fixed metadata and truncation markers are present.
+    original = bounded.get("content")
+    if isinstance(original, str) and original:
+        bounded[CONTENT_TRUNCATED_KEY] = True
+        low, high = 0, len(original)
+        best = ""
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = {**bounded, "content": original[:middle]}
+            if _fits(candidate):
+                best = original[:middle]
+                low = middle + 1
+            else:
+                high = middle - 1
+        bounded["content"] = best
+
+    if _fits(bounded):
+        return bounded
+
+    minimal = {
+        key: bounded[key]
+        for key in ("id", "seq", "position", "role")
+        if key in bounded
+    }
+    minimal.update({
+        "content": "",
+        "tool_calls": [],
+        CONTENT_TRUNCATED_KEY: True,
+    })
+    if _fits(minimal):
+        return minimal
+
+    # The fixed marker itself is below the cap; this path is only reachable
+    # if the storage schema or cap changes to make even the identity record
+    # too large.
+    return {CONTENT_TRUNCATED_KEY: True}
 
 
 def _as_dict(row: ArchivedMessage) -> dict[str, object]:

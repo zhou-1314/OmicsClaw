@@ -72,7 +72,11 @@ def _valid(document: Mapping[str, Any]) -> str | None:
     if not isinstance(source, str) or not _SOURCE_REQUEST_ID.fullmatch(source):
         return None
     text = document.get("user_text")
-    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TITLE_INPUT_CHARS:
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+        or len(text) > MAX_TITLE_INPUT_CHARS
+    ):
         return None
     return text
 
@@ -97,6 +101,7 @@ async def generate_title(
     document: Mapping[str, Any],
     *,
     timeout_s: float = TITLE_TIMEOUT_S,
+    max_tokens: int = 1024,
 ) -> tuple[int, dict[str, Any]]:
     """Answer one ``POST /chat/title`` request with ``(status, payload)``."""
     text = _valid(document)
@@ -108,7 +113,9 @@ async def generate_title(
     )
     try:
         async with asyncio.timeout(timeout_s):
-            provider = app.provider.bind(max_tokens=1024, thinking_budget_tokens=0)
+            select = getattr(app, "provider_for_role", None)
+            selected = select("title") if select else app.provider
+            provider = selected.bind(max_tokens=max_tokens, thinking_budget_tokens=0)
             completion = await provider.generate(messages, None)
     except TimeoutError:
         return _failure(504, "TITLE_TIMEOUT")

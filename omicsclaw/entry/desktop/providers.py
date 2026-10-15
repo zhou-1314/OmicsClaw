@@ -50,6 +50,14 @@ No payload carries a key or any part of one.
 
 from __future__ import annotations
 
+from .provider_probe import (
+    probe_provider,
+    _close as _close,
+    _elapsed_ms as _elapsed_ms,
+    _scrub as _scrub,
+    _failure_detail as _failure_detail,
+)
+
 import asyncio
 import logging
 import re
@@ -253,7 +261,11 @@ def _configured_via(
     if resolved.api_key.strip():
         return "generic-env"
     named = _first(environment, "LLM_PROVIDER", "OMICSCLAW_PROVIDER").lower()
-    if preset.name in _EXPLICIT_PROVIDERS and named == preset.name and resolved.base_url:
+    if (
+        preset.name in _EXPLICIT_PROVIDERS
+        and named == preset.name
+        and resolved.base_url
+    ):
         return "explicit-provider"
     return None
 
@@ -447,9 +459,7 @@ def _shadowed(
             if other == name or not theirs or theirs == wanted:
                 continue
             if (
-                position < group.index(name)
-                or not wanted
-                or group == PROVIDER_NAMES
+                position < group.index(name) or not wanted or group == PROVIDER_NAMES
             ) and other not in shadowed:
                 shadowed.append(other)
     return shadowed
@@ -508,18 +518,6 @@ def save_provider(
 # ---- POST /providers/test ---------------------------------------------------------
 
 
-def _scrub(text: str, secret: str) -> str:
-    if len(secret) >= _MIN_SCRUBBED_CHARS:
-        text = text.replace(secret, "…")
-    return text[:_MAX_MESSAGE_CHARS]
-
-
-def _failure_detail(exc: BaseException) -> str:
-    status = getattr(exc, "status_code", None)
-    name = type(exc).__name__
-    return f"{name} (HTTP {status})" if isinstance(status, int) else name
-
-
 async def test_provider(
     settings: SettingsFile | None,
     document: Mapping[str, Any],
@@ -550,47 +548,6 @@ async def test_provider(
         api_key=request.api_key,
         env=next_start_environment(settings),
     ).with_overrides(**_TEST_OVERRIDES)
-    messages = (
-        Message(role=Role.SYSTEM, content="Reply with the single word: pong."),
-        Message(role=Role.USER, content="ping"),
+    return await probe_provider(
+        config, provider_factory=provider_factory, timeout_s=timeout_s
     )
-    started = time.monotonic()
-    try:
-        async with asyncio.timeout(timeout_s):
-            adapter = provider_factory(config)
-            try:
-                reply: Awaitable[Any] = adapter.generate(messages, None)
-                await reply
-            finally:
-                await _close(adapter)
-    except Exception as exc:  # noqa: BLE001 - every failure is a result
-        return {
-            "ok": False,
-            "message": _scrub(str(exc) or type(exc).__name__, config.api_key),
-            "detail": _failure_detail(exc),
-            "duration_ms": _elapsed_ms(started),
-        }
-    return {
-        "ok": True,
-        "message": "Live provider test passed.",
-        "provider": config.provider,
-        "model": config.model,
-        "duration_ms": _elapsed_ms(started),
-    }
-
-
-async def _close(adapter: Any) -> None:
-    """Close *adapter* through its ``aclose()`` or ``close()``, when it has one."""
-    closer = getattr(adapter, "aclose", None) or getattr(adapter, "close", None)
-    if closer is None:
-        return
-    try:
-        result = closer()
-        if asyncio.iscoroutine(result):
-            await result
-    except Exception as exc:  # noqa: BLE001 - closing never decides the result
-        _log.debug("closing the test adapter failed: %s", type(exc).__name__)
-
-
-def _elapsed_ms(started: float) -> int:
-    return int((time.monotonic() - started) * 1000)

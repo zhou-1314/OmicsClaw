@@ -38,7 +38,7 @@ OmicsClaw 用两个内置工具让 agent 访问互联网：`web_search` 搜索�
 - Today: 2026-09-23
 ```
 
-**只写日期，不写时间戳**：DeepSeek 和 OpenAI 都按字节精确的前缀缓存，日期每天只让缓存失效一次，时钟读数则每一轮都会让它失效。这一段在每轮渲染时重新求值，所以跨过午夜的进程也会拿到新日期。它排在 system prompt 的后部（skills 段之后、长期记忆段之前），尽量少影响缓存前缀。
+**只写日期，不写时间戳**：DeepSeek 和 OpenAI 都按字节精确的前缀缓存，日期每天只让缓存失效一次，时钟读数则每一轮都会让它失效。这一段在每轮渲染时重新求值，所以跨过午夜的进程也会拿到新日期。它排在 system prompt 的后部（skills 段之后；长期记忆 fallback 段若启用则在其之前），尽量少影响缓存前缀。默认 precis_via_augmentor=true 时长期记忆走 user augmentor，不占 system prompt。
 
 ---
 

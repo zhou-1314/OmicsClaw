@@ -159,7 +159,7 @@ def _wire_json_value(
                             active_containers=containers,
                         )
                     )
-                return projected
+                return dict(sorted(projected.items()))
             return [
                 _wire_json_value(
                     child,
@@ -212,16 +212,26 @@ def desktop_chat_frame(
     """
     kind = event.type
     if kind is TurnEventType.TEXT_DELTA:
-        delta = event.engine.delta if event.engine is not None else ""
+        delta = (
+            event.engine.delta
+            if event.engine is not None
+            else str((event.wire_payload or {}).get("delta", ""))
+        )
         return ("text", delta) if delta else None
     if kind is TurnEventType.REASONING_DELTA:
-        delta = event.engine.delta if event.engine is not None else ""
+        delta = (
+            event.engine.delta
+            if event.engine is not None
+            else str((event.wire_payload or {}).get("delta", ""))
+        )
         return ("thinking", delta) if delta else None
     if kind is TurnEventType.PROGRESS:
         update = event.progress
         if update is None:
-            return None
-        text = update.message or update.tool_name
+            payload = event.wire_payload or {}
+            text = str(payload.get("message") or payload.get("tool_name") or "")
+        else:
+            text = update.message or update.tool_name
         return ("tool_output", text) if text else None
     if kind in (TurnEventType.TOOL_START, TurnEventType.TOOL_RESULT):
         payload = to_wire(event)
@@ -291,7 +301,11 @@ def desktop_terminal_frames(event: TurnEvent) -> tuple[tuple[str, Any], ...]:
     if event.terminal == "cancelled":
         return (("error", "cancelled"), ("done", ""))
     error = event.error
-    named = type(error).__name__ if error is not None else "unknown"
+    named = (
+        type(error).__name__
+        if error is not None
+        else str((event.wire_payload or {}).get("error_type") or "unknown")
+    )
     return (("error", named), ("done", ""))
 
 
@@ -338,6 +352,7 @@ class DesktopChatSSEBody:
         "_pending",
         "_provider",
         "last_seq",
+        "last_subframe",
     )
 
     def __init__(
@@ -352,6 +367,7 @@ class DesktopChatSSEBody:
         model: str = "",
         compaction: TurnHandle | None = None,
         epoch: int | None = None,
+        usage_ledger: TurnUsage | None = None,
     ) -> None:
         """*after_seq* is remembered, not applied.
 
@@ -391,11 +407,12 @@ class DesktopChatSSEBody:
         self._model = model
         self._pending: list[str] = []
         self._closed = False
-        self._ledger: TurnUsage | None = None
+        self._ledger: TurnUsage | None = usage_ledger
         self._compaction = compaction
         self._compaction_seen = False
         self._epoch = epoch
         self.last_seq = after_seq
+        self.last_subframe = -1
 
     async def __aenter__(self) -> DesktopChatSSEBody:
         return self
@@ -416,6 +433,7 @@ class DesktopChatSSEBody:
         """
         while True:
             if self._pending:
+                self.last_subframe += 1
                 return self._pending.pop(0)
             if self._closed:
                 raise StopAsyncIteration
@@ -426,6 +444,7 @@ class DesktopChatSSEBody:
                 return render_chat_sse_frame("keep_alive", "")
             ledger = self._mark_read(event)
             self.last_seq = max(self.last_seq, event.seq)
+            self.last_subframe = -1
             if event.type is TurnEventType.EXCHANGE_END:
                 if event.terminal == "converged":
                     report = await self._compaction_report(event)
@@ -450,9 +469,8 @@ class DesktopChatSSEBody:
                 frame = desktop_chat_frame(event)
             if frame is None:
                 continue
-            return render_chat_sse_frame(
-                *frame, event_id=event.seq, epoch=self._epoch
-            )
+            self.last_subframe = 0
+            return render_chat_sse_frame(*frame, event_id=event.seq, epoch=self._epoch)
 
     def result(self) -> dict[str, Any]:
         """The ``result`` frame's data, for an exchange whose last event

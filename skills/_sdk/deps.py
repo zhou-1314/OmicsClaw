@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import logging
 import os
 import re
 import subprocess
@@ -35,12 +36,14 @@ from typing import Any
 
 from skills._sdk import external_env
 
+_logger = logging.getLogger(__name__)
+
 __all__ = [
     "DEPENDENCIES",
-    "require",
     "get",
-    "is_available",
     "install_hint",
+    "is_available",
+    "require",
     "validate_r_environment",
 ]
 
@@ -192,49 +195,49 @@ DEPENDENCIES: dict[str, dict] = {
     "metaboanalyst": {
         "module": "MetaboAnalystR",
         "kind": "r",
-        "install": 'Rscript -e \'install.packages("MetaboAnalystR")\'',
+        "install": "Rscript -e 'install.packages(\"MetaboAnalystR\")'",
         "description": "MetaboAnalyst via native R scripts",
     },
     "DESeq2": {
         "module": "DESeq2",
         "kind": "r",
-        "install": 'Rscript -e \'BiocManager::install("DESeq2")\'',
+        "install": "Rscript -e 'BiocManager::install(\"DESeq2\")'",
         "description": "Bulk count differential expression in R",
     },
     "sva": {
         "module": "sva",
         "kind": "r",
-        "install": 'Rscript -e \'BiocManager::install("sva")\'',
+        "install": "Rscript -e 'BiocManager::install(\"sva\")'",
         "description": "ComBat batch correction in R",
     },
     "survival": {
         "module": "survival",
         "kind": "r",
-        "install": 'Rscript -e \'install.packages("survival")\'',
+        "install": "Rscript -e 'install.packages(\"survival\")'",
         "description": "Survival curves and Cox regression in R",
     },
     "WGCNA": {
         "module": "WGCNA",
         "kind": "r",
-        "install": 'Rscript -e \'BiocManager::install("WGCNA")\'',
+        "install": "Rscript -e 'BiocManager::install(\"WGCNA\")'",
         "description": "Weighted gene coexpression analysis in R",
     },
     "Matrix": {
         "module": "Matrix",
         "kind": "r",
-        "install": 'Rscript -e \'install.packages("Matrix")\'',
+        "install": "Rscript -e 'install.packages(\"Matrix\")'",
         "description": "R sparse matrices and Matrix Market exchange",
     },
     "CellChat": {
         "module": "CellChat",
         "kind": "r",
-        "install": 'Rscript -e \'remotes::install_github("jinworks/CellChat")\'',
+        "install": "Rscript -e 'remotes::install_github(\"jinworks/CellChat\")'",
         "description": "Cell-cell communication analysis in R",
     },
     "numbat": {
         "module": "numbat",
         "kind": "r",
-        "install": 'Rscript -e \'remotes::install_github("kharchenkolab/numbat")\'',
+        "install": "Rscript -e 'remotes::install_github(\"kharchenkolab/numbat\")'",
         "description": "Allele-aware copy-number inference in R",
     },
     "mllmcelltype": {
@@ -464,7 +467,7 @@ DEPENDENCIES: dict[str, dict] = {
     "xcms": {
         "module": "xcms",
         "kind": "r",
-        "install": 'Rscript -e \'BiocManager::install("xcms")\'',
+        "install": "Rscript -e 'BiocManager::install(\"xcms\")'",
         "description": "XCMS via native R scripts",
     },
 }
@@ -485,7 +488,12 @@ def _resolve(name: str) -> tuple[str | None, dict[str, Any]]:
     key = _BY_NORMALISED.get(_normalise(name)) or _BY_MODULE.get(name)
     if key is not None:
         return key, DEPENDENCIES[key]
-    return None, {"module": name, "kind": "pip", "install": f"pip install {name}", "description": ""}
+    return None, {
+        "module": name,
+        "kind": "pip",
+        "install": f"pip install {name}",
+        "description": "",
+    }
 
 
 @lru_cache(maxsize=256)
@@ -508,8 +516,11 @@ def _r_package_available(package: str) -> bool:
             return False
         from skills._sdk import r_script_runner
 
-        return not r_script_runner.RScriptRunner(verbose=False).get_missing_packages([package])
+        return not r_script_runner.RScriptRunner(verbose=False).get_missing_packages(
+            [package]
+        )
     except Exception:
+        _logger.exception("R package probe failed for %s", package)
         return False
 
 
@@ -541,6 +552,9 @@ def is_available(name: str) -> bool:
         try:
             return bool(external_env.is_env_available(entry["alt_env"]))
         except Exception:
+            _logger.exception(
+                "alternate environment probe failed for %s", entry["alt_env"]
+            )
             return False
     return False
 
@@ -554,7 +568,9 @@ def get(name: str, *, warn_if_missing: bool = False) -> Any | None:
     module_name, entry = _python_module(name)
     module = _try_import(module_name)
     if module is None and warn_if_missing:
-        warnings.warn(f"{name} not available. Install with: {entry['install']}", stacklevel=2)
+        warnings.warn(
+            f"{name} not available. Install with: {entry['install']}", stacklevel=2
+        )
     return module
 
 
@@ -587,18 +603,25 @@ def install_hint(name: str) -> str:
 def _check_r_available() -> bool:
     """Whether an ``Rscript`` (the active conda env's first, then ``PATH``) runs."""
     candidates = []
+    selected = os.environ.get("OMICSCLAW_RSCRIPT", "").strip()
+    if selected:
+        if not os.path.isabs(selected) or not os.path.isfile(selected):
+            return False
+        candidates.append(selected)
     conda_prefix = os.environ.get("CONDA_PREFIX", "").strip()
-    if conda_prefix:
+    if not selected and conda_prefix:
         candidates.append(os.path.join(conda_prefix, "bin", "Rscript"))
-    if sys.prefix:
+    if not selected and sys.prefix:
         candidates.append(os.path.join(sys.prefix, "bin", "Rscript"))
-    candidates.append("Rscript")
+    if not selected:
+        candidates.append("Rscript")
 
     try:
         for rscript in dict.fromkeys(candidates):
             try:
                 result = subprocess.run(
                     [rscript, "--version"],
+                    check=False,
                     capture_output=True,
                     text=True,
                     timeout=10,
