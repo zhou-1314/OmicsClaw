@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from ._registry import (
     CommandHandler,
+    CommandReply,
+    ReplyLater,
     SlashCommandContext,
+    begin,
     dispatch,
     register,
     registered_commands,
@@ -29,7 +32,10 @@ from . import builtins  # noqa: F401, E402
 
 __all__ = [
     "CommandHandler",
+    "CommandReply",
+    "ReplyLater",
     "SlashCommandContext",
+    "begin",
     "dispatch",
     "register",
     "registered_commands",

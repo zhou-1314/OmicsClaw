@@ -36,11 +36,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from omicsclaw.context import CompactionRecord, CompactionState
+from omicsclaw.context import CompactionRecord
 
 from ...project import recent_modules
 from ...session import SubmissionRefused
-from ._registry import SlashCommandContext, register, registered_commands
+from ._registry import (
+    CommandReply,
+    SlashCommandContext,
+    register,
+    registered_commands,
+)
 
 _PROCESS_START = time.monotonic()
 """When this process came up, for ``/status``.
@@ -82,37 +87,45 @@ def _output_dir(ctx: SlashCommandContext) -> Path:
 # ---- conversation lifecycle -----------------------------------------
 
 
-def _clear(ctx: SlashCommandContext) -> str | None:
-    """Drop one conversation's history and its carried summary.
+async def _clear(ctx: SlashCommandContext, done: str) -> CommandReply:
+    """Queue dropping one conversation's history and its carried summary.
 
-    Returns a refusal sentence, or ``None`` when it worked.
+    Returns a refusal sentence when there is nothing to act on. Otherwise
+    the work is queued by
+    :meth:`~omicsclaw.entry.session.SessionRegistry.clear` before this
+    returns, and it runs in the conversation's lane: an exchange that is
+    running or waiting there finishes first, and a message accepted
+    afterwards starts from an empty conversation.
 
-    Both fields go together: keeping
-    :attr:`~omicsclaw.entry.session.Session.compaction` over a cleared history
-    would leave the next exchange summarising a conversation that no longer
-    exists, and the summary is the part the model would believe.
+    The :data:`~._registry.ReplyLater` returned waits for that work. It
+    returns *done* once the conversation is empty in memory and in the
+    session store, and a conversation that was never saved counts as
+    empty. It raises :exc:`RuntimeError` when the clear did not finish, for
+    instance because the store could not be written or the process is
+    shutting down.
 
-    The store is written on the next exchange, not here — the registry saves a
-    session after it runs one, and reaching around it to save now would race
-    the exchange that may be running in this very session.
+    :raises SubmissionRefused: the conversation's queue is full, or the
+        registry is shutting down. Nothing was queued.
     """
     if ctx.app is None or ctx.app.sessions is None:
         return _NO_APP
     if not ctx.session_id:
         return _NO_SESSION
-    session = ctx.app.sessions.session(ctx.session_id)
-    if session is None:
-        return None
-    session.history = ()
-    session.compaction = CompactionState()
-    return None
+    handle = await ctx.app.sessions.clear(ctx.session_id)
+
+    async def cleared() -> str:
+        await handle.wait()
+        if handle.terminal != "converged":
+            raise RuntimeError(f"the clear ended {handle.terminal}") from handle.error
+        return done
+
+    return cleared
 
 
 @register("/clear")
-async def _cmd_clear(ctx: SlashCommandContext) -> str:
+async def _cmd_clear(ctx: SlashCommandContext) -> CommandReply:
     """Clear conversation history for this chat."""
-    refused = _clear(ctx)
-    return refused or "Conversation history cleared."
+    return await _clear(ctx, "Conversation history cleared.")
 
 
 def _describe_compaction(record: CompactionRecord) -> str:
@@ -137,8 +150,12 @@ def _describe_compaction(record: CompactionRecord) -> str:
 
 
 @register("/compact")
-async def _cmd_compact(ctx: SlashCommandContext) -> str:
-    """Summarize this conversation now, keeping the recent messages."""
+async def _cmd_compact(ctx: SlashCommandContext) -> CommandReply:
+    """Summarize this conversation now, keeping the recent messages.
+
+    The compaction is queued in the conversation's lane before this
+    returns. The reply describes what it did and is known once it has run.
+    """
     if ctx.app is None or ctx.app.sessions is None:
         return _NO_APP
     if not ctx.session_id:
@@ -147,17 +164,20 @@ async def _cmd_compact(ctx: SlashCommandContext) -> str:
         handle = await ctx.app.sessions.compact(ctx.session_id)
     except SubmissionRefused as refused:
         return f"Cannot compact now: {refused}"
-    outcome = await handle.wait()
-    if outcome is None or outcome.compaction is None:
-        return "Compaction did not finish."
-    return _describe_compaction(outcome.compaction)
+
+    async def compacted() -> str:
+        outcome = await handle.wait()
+        if outcome is None or outcome.compaction is None:
+            return "Compaction did not finish."
+        return _describe_compaction(outcome.compaction)
+
+    return compacted
 
 
 @register("/new")
-async def _cmd_new(ctx: SlashCommandContext) -> str:
+async def _cmd_new(ctx: SlashCommandContext) -> CommandReply:
     """Same effect as ``/clear``; phrased as a "new conversation" intent."""
-    refused = _clear(ctx)
-    return refused or "New conversation started."
+    return await _clear(ctx, "New conversation started.")
 
 
 # ---- filesystem introspection ----------------------------------------

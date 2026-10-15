@@ -59,6 +59,10 @@ from tests.entry.channel_conformance import (  # type: ignore[import-not-found]
     SentCall,
     register,
 )
+from tests.entry.test_channel_commands import (  # type: ignore[import-not-found]
+    Echoing,
+    asked,
+)
 from tests.entry.test_channel_delivery import (  # type: ignore[import-not-found]
     RetryAfter,
 )
@@ -66,6 +70,9 @@ from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
     OWNER,
     Transport,
     deployment,
+)
+from tests.entry.test_channel_runtime import (  # type: ignore[import-not-found]
+    until,
 )
 
 WAIT_S = 5.0
@@ -454,9 +461,10 @@ def feishu_event(
     message_type: str = "text",
     mentions=(),
     message_id: str = "om_1",
+    chat: str = "oc_1",
 ):
     message = SimpleNamespace(
-        chat_id="oc_1",
+        chat_id=chat,
         message_id=message_id,
         chat_type=chat_type,
         message_type=message_type,
@@ -678,6 +686,52 @@ def test_a_redelivered_feishu_message_is_not_answered_twice(tmp_path):
 
     assert len(spy.delivered) == 1, "the local cache stopped the repeat"
     assert transport.sent == ["ok"]
+
+
+def test_a_feishu_command_that_waits_does_not_hold_the_sdk_thread(tmp_path):
+    """``lark-oapi`` calls the handler on its own thread, one event at a time.
+
+    While ``/clear`` waits for the exchange ahead of it, the thread goes
+    on to the events behind it. A message in another chat is answered,
+    and a message in the same chat runs after the clear.
+    """
+
+    async def scenario():
+        provider = Echoing("analyse this")
+        app, _spy = deployment(tmp_path, provider)
+        transport = Transport()
+        runtime = await feishu_runtime(app, transport)
+        channel = feishu_channel(runtime)
+        await asyncio.to_thread(channel._handle_event, feishu_event())
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+
+        def sdk_thread() -> None:
+            channel._handle_event(feishu_event(text="/clear", message_id="om_2"))
+            channel._handle_event(
+                feishu_event(text="hello", chat="oc_2", message_id="om_3")
+            )
+            channel._handle_event(feishu_event(text="what now", message_id="om_4"))
+
+        events = asyncio.ensure_future(asyncio.to_thread(sdk_thread))
+        handled, _held = await asyncio.wait({events}, timeout=WAIT_S)
+        if handled:
+            await until(lambda: "answer to hello" in transport.sent)
+        early = list(transport.sent)
+        provider.release.set()
+        await events
+        await until(lambda: "answer to what now" in transport.sent)
+        await runtime.close(WAIT_S)
+        return bool(handled), early, transport.sent, provider
+
+    handled, early, sent, provider = asyncio.run(
+        asyncio.wait_for(scenario(), 3 * WAIT_S)
+    )
+
+    assert handled, "the SDK thread waited for the exchange ahead of the command"
+    assert "answer to hello" in early, "the other chat was not served meanwhile"
+    assert "Conversation history cleared." not in early
+    assert "Conversation history cleared." in sent
+    assert asked(provider.call_for("what now")) == ["what now"]
 
 
 def test_the_feishu_binding_carries_both_halves_of_the_gate():

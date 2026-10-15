@@ -16,7 +16,7 @@ import pathlib
 
 import pytest
 
-from omicsclaw.context import MISSING_TOOL_RESULT, ContextBudget
+from omicsclaw.context import MISSING_TOOL_RESULT, CompactionState, ContextBudget
 from omicsclaw.engine import StopReason
 from omicsclaw.entry.events import TurnEventType
 from omicsclaw.entry.memory import session_store
@@ -1790,6 +1790,263 @@ def test_the_cap_evicts_an_idle_session_and_never_a_busy_one(tmp_path):
     assert survived, "a session with an exchange in flight is never evicted"
     assert idle is None, "the least recently used idle session was not evicted"
     assert newcomer is not None
+
+
+# ---- clearing a conversation -------------------------------------------
+
+
+class Gated(Scripted):
+    """``Scripted`` whose first call waits to be released."""
+
+    def __init__(self, *replies: Message) -> None:
+        super().__init__(*replies)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(self, messages, tools=None):
+        if self.calls == 0:
+            self.entered.set()
+            await self.release.wait()
+        return await super().generate(messages, tools)
+
+
+def asked(messages) -> list[str]:
+    """The user messages of one model call, in order."""
+    return [m.content for m in messages if m.role is Role.USER]
+
+
+def test_clear_empties_the_session_in_memory_and_in_the_store(tmp_path):
+    """The summary goes with the history, and the store is written now.
+
+    A summary kept over an emptied history would be handed to the next
+    exchange as what the conversation was about.
+    """
+    store = RecordingStore()
+    _app, sessions = registry_for(
+        tmp_path, Scripted(Message.assistant("done")), store=store
+    )
+
+    async def drive():
+        await drain(await sessions.submit("s1", "one"))
+        live = sessions.session("s1")
+        live.compaction = CompactionState(summary="they discussed a slide")
+        handle = await sessions.clear("s1")
+        frames = await frames_until_sealed(handle)
+        await drain(handle)
+        return handle, frames, live
+
+    handle, frames, live = asyncio.run(drive())
+
+    assert handle.terminal == "converged"
+    assert frames[-1].type is TurnEventType.EXCHANGE_END
+    assert frames[-1].terminal == "converged"
+    assert live.history == ()
+    assert live.compaction == CompactionState()
+    assert store.saved[-1] == ("s1", 0), "the cleared session was not saved"
+
+
+def test_clear_reaches_a_session_this_registry_has_not_loaded(tmp_path):
+    """After a restart the conversation is in the store and nowhere else.
+
+    Clearing it there does not load it into this registry.
+    """
+    store = RecordingStore()
+    provider = Scripted(Message.assistant("done"))
+    _app, sessions = registry_for(tmp_path, provider, store=store)
+
+    async def drive():
+        await store.save(
+            Session(
+                session_id="s1",
+                history=(Message.user("old question"), Message.assistant("old")),
+                compaction=CompactionState(summary="an old summary"),
+                created_at=1.0,
+                updated_at=1.0,
+            )
+        )
+        assert sessions.session("s1") is None
+        await drain(await sessions.clear("s1"))
+        adopted = sessions.session("s1")
+        kept = await store.load("s1")
+        facts = (kept.history, kept.compaction.summary, kept.created_at)
+        stamped, saved = kept.updated_at, store.saved[-1]
+        await drain(await sessions.submit("s1", "new question"))
+        return facts, stamped, saved, adopted
+
+    facts, stamped, saved, adopted = asyncio.run(drive())
+
+    assert adopted is None, "the clear brought the stored session into memory"
+    assert facts == ((), "", 1.0)
+    assert saved == ("s1", 0), "the cleared session was not saved"
+    assert stamped > 1.0, "the save was not stamped"
+    assert asked(provider.seen[-1]) == ["new question"]
+    assert [m.role for m in provider.seen[-1]].count(Role.ASSISTANT) == 0
+
+
+def test_clear_waits_behind_the_exchange_ahead_of_it(tmp_path):
+    """It runs in the lane, so the exchange in flight cannot write over it.
+
+    The exchange accepted before the clear finishes with the history it
+    was given, and the one accepted after it starts with none.
+    """
+    provider = Gated(Message.assistant("first"), Message.assistant("second"))
+    _app, sessions = registry_for(tmp_path, provider)
+
+    async def drive():
+        first = await sessions.submit("s1", "one")
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        clearing = await sessions.clear("s1")
+        second = await sessions.submit("s1", "two")
+        for _ in range(10):
+            await asyncio.sleep(0)
+        early = clearing.done
+        provider.release.set()
+        await drain(first)
+        await drain(clearing)
+        await drain(second)
+        return early, first, clearing, sessions.session("s1")
+
+    early, first, clearing, session = asyncio.run(drive())
+
+    assert not early, "the clear ran while an exchange was still running"
+    assert first.terminal == "converged"
+    assert clearing.terminal == "converged"
+    assert asked(provider.seen[1]) == ["two"]
+    assert [m.content for m in session.history] == ["two", "second"]
+
+
+def test_clear_keeps_its_place_behind_an_exchange_already_queued(tmp_path):
+    """One exchange running, one queued, then the clear.
+
+    The queued exchange still runs with the history it was accepted
+    with. Only the message after the clear starts with none.
+    """
+    provider = Gated(
+        Message.assistant("first"),
+        Message.assistant("second"),
+        Message.assistant("third"),
+    )
+    _app, sessions = registry_for(tmp_path, provider)
+
+    async def drive():
+        first = await sessions.submit("s1", "one")
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        second = await sessions.submit("s1", "two")
+        clearing = await sessions.clear("s1")
+        provider.release.set()
+        await drain(first)
+        await drain(second)
+        await drain(clearing)
+        await drain(await sessions.submit("s1", "three"))
+
+    asyncio.run(drive())
+
+    assert asked(provider.seen[1]) == ["one", "two"]
+    assert asked(provider.seen[2]) == ["three"]
+
+
+def test_clear_of_a_session_nobody_saved_stores_nothing(tmp_path):
+    """Asking to forget a conversation must not bring one into being."""
+    store = RecordingStore()
+    _app, sessions = registry_for(
+        tmp_path, Scripted(Message.assistant("done")), store=store
+    )
+
+    async def drive():
+        handle = await sessions.clear("ghost")
+        await drain(handle)
+        return handle, await store.load("ghost")
+
+    handle, kept = asyncio.run(drive())
+
+    assert handle.terminal == "converged"
+    assert kept is None
+    assert store.saved == []
+    assert sessions.session("ghost") is None
+
+
+def test_a_clear_the_store_cannot_save_ends_failed(tmp_path):
+    """The session is left as it was, and the lane goes on to the next message."""
+    store = Breaking()
+    provider = Scripted(Message.assistant("done"))
+    _app, sessions = registry_for(tmp_path, provider, store=store)
+
+    async def drive():
+        await drain(await sessions.submit("s1", "one"))
+        live = sessions.session("s1")
+        live.compaction = CompactionState(summary="they discussed a slide")
+        before = (live.history, live.compaction, live.updated_at)
+        store.on_save = True
+        clearing = await sessions.clear("s1")
+        await drain(clearing)
+        left = (live.history, live.compaction, live.updated_at)
+        store.on_save = False
+        after = await sessions.submit("s1", "two")
+        await drain(after)
+        return clearing, before, left, after
+
+    clearing, before, left, after = asyncio.run(drive())
+
+    assert clearing.terminal == "failed"
+    assert isinstance(clearing.error, RuntimeError)
+    assert left == before
+    assert after.terminal == "converged"
+    assert asked(provider.seen[-1]) == ["one", "two"]
+
+
+def test_a_clear_cancelled_while_it_waits_changes_nothing(tmp_path):
+    provider = Gated(Message.assistant("first"))
+    store = RecordingStore()
+    _app, sessions = registry_for(tmp_path, provider, store=store)
+
+    async def drive():
+        first = await sessions.submit("s1", "one")
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        clearing = await sessions.clear("s1")
+        clearing.cancel()
+        provider.release.set()
+        await drain(first)
+        await drain(clearing)
+        return clearing, sessions.session("s1")
+
+    clearing, session = asyncio.run(drive())
+
+    assert clearing.terminal == "cancelled"
+    assert [m.content for m in session.history] == ["one", "first"]
+    assert store.saved == [("s1", 2)]
+
+
+def test_a_clear_is_refused_by_a_full_queue_like_a_message(tmp_path):
+    provider = Gated(Message.assistant("done"))
+    _app, sessions = registry_for(tmp_path, provider, max_queued_per_session=1)
+
+    async def drive():
+        first = await sessions.submit("s1", "one")
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        second = await sessions.submit("s1", "two")
+        with pytest.raises(QueueFull):
+            await sessions.clear("s1")
+        provider.release.set()
+        await drain(first)
+        await drain(second)
+
+    asyncio.run(drive())
+
+
+def test_a_clear_is_refused_once_the_registry_is_shutting_down(tmp_path):
+    """A registry that has stopped admitting messages admits no clear either."""
+    _app, sessions = registry_for(tmp_path, Scripted(Message.assistant("done")))
+
+    async def drive():
+        await drain(await sessions.submit("s1", "one"))
+        await asyncio.wait_for(sessions.shutdown(0.05), WAIT_S)
+        with pytest.raises(RegistryClosed):
+            await sessions.clear("s1")
+        return sessions.session("s1")
+
+    session = asyncio.run(drive())
+
+    assert [m.content for m in session.history] == ["one", "done"]
 
 
 def test_the_registry_is_the_one_mutable_thing_on_an_app(tmp_path):

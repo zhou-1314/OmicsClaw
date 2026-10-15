@@ -15,6 +15,9 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import logging
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,14 +28,25 @@ from omicsclaw.entry.channel.delivery import (
 )
 from omicsclaw.entry.channel.dingtalk import DingTalkChannel, DingTalkConfig
 from omicsclaw.entry.channel.dingtalk_delivery import DingTalkDeliveryAdapter
-from omicsclaw.entry.ingress import VALUE_CHAT_TYPE, VALUE_MENTIONS
+from omicsclaw.entry.channel.runtime import ChannelRuntime
+from omicsclaw.entry.ingress import VALUE_CHAT_TYPE, VALUE_MENTIONS, SenderPolicy
 from tests.entry.channel_conformance import (  # type: ignore[import-not-found]
     ChannelFixture,
     DeliveryCase,
     register,
 )
+from tests.entry.test_channel_commands import (  # type: ignore[import-not-found]
+    Echoing,
+    command_tasks,
+)
 from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
     OWNER,
+    Transport,
+    binding_for,
+    deployment,
+)
+from tests.entry.test_channel_runtime import (  # type: ignore[import-not-found]
+    until,
 )
 from tests.entry.test_channel_slack import (  # type: ignore[import-not-found]
     CountingRuntime,
@@ -257,6 +271,158 @@ def test_a_refused_dingtalk_message_can_still_land_when_it_is_resent():
 def test_dingtalk_refuses_the_legacy_standalone_entry_point():
     with pytest.raises(RuntimeError, match="ChannelRuntime"):
         dingtalk_channel().run_stream()
+
+
+# ---- the receive loop while a command waits ------------------------------
+
+
+SECOND_OWNER = "ou_second"
+PING = {"type": "SYSTEM", "headers": {"topic": "ping"}, "data": ""}
+
+
+class ScriptedSocket:
+    """A Stream connection that yields the frames a test feeds it."""
+
+    def __init__(self) -> None:
+        self.frames: asyncio.Queue = asyncio.Queue()
+        self.sent: list[dict] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        return json.dumps(await self.frames.get())
+
+    async def send(self, text: str) -> None:
+        self.sent.append(json.loads(text))
+
+    async def close(self) -> None:
+        return None
+
+    def pongs(self) -> list[dict]:
+        return [
+            body for body in self.sent if body["headers"].get("topic") == "ping"
+        ]
+
+
+async def streaming(tmp_path, monkeypatch, provider):
+    """A started channel whose real receive loop reads a scripted socket.
+
+    Two people may write to it, so a second conversation exists on the
+    account.
+    """
+    app, _spy = deployment(tmp_path, provider)
+    transport = Transport()
+    owners = frozenset({OWNER, SECOND_OWNER})
+    runtime = ChannelRuntime(
+        app,
+        [
+            binding_for(
+                transport,
+                adapter="dingtalk",
+                sender_policy=SenderPolicy(
+                    allowed_senders=owners, bot_identity=CLIENT_ID
+                ),
+            )
+        ],
+    )
+    await runtime.start()
+    channel = bound(runtime)
+    channel.config.allowed_senders = set(owners)
+    socket = ScriptedSocket()
+    monkeypatch.setitem(
+        sys.modules, "websockets", SimpleNamespace(connect=lambda _url: socket)
+    )
+    await channel.start()
+    return app, runtime, channel, socket, transport
+
+
+def test_a_dingtalk_command_that_waits_does_not_stop_the_receive_loop(
+    tmp_path, monkeypatch
+):
+    """``_ws_loop`` awaits each frame's handler before it reads the next.
+
+    While ``/clear`` waits for the exchange ahead of it, the loop still
+    answers the server's ping and reads another person's message.
+    """
+
+    async def scenario():
+        provider = Echoing("analyse this")
+        _app, runtime, channel, socket, transport = await streaming(
+            tmp_path, monkeypatch, provider
+        )
+        socket.frames.put_nowait(dingtalk_frame())
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+
+        socket.frames.put_nowait(dingtalk_frame(text="/clear"))
+        socket.frames.put_nowait(PING)
+        socket.frames.put_nowait(dingtalk_frame(text="hello", sender=SECOND_OWNER))
+        try:
+            await until(lambda: "answer to hello" in transport.sent)
+        except asyncio.TimeoutError:
+            pass
+        early, pongs = list(transport.sent), len(socket.pongs())
+        provider.release.set()
+        await until(lambda: "Conversation history cleared." in transport.sent)
+        await channel.stop()
+        await runtime.close(WAIT_S)
+        return early, pongs
+
+    early, pongs = asyncio.run(asyncio.wait_for(scenario(), 3 * WAIT_S))
+
+    assert "answer to hello" in early, "the loop read nothing while the command waited"
+    assert pongs == 1, "the server's ping went unanswered while the command waited"
+    assert "Conversation history cleared." not in early
+
+
+def test_a_dingtalk_command_still_waiting_when_the_channel_stops_is_not_answered(
+    tmp_path, monkeypatch, caplog
+):
+    """The launcher stops the channels before it closes the runtime.
+
+    Stopping cancels the receive loop and leaves the command's task
+    alone. A stopped channel has let go of the runtime, so when the clear
+    has run the reply has no binding to leave through and is logged as
+    dropped.
+    """
+
+    async def scenario():
+        provider = Echoing("analyse this")
+        app, runtime, channel, socket, transport = await streaming(
+            tmp_path, monkeypatch, provider
+        )
+        socket.frames.put_nowait(dingtalk_frame())
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+        socket.frames.put_nowait(dingtalk_frame(text="/clear"))
+        await until(command_tasks)
+
+        await channel.stop()
+        waiting = command_tasks()
+        closing = asyncio.ensure_future(runtime.close(WAIT_S))
+        provider.release.set()
+        await closing
+        await app.aclose()
+        kept = app.sessions.session(f"dingtalk:{OWNER}").history
+        return waiting, command_tasks(), transport.sent, kept
+
+    with caplog.at_level(logging.WARNING, logger="omicsclaw.entry.channel.base"):
+        waiting, left, sent, kept = asyncio.run(
+            asyncio.wait_for(scenario(), 3 * WAIT_S)
+        )
+
+    assert waiting == ["omicsclaw-command-dingtalk/clear"]
+    assert left == []
+    assert "Conversation history cleared." not in sent
+    assert kept == ()
+    assert "dingtalk command output dropped: no binding" in [
+        record.getMessage() for record in caplog.records
+    ]
 
 
 # ---- delivery ----------------------------------------------------------

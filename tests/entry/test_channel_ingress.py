@@ -103,6 +103,12 @@ class SpyRegistry:
     def session(self, session_id: str):
         return self.inner.session(session_id)
 
+    async def clear(self, session_id: str):
+        return await self.inner.clear(session_id)
+
+    async def compact(self, session_id: str):
+        return await self.inner.compact(session_id)
+
     def running(self):
         return self.inner.running()
 

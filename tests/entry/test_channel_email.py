@@ -34,11 +34,23 @@ from omicsclaw.entry.channel.email_delivery import (
     SmtpSettings,
     build_reply,
 )
-from omicsclaw.entry.ingress import VALUE_CHAT_TYPE
+from omicsclaw.entry.channel.runtime import ChannelRuntime
+from omicsclaw.entry.ingress import VALUE_CHAT_TYPE, SenderPolicy
 from tests.entry.channel_conformance import (  # type: ignore[import-not-found]
     ChannelFixture,
     DeliveryCase,
     register,
+)
+from tests.entry.test_channel_commands import (  # type: ignore[import-not-found]
+    Echoing,
+)
+from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
+    Transport,
+    binding_for,
+    deployment,
+)
+from tests.entry.test_channel_runtime import (  # type: ignore[import-not-found]
+    until,
 )
 from tests.entry.test_channel_slack import (  # type: ignore[import-not-found]
     CountingRuntime,
@@ -305,6 +317,61 @@ def test_a_refused_mail_can_still_land_when_it_is_redelivered():
         return runtime
 
     assert len(run(scenario()).messages) == 2
+
+
+SECOND_ADDRESS = "second@example.org"
+
+
+def test_an_email_command_that_waits_does_not_hold_the_poll(tmp_path):
+    """``_poll_once`` awaits each mail's handler before it takes the next.
+
+    While ``/clear`` waits for the exchange ahead of it, the poll goes on
+    to the next mail of the batch and returns, which is what lets the
+    next poll happen.
+    """
+
+    async def scenario():
+        provider = Echoing("analyse this")
+        app, _spy = deployment(tmp_path, provider)
+        transport = Transport()
+        owners = frozenset({OWNER_ADDRESS, SECOND_ADDRESS})
+        runtime = ChannelRuntime(
+            app,
+            [
+                binding_for(
+                    transport,
+                    adapter="email",
+                    sender_policy=SenderPolicy(allowed_senders=owners, bot_identity=""),
+                )
+            ],
+        )
+        await runtime.start()
+        channel = bound(runtime)
+        channel.config.allowed_senders = set(owners)
+        await channel._on_message(mail(subject=""))
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+
+        batch = [
+            mail(text="/clear", subject=""),
+            mail(text="hello", sender=SECOND_ADDRESS, subject=""),
+        ]
+        channel._fetch_unseen = lambda: batch
+        poll = asyncio.ensure_future(channel._poll_once())
+        returned, _held = await asyncio.wait({poll}, timeout=WAIT_S)
+        if returned:
+            await until(lambda: "answer to hello" in transport.sent)
+        early = list(transport.sent)
+        provider.release.set()
+        await poll
+        await until(lambda: "Conversation history cleared." in transport.sent)
+        await runtime.close(WAIT_S)
+        return bool(returned), early
+
+    returned, early = asyncio.run(asyncio.wait_for(scenario(), 3 * WAIT_S))
+
+    assert returned, "the poll waited for the exchange ahead of the command"
+    assert "answer to hello" in early, "the next mail of the batch was not handled"
+    assert "Conversation history cleared." not in early
 
 
 def test_email_has_no_way_to_attach_a_file_at_all():

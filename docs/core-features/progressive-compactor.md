@@ -487,7 +487,7 @@ async def force(history, tools=()) -> tuple[tuple[Message, ...], CompactionRecor
 | 入口 | 代码 | 行为 |
 |------|------|------|
 | CLI REPL | `entry/cli/_repl.py:Repl._compact` | 本会话有 exchange 在跑时直接拒绝；结束后打印 `_compaction_verdict`：`Compacted: a -> b tokens (x% smaller), m -> n messages.` / `Nothing to compact: this conversation is already short.` / `Compaction failed and the conversation was left as it was: ...` |
-| Channel | `entry/channel/commands/builtins.py` 的 `@register("/compact")` | 经 `dispatch()` 到达：Telegram 直接调用，Feishu/Slack/Discord/DingTalk/QQ/Email 经 `Channel.answer_slash_command`（仅 owner）；回复 `_describe_compaction` 的一句话 |
+| Channel | `entry/channel/commands/builtins.py` 的 `@register("/compact")` | 经 `commands.begin()` 到达：Telegram 直接调用，Feishu/Slack/Discord/DingTalk/QQ/Email 经 `Channel.answer_slash_command`（仅 owner）。压缩排进会话的 lane 之后入站回调就返回，回话在压缩结束之后发出，内容是 `_describe_compaction` 的一句话（[surfaces.md](surfaces.md) §9.5） |
 
 `/clear`（Channel）把会话的 `history` 与 `compaction` 一起清空。
 

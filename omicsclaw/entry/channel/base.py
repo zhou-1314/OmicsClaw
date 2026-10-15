@@ -21,18 +21,19 @@ class: see ``tests/entry/test_channel_cutover_conformance.py``.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import re
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from .capabilities import ChannelCapabilities
 from .config import BaseChannelConfig
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
-    from .commands import SlashCommandContext
+    from .commands import ReplyLater, SlashCommandContext
 
 _logger = logging.getLogger(__name__)
 
@@ -573,8 +574,17 @@ class Channel(ABC):
         against a list. It still reports ``True`` — the text was a command
         and is finished with — so that a refusal cannot fall through to the
         model instead.
+
+        A command whose reply waits for the conversation's queue
+        (``/clear``, ``/new``, ``/compact``) is not waited for here. Its
+        work is queued before this returns, so a message the platform
+        delivers next runs behind it, and :meth:`answer_command_later`
+        sends the reply when the work has ended. Waiting here would hold
+        the platform's inbound callback for as long as the exchange ahead
+        runs, and on several platforms that callback is the only thing
+        reading new messages.
         """
-        from .commands import dispatch
+        from .commands import begin
 
         if not self._is_owner(user_id):
             _logger.warning(
@@ -587,15 +597,71 @@ class Channel(ABC):
         # traceback is written wherever an operator points this logger.
         verb = text.split(maxsplit=1)[0] if text.strip() else ""
         try:
-            reply = await dispatch(self.command_context(chat_id, user_id, text))
+            reply = await begin(self.command_context(chat_id, user_id, text))
         except Exception:
             _logger.exception("%s command %s failed", self.name, verb)
             await self.send_command_output(reply_target, "That command failed.")
             return True
         if reply is None:
             return False
-        await self.send_command_output(reply_target, reply or "Nothing to show.")
+        if isinstance(reply, str):
+            await self.send_command_output(reply_target, reply or "Nothing to show.")
+            return True
+        self.answer_command_later(
+            verb, reply, functools.partial(self.send_command_output, reply_target)
+        )
         return True
+
+    def answer_command_later(
+        self,
+        verb: str,
+        reply: ReplyLater,
+        send: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """Send a command's reply once it is known, without the caller waiting.
+
+        The waiting and the send run in a Task the bound runtime holds, so
+        :meth:`~omicsclaw.entry.channel.runtime.ChannelRuntime.close` can
+        wait for it and reap it. *send* is how this adapter puts command
+        output in front of the person.
+
+        A runtime that is closing takes no new Task, and a channel that
+        has been stopped has no runtime. The command then gets no reply
+        and a warning is logged. Its work is already queued, and the
+        session registry runs or cancels it as it does with anything else
+        queued at shutdown.
+        """
+        work = self._answer_when_known(verb, reply, send)
+        runtime = self._control_runtime
+        if runtime is not None and runtime.finish_command(
+            work, name=f"omicsclaw-command-{self.name}{verb}"
+        ):
+            return
+        work.close()
+        _logger.warning(
+            "%s command %s gets no reply: the runtime is not accepting",
+            self.name,
+            verb,
+        )
+
+    async def _answer_when_known(
+        self,
+        verb: str,
+        reply: ReplyLater,
+        send: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """Wait for a queued command's reply and send it.
+
+        A command that failed is logged and answered as one that failed
+        before it queued anything.
+        """
+        try:
+            text = await reply()
+        except Exception:
+            _logger.exception("%s command %s failed", self.name, verb)
+            await send("That command failed.")
+            return
+        await send(text or "Nothing to show.")
 
     async def send_command_output(
         self,

@@ -931,6 +931,7 @@ class TurnHandle:
         "_task",
         "_timer",
         "approvals",
+        "clear_only",
         "compaction_only",
         "delegated",
         "error",
@@ -958,11 +959,14 @@ class TurnHandle:
         abandon_grace_s: float | None = None,
         compaction_only: bool = False,
         durable_log=None,
+        clear_only: bool = False,
     ) -> None:
         """``abandon_grace_s=None`` means an unwatched exchange keeps running.
 
         ``compaction_only=True`` marks an exchange that compacts the
-        session instead of sending it a message.
+        session instead of sending it a message. ``clear_only=True``
+        marks one that empties the session, and no model is called
+        for it.
 
         The grace period is the answer to "the last observer left" and
         **not** to "an observer stopped iterating" (plan 0031 trap 9,
@@ -988,6 +992,7 @@ class TurnHandle:
         self.turn_id = turn_id
         self.text = text
         self.compaction_only = compaction_only
+        self.clear_only = clear_only
         self.values: Mapping[str, object] = dict(values or {})
         self.state: TurnState = "queued"
         self.terminal: Terminal | None = None
