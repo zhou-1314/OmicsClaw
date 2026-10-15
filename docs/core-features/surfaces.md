@@ -512,8 +512,9 @@ start_channel
   终止帧是 `failed` 或 `cancelled` 的 exchange 没有轨迹可读，发出去的是这一帧渲染的 `Failed: <类型名>` 或
   `Cancelled.`。会话存储保存失败时不一样：终止帧已经是 `converged`，handle 之后才记为 `failed`，
   答案和失败提示都不发（§10 第 12 条）。
-- 提示和答案是各自独立的消息。排队提示、审批卡、审批结果、终止提示没有被平台接受时，回复泵记一条 WARNING，
+- 提示和答案是各自独立的消息。排队提示、审批卡、审批结果没有被平台接受时，回复泵记一条 WARNING，
   继续观察这次 exchange，答案照常发出。审批卡没送达时请求等到 `approval_timeout_s` 按超时拒绝（§9.9、§10 第 13 条）。
+  终止提示（`Failed: <类型名>`、`Cancelled.`）是这次 exchange 的最后一条消息，它没送达时只记一条 WARNING。
   含回答文字的消息没送达时回复泵才停下，默认部署里这样的消息只有最后的答案。
 - `delivery.deliver`：单条消息最多 `MAX_DELIVERY_ATTEMPTS = 3` 次、每次 `ATTEMPT_TIMEOUT_S = 30.0` 秒；适配器返回
   `ACCEPTED` / `NOT_ACCEPTED_RETRYABLE` / `REJECTED_PERMANENT` / `ACCEPTANCE_UNKNOWN`，只有可证明可重试的才重试，
@@ -528,8 +529,14 @@ start_channel
 旧的 `/forget`、`/plan` 未恢复。`/demo` 只是返回几条"用自然语言请求 demo"的示例文本，并不直接执行 skill。
 
 `/clear` 和 `/new` 做同一件事，只是回话不同（`Conversation history cleared.`、`New conversation started.`）：
-经 `SessionRegistry.clear` 在会话的 lane 里把对话历史和压缩摘要清空并写进存储，session id 不变。命令在排在它前面的
-exchange 结束之后才回话；队列已满或存储写不进去时回 `That command failed.`，会话保持原样（§9.9、§10 第 14 条）。
+经 `SessionRegistry.clear` 在会话的 lane 里把对话历史和压缩摘要清空并写进存储，session id 不变。
+
+`/clear`、`/new`、`/compact` 的工作都排在会话的 lane 里，轮到它要等排在前面的 exchange 结束。处理器把工作排进 lane
+就返回，适配器的入站回调跟着返回，平台可以接着送下一条消息；回话由 `ChannelRuntime` 持有的一个任务在工作结束之后
+发出（`Channel.answer_command_later`、`ChannelRuntime.finish_command`），等待期间不发任何提示。命令之后到达的消息排在
+这份工作后面，`/clear`、`/new` 之后的消息因此从空历史开始。其余九条命令的回话在回调里直接发出。
+`/clear`、`/new` 在队列已满、存储读写失败时回 `That command failed.`，会话保持原样；`/compact` 在队列已满时回
+`Cannot compact now: ...`（§9.9，§10 第 14、16 至 19 条）。
 
 ### 9.6 一致性测试代替基类
 
@@ -764,15 +771,42 @@ exchange 上，最后照常发答案。含回答文字的消息没送达时仍�
     卡片不重发（§9.9）。`delivered_types` 带 `TEXT_DELTA` 的部署里，含回答文字的消息没送达时回复泵仍然离开，
     exchange 在 30 秒后还没结束就被取消。
 14. **Channel 的 `/clear` 和 `/new` 只清对话历史和压缩摘要**：会话的计划（`PlanBook`，按 session id 存档）不清，
-    之后的模型调用仍然带着 `## Current execution plan` 这一块，重启后也一样；长期记忆也不动。会话里有 exchange
-    在跑或排队时，命令等它们结束才回话，等待期间占 `max_queued_per_session` 的一个位置，队列已满时回
-    `That command failed.`（§9.9）。
+    之后的模型调用仍然带着 `## Current execution plan` 这一块，重启后也一样；长期记忆也不动（§9.9）。
 15. **`/compact` 的回执会出现负的百分比**：摘要比它替换的消息长、消息条数却减少时结果照样写回，回执是
     `Compacted: 376 -> 406 tokens (-8% smaller); 4 messages summarized.` 这样的文字。
+16. **Channel 的 `/clear`、`/new`、`/compact` 要等排在前面的 exchange 结束才回话，等待期间没有提示**：命令的入站
+    回调立刻返回，回话要到会话的 lane 轮到这份工作并做完之后才发。默认部署没有 `turn_timeout_s`，前面的 exchange
+    跑多久就等多久，这期间用户收不到任何表示命令已经收到的消息。回话和前一次 exchange 的答案走两条发送路径，
+    先后不保证；答案分成几块发的时候，回话可能落在两块之间（§9.9）。
+17. **等待中的 `/clear`、`/new`、`/compact` 各占会话队列的一个位置**：`max_queued_per_session` 默认是 2。
+    一次 exchange 在跑、一次在排队、再加一条在等的 `/clear` 之后，下一条消息被 `queue_full` 拒收。Feishu、DingTalk、
+    Slack、Discord、QQ、Email 对被拒收的消息不回话，只记一条 WARNING；Telegram 回
+    `OmicsClaw is still working on your earlier messages. Please retry later.`。这是既有行为，命令排进队列之后
+    更容易碰到。命令的回调不再等待之后，一次只处理一个事件的适配器上同样会碰到：在 DingTalk 的接收循环上对比过，
+    `6f5782aa` 上这条消息要到命令回话之后才被读到，那时会被接受，现在它立刻被读到并拒收（§9.9）。
+18. **`That command failed.` 会成为 Channel 上 `/clear`、`/new` 的回话**：队列已满、会话注册表正在关闭、存储读写
+    失败时回的都是这一句，原因只在日志里（`<适配器名> command <命令> failed`，带 traceback）。会话这时保持原样。
+    清空在排队时被注册表的关闭取消、而 runtime 还开着的话，回的也是这一句；`oc channel` 的关闭顺序下不会出现（§9.9）。
+19. **进程关闭时还在等的 `/clear`、`/new`、`/compact` 收不到回话**：`ChannelRuntime.close` 最多等
+    `SHUTDOWN_GRACE_S`（20 秒），到时取消命令的任务。在这之前结束的命令，回话也因为适配器已经停了而被丢弃，
+    日志里是 `<适配器名> command output dropped: no binding`。清空本身由 `SessionRegistry.shutdown` 决定执行还是
+    取消，所以会出现会话已经清空、用户没有收到回话的情况。其中一种是清空的保存已经落到存储、`await` 还没返回时
+    lane 的 pump 被取消：存储里已经清空，内存里的会话恢复成旧的，进程随即退出，下次启动读到的是空会话。
+    这条路径在 `6f5782aa` 上会回 `That command failed.`，现在按 `oc channel` 的关闭顺序不回话；注册表先于 runtime
+    关闭时仍然回这一句（§9.9）。
+20. **对不在内存里的会话清空之后，注册表的 `_lanes` 里留下一个条目**：`_evict_sessions` 只在淘汰内存里的会话时
+    删掉它的 lane。清空不把只在存储里的会话带进内存，也不为没保存过的会话新建，这样的会话的 lane 没有人回收，
+    每个会话一个空的 `_Lane` 对象，留到进程退出。
+21. **Telegram 上九条内置命令到不了处理器**：`_build_application` 只注册了 `/start`、`/skills`、`/demo`、`/status`、
+    `/health` 五个 `CommandHandler`，文本处理器的过滤条件是 `filters.TEXT & ~filters.COMMAND`。`/clear`、`/new`、
+    `/compact`、`/help`、`/files`、`/outputs`、`/recent`、`/version`、`/examples` 不匹配任何处理器，update 被丢弃，
+    用户收不到回话。这在真实的 `python-telegram-bot` 22.8 和真实的 `_build_application()` 上核对过，`main` 上相同。
+    一致性测试的 Telegram 夹具把所有已注册的命令都交给 `_run_command`，和真实路由不一样，这些命令在测试里是通的。
+    §9.9 的两轮修复因此在真实的 Telegram 上都不生效，也无从验证。
 
 第 12 和 15 条是复核 §9.8 的修复时查到的既有问题，代码没有改，都用脚本化的模型经真实的 `ChannelRuntime`
-或斜杠命令的 `dispatch` 复现过。同一次复核查到的另外两个问题在 §9.9 修了，第 13、14 条是修完之后还留着的部分，
-其中计划不随 `/clear` 清空这一点同样复现过。
+或斜杠命令的 `dispatch` 复现过。同一次复核查到的另外两个问题在 §9.9 修了，第 13、14 条和第 16 至 20 条是修完之后
+还留着的部分，都复现过。第 21 条是独立审核时核实的既有问题，这条分支没有改。
 
 ---
 

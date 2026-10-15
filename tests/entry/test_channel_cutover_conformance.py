@@ -46,12 +46,16 @@ from tests.entry.channel_conformance import (  # type: ignore[import-not-found]
     REQUIRED_DELIVERY_CASES,
     RETRYABLE_DELIVERY_CASE,
 )
+from tests.entry.test_channel_commands import (  # type: ignore[import-not-found]
+    Gated,
+)
 from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
     Transport,
     deployment,
 )
 from tests.entry.test_channel_runtime import (  # type: ignore[import-not-found]
     deployment as deployment_with_tools,
+    until,
 )
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
@@ -106,14 +110,14 @@ def run(coro):
     return asyncio.run(asyncio.wait_for(coro, WAIT_S))
 
 
-async def bind(fixture, tmp_path):
+async def bind(fixture, tmp_path, provider=None):
     """One adapter, one runtime, one recording transport, ingress open.
 
     The binding's own delivery adapter is replaced by the transport so that
     "the reply left" is observable; everything else about the binding is the
     adapter's own, including the sender policy the gates read.
     """
-    app, spy = deployment(tmp_path)
+    app, spy = deployment(tmp_path, provider)
     channel = fixture.new_channel()
     binding = await channel.prepare_control_binding()
     transport = Transport()
@@ -482,6 +486,61 @@ def test_something_that_is_not_a_registered_command_still_reaches_the_agent(
     spy = run(scenario())
 
     assert [message.text for message in spy.delivered] == [probe]
+
+
+QUEUED_COMMANDS = {
+    "/clear": "Conversation history cleared.",
+    "/new": "New conversation started.",
+    "/compact": "Nothing to compact",
+}
+"""The commands that run in the conversation's lane, and how the reply of
+each begins for a conversation of one short exchange."""
+
+
+@pytest.mark.parametrize("verb", sorted(QUEUED_COMMANDS))
+@pytest.mark.parametrize("name", AUTHORITATIVE)
+def test_a_command_that_waits_for_the_queue_does_not_hold_the_inbound_callback(
+    name, verb, tmp_path
+):
+    """Rule 7 while the conversation is busy.
+
+    These commands wait for the exchange ahead of them. The callback the
+    platform delivered them on must return before that, because on several
+    platforms it is the only thing reading the next message: Feishu calls
+    it on the SDK's own thread, and DingTalk and email await it from the
+    loop that receives.
+    """
+    fixture = fixture_for(name)
+    reply = QUEUED_COMMANDS[verb]
+
+    def answered(channel, transport) -> bool:
+        said = fixture.direct_replies(channel, transport)
+        return any(text.startswith(reply) for text in said)
+
+    async def scenario():
+        provider = Gated(Message.assistant("FIRST ANSWER."))
+        channel, runtime, app, _spy, transport, _binding = await bind(
+            fixture, tmp_path, provider
+        )
+        await fixture.submit(channel, text="analyse this", sender=fixture.owner)
+        await asyncio.wait_for(provider.entered.wait(), WAIT_S)
+
+        command = asyncio.ensure_future(
+            fixture.submit(channel, text=verb, sender=fixture.owner)
+        )
+        returned, _held = await asyncio.wait({command}, timeout=WAIT_S)
+        early = answered(channel, transport)
+        provider.release.set()
+        await command
+        await until(lambda: answered(channel, transport))
+        await settle(app)
+        await runtime.close(WAIT_S)
+        return bool(returned), early
+
+    returned, early = asyncio.run(asyncio.wait_for(scenario(), 3 * WAIT_S))
+
+    assert returned, "the callback waited for the exchange ahead of the command"
+    assert not early, "the command was answered while the exchange was running"
 
 
 # ---- 8: the platform is handed text it can render ----------------------

@@ -40,7 +40,7 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Awaitable, Callable, Final, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Coroutine, Final, Mapping, Sequence
 
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.events import TurnEvent, TurnEventType
@@ -239,6 +239,7 @@ class ChannelRuntime:
         "_accepted",
         "_app",
         "_bindings",
+        "_commands",
         "_delivered_types",
         "_loop",
         "_replies",
@@ -299,6 +300,7 @@ class ChannelRuntime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._started = False
         self._replies: dict[str, asyncio.Task[None]] = {}
+        self._commands: set[asyncio.Task[None]] = set()
         self._accepted: OrderedDict[tuple[str, str], str] = OrderedDict()
 
     @classmethod
@@ -344,9 +346,15 @@ class ChannelRuntime:
 
         Reaping is not tidiness: an un-awaited cancelled Task prints "Task
         exception was never retrieved" at interpreter shutdown.
+
+        A slash command still waiting for its conversation's queue
+        (:meth:`finish_command`) shares the same grace. One that finishes in
+        time sends its reply as usual. One that does not is cancelled and
+        sends nothing. Cancelling it leaves the work it queued where it is:
+        the session registry runs or cancels that when it shuts down.
         """
         self._started = False
-        tasks = tuple(self._replies.values())
+        tasks = (*self._replies.values(), *self._commands)
         if not tasks:
             return
         _done, pending = await asyncio.wait(tasks, timeout=max(grace_s, 0.0))
@@ -355,6 +363,7 @@ class ChannelRuntime:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._replies.clear()
+        self._commands.clear()
 
     @property
     def app(self) -> AgentApp:
@@ -523,6 +532,43 @@ class ChannelRuntime:
         handle = self.handle(turn_id)
         if handle is None or not handle.approvals.settle(request_id, decision):
             _log.debug("approval %s on %s had nothing to settle", request_id, turn_id)
+
+    # ---- slash commands --------------------------------------------------
+
+    def finish_command(self, work: Coroutine[Any, Any, None], *, name: str) -> bool:
+        """Run the rest of a slash command in a Task this runtime holds.
+
+        A command that has to wait for its conversation's queue hands the
+        waiting and the reply here, so the platform callback it arrived on
+        can return. :meth:`close` waits for these Tasks with the replies
+        and reaps them.
+
+        Returns ``False`` and leaves *work* unstarted when the runtime is
+        not accepting, which is when :meth:`submit` refuses a message.
+        Nothing would reap a Task started after :meth:`close`. The caller
+        closes *work*.
+        """
+        if not self._started:
+            return False
+        task = asyncio.create_task(work, name=name)
+        self._commands.add(task)
+        task.add_done_callback(self._command_finished)
+        return True
+
+    def _command_finished(self, task: asyncio.Task[None]) -> None:
+        """Forget the task and consume whatever it ended with.
+
+        A command that failed is caught and answered inside the task, so
+        an exception that reaches here came from sending the reply. Only
+        its type is logged: a provider error can carry the text it was
+        asked to send.
+        """
+        self._commands.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            _log.error("%s failed (%s)", task.get_name(), type(error).__name__)
 
     # ---- the reply pump --------------------------------------------------
 
@@ -754,6 +800,16 @@ class ChannelRuntime:
                 "approval card %s ended %s; the request stays open until its "
                 "deadline, and what follows is still sent",
                 notice.request_id,
+                result.acceptance.value,
+            )
+        elif notice.type is TurnEventType.EXCHANGE_END:
+            # The frame that ends a failed or cancelled exchange. Such an
+            # exchange has no answer, so no message comes after this one.
+            _log.warning(
+                "%s notice for %s ended %s; it was the last message of the "
+                "exchange",
+                notice.type.value,
+                handle.turn_id,
                 result.acceptance.value,
             )
         else:

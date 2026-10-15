@@ -57,6 +57,7 @@ from tests.entry.test_channel_ingress import (  # type: ignore[import-not-found]
 )
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Asking,
+    Exploding,
     Reporting,
     Scripted,
     calling,
@@ -1221,6 +1222,38 @@ def test_a_notice_that_does_not_land_is_logged_as_a_notice(tmp_path, caplog):
     ), warnings
     assert not any("not sending the rest" in line for line in warnings)
     assert not any("Queued behind" in line for line in warnings)
+    assert all("what follows is still sent" in line for line in warnings), warnings
+
+
+def test_a_terminal_notice_that_does_not_land_is_logged_as_the_last_message(
+    tmp_path, caplog
+):
+    """A failed exchange has no answer, so nothing comes after its notice.
+
+    The warning says so. It does not say that what follows is still sent,
+    and it does not quote the notice.
+    """
+
+    async def scenario():
+        transport = Choosy(lambda text: text.startswith("Failed"))
+        app = deployment(tmp_path, Exploding())
+        runtime = await started(app, transport)
+        result = await runtime.submit(message())
+        assert result.handle is not None
+        await asyncio.wait_for(result.handle.wait(), WAIT_S)
+        await runtime.close(WAIT_S)
+        return result.handle, transport
+
+    with caplog.at_level(logging.WARNING, logger="omicsclaw.entry.channel.runtime"):
+        handle, transport = run(scenario())
+
+    assert handle.terminal == "failed"
+    assert len(transport.sent) == 1 and transport.accepted == []
+    (line,) = runtime_warnings(caplog)
+    assert handle.turn_id in line and "exchange_end notice" in line
+    assert "last message of the exchange" in line
+    assert "still sent" not in line
+    assert "Failed" not in line
 
 
 def test_an_answer_that_does_not_land_is_still_logged_as_the_reply(tmp_path, caplog):

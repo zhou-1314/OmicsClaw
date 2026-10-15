@@ -8,8 +8,9 @@ adding one more was the path of least resistance.
 
 The handlers live in :mod:`~omicsclaw.entry.channel.commands.builtins` and
 register themselves at import time via ``@register("/foo")``. A channel calls
-``await dispatch(ctx)`` and treats ``None`` as "not a command — hand it to the
-agent instead".
+``await begin(ctx)`` and treats ``None`` as "not a command — hand it to the
+agent instead". ``dispatch`` is the same call for a caller that can wait for
+the reply of a command that queues its work.
 """
 
 from __future__ import annotations
@@ -58,7 +59,18 @@ class SlashCommandContext:
     Empty means "no conversation", which those two report."""
 
 
-CommandHandler = Callable[[SlashCommandContext], Awaitable[str]]
+ReplyLater = Callable[[], Awaitable[str]]
+"""A reply the handler cannot give yet.
+
+A handler returns one after it has queued work on the conversation. Calling
+it waits for that work to end and returns the reply. It raises when the
+work failed.
+"""
+
+CommandReply = str | ReplyLater
+"""What a handler returns: the reply, or a :data:`ReplyLater` for it."""
+
+CommandHandler = Callable[[SlashCommandContext], Awaitable[CommandReply]]
 
 
 _REGISTRY: dict[str, CommandHandler] = {}
@@ -89,13 +101,15 @@ def register(name: str) -> Callable[[CommandHandler], CommandHandler]:
     return deco
 
 
-async def dispatch(ctx: SlashCommandContext) -> str | None:
-    """Try to dispatch ``ctx.user_text`` as a slash command.
+async def begin(ctx: SlashCommandContext) -> CommandReply | None:
+    """Start ``ctx.user_text`` as a slash command and return what it answers.
 
-    Returns the handler's reply text, or ``None`` if the input is not a slash
-    command or no handler is registered for it. A channel sends the reply
-    directly when it is not ``None`` and submits the message as an exchange
-    otherwise.
+    Returns ``None`` if the input is not a slash command or no handler is
+    registered for it, and the message is then submitted as an exchange.
+    Otherwise returns what the handler returned. A string is the reply. A
+    :data:`ReplyLater` means the command's work is already queued on the
+    conversation when this returns, so a message submitted afterwards runs
+    behind it, and the caller decides where to wait for the reply.
     """
     text = ctx.user_text.strip().lower()
     if not text.startswith("/"):
@@ -104,6 +118,23 @@ async def dispatch(ctx: SlashCommandContext) -> str | None:
     if handler is None:
         return None
     return await handler(ctx)
+
+
+async def dispatch(ctx: SlashCommandContext) -> str | None:
+    """Try to dispatch ``ctx.user_text`` as a slash command.
+
+    Returns the handler's reply text, or ``None`` if the input is not a slash
+    command or no handler is registered for it. A channel sends the reply
+    directly when it is not ``None`` and submits the message as an exchange
+    otherwise.
+
+    Waits for a reply the handler could not give at once. A caller that
+    must return before then uses :func:`begin`.
+    """
+    reply = await begin(ctx)
+    if reply is None or isinstance(reply, str):
+        return reply
+    return await reply()
 
 
 def registered_commands() -> tuple[str, ...]:

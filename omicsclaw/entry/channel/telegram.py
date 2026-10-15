@@ -34,6 +34,7 @@ in a shared group makes this agent answer.
 
 from __future__ import annotations
 
+import functools
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -48,7 +49,7 @@ from . import reply_target
 from .base import Channel
 from .binding import ChannelSurfaceBinding
 from .capabilities import TELEGRAM as TELEGRAM_CAPS
-from .commands import SlashCommandContext, dispatch
+from .commands import SlashCommandContext, begin
 from .config import BaseChannelConfig
 from .runtime import (
     CODE_EMPTY_TEXT,
@@ -565,19 +566,31 @@ class TelegramChannel(Channel):
         )
 
     async def _run_command(self, update, text: str) -> None:
-        """Dispatch one built-in command and send whatever it answered."""
+        """Dispatch one built-in command and send whatever it answered.
+
+        A command whose reply waits for the conversation's queue is not
+        waited for here. The application this adapter builds handles one
+        update at a time, so waiting would hold every later update behind
+        the command. The reply is sent by
+        :meth:`~omicsclaw.entry.channel.base.Channel.answer_command_later`.
+        """
 
         # The verb, not the command line: ``/analyse P12345.h5ad`` puts a
         # subject identifier in the argument, and a traceback is written
         # wherever an operator points this logger.
         verb = text.split(maxsplit=1)[0] if text.strip() else ""
         try:
-            reply = await dispatch(self._command_context(update, text))
+            reply = await begin(self._command_context(update, text))
         except Exception:
             logger.exception("Telegram command %s failed", verb)
             await update.message.reply_text("That command failed.")
             return
-        await self._send_long_message(update, reply or "Nothing to show.")
+        if reply is None or isinstance(reply, str):
+            await self._send_long_message(update, reply or "Nothing to show.")
+            return
+        self.answer_command_later(
+            verb, reply, functools.partial(self._send_long_message, update)
+        )
 
     async def _cmd_skills(self, update, context) -> None:
         if not self._owner_update_allowed(update):
