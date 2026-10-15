@@ -48,7 +48,6 @@ omicsclaw/
 scripts/
 templates/
 tests/
-tools/
 
 # ── Build / config files at root
 *.sh

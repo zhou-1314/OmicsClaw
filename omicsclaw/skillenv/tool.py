@@ -11,7 +11,7 @@ configuration, which the tool does not check.
 from __future__ import annotations
 
 import json
-import os
+import shlex
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -97,7 +97,7 @@ skills and not the packages: the packages are already limited to what those
 skills declare and go into an isolated overlay."""
 
 _MINIMUM_PIP = (22, 2)
-_REGISTRY_FILE = "skills/_sdk/deps.py"
+_REGISTRY_FILE = "omicsclaw/skillenv/deps_registry.py"
 _CANNOT_RUN = "the method that needs it cannot run here; report this rather than switching to another method"
 
 
@@ -109,7 +109,6 @@ def install_skill_deps_tool(
     workspace: str,
     builder: OverlayBuilder,
     pyproject: Path | None = None,
-    step_runner: str | None = None,
 ) -> FunctionTool:
     """Build ``install_skill_deps`` over *skills_index* and *registry*.
 
@@ -117,7 +116,6 @@ def install_skill_deps_tool(
     :param workspace: Working directory of that inventory.
     :param builder: Builds overlays after approval.
     :param pyproject: ``pyproject.toml`` whose optional dependencies give version constraints.
-    :param step_runner: The step runner's path, named in the usage lines of the result.
 
     Invalid arguments raise :exc:`ToolArgumentError`. Everything else —
     nothing to install, a refusal, a failed installation — is an ordinary
@@ -130,7 +128,7 @@ def install_skill_deps_tool(
         entries = _declared(skills_index, skills)
         declared = tuple(dict.fromkeys(name for _entry, names in entries for name in names))
         names = _requested(entries, packages)
-        usage = _Usage([entry for entry, _names in entries], step_runner)
+        usage = _Usage([entry for entry, _names in entries])
         resolved = [resolve(name, registry) for name in names]
         installable = [r for r in resolved if r.kind == "pip"]
         hints = [r for r in resolved if r.kind != "pip"]
@@ -278,27 +276,19 @@ def _version_tuple(text: str) -> tuple[int, ...]:
 class _Usage:
     """Who an overlay is for, and the commands that use it."""
 
-    def __init__(self, entries: Sequence[Skill], step_runner: str | None) -> None:
+    def __init__(self, entries: Sequence[Skill]) -> None:
         self.entries = list(entries)
-        self.step_runner = step_runner
 
     @property
     def names(self) -> str:
         return ", ".join(entry.name for entry in self.entries)
 
     def lines(self, python: Path) -> list[str]:
-        lines = []
-        if self.step_runner:
-            lines += [
-                "Run the module's steps with this interpreter:",
-                f"  PYTHONNOUSERSITE=1 {python} {self.step_runner} run analysis/<NN_slug>",
-            ]
-        script = _script(self.entries[0])
-        lines += [
-            "or run a skill's CLI with it:" if self.step_runner else "Run the skill with the overlay's interpreter:",
-            f"  PYTHONNOUSERSITE=1 {python} {script} …",
+        return [
+            "Load the skill helpers with the overlay's interpreter:",
+            f"  PYTHONNOUSERSITE=1 {shlex.quote(str(python))} -i {shlex.quote(str(self.entries[0].directory / 'kernel.py'))}",
+            "Existing Notebook kernels keep their current interpreter.",
         ]
-        return lines
 
 
 def _card(usage: _Usage, specs: Sequence[str], python: Path, inventory: BaseInventory) -> str:
@@ -319,11 +309,6 @@ def _card(usage: _Usage, specs: Sequence[str], python: Path, inventory: BaseInve
             f"overlay: {overlay}  (base: {inventory.executable} {inventory.version})",
         ]
     )
-
-
-def _script(entry: Skill) -> str:
-    guess = entry.directory / f"{entry.name.replace('-', '_')}.py"
-    return str(guess) if guess.is_file() else f"{entry.directory}{os.sep}<script>.py"
 
 
 def _hint_lines(present: Sequence[Resolution], hints: Sequence[Resolution]) -> list[str]:

@@ -1,7 +1,7 @@
 """What a skill declares it needs, and what the dependency registry says about each name.
 
 Two files are read, never imported: a skill's ``SKILL.md`` (its
-``## Dependencies`` package-name line) and ``<skills root>/_sdk/deps.py``
+``## Dependencies`` package-name line) and ``skillenv/deps_registry.py``
 (the literal ``DEPENDENCIES`` table). Names resolve against the table by
 exact key, then PEP 503-normalised key, then exact ``module``; a name none
 of those match is treated as a pip project whose import name is derived here.
@@ -100,8 +100,7 @@ def read_registry(path: str | Path) -> dict[str, dict[str, Any]]:
     path = Path(path)
     if not path.is_file():
         raise RegistryFormatError(
-            f"{path} not found: the configured skills_dir is not an OmicsClaw skills tree "
-            "with `_sdk/`, so there is no dependency registry to read"
+            f"{path} not found: the framework dependency registry is unavailable"
         )
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

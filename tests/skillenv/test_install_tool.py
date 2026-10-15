@@ -95,7 +95,7 @@ class _Builder:
 
 
 def _tool(tmp_path, *, inventory=None, builder=None, declared=None, registry=None, pyproject=None,
-          second=None, step_runner=None):
+          second=None):
     kwargs = {} if declared is None else {"declared": declared}
     skills = make_skills(tmp_path / "skills", registry=registry, **kwargs)
     if second is not None:
@@ -113,12 +113,11 @@ def _tool(tmp_path, *, inventory=None, builder=None, declared=None, registry=Non
     builder = builder or _Builder(tmp_path)
     tool = install_skill_deps_tool(
         skills,
-        registry=read_registry(tmp_path / "skills" / "_sdk" / "deps.py"),
+        registry=read_registry(tmp_path / "deps_registry.py"),
         probe_runner=inventory,
         workspace=str(tmp_path),
         builder=builder,
         pyproject=pyproject,
-        step_runner=step_runner,
     )
     return tool, inventory, builder
 
@@ -259,7 +258,7 @@ def test_a_direct_url_in_the_registry_fails_before_anything_runs(tmp_path):
     tool, inventory, builder = _tool(tmp_path, registry=registry)
     output, asked = _call(tool, ["oc-leaf"])
     assert inventory.calls == [] and asked == [] and builder.builds == []
-    assert "skills/_sdk/deps.py: entry 'oc-leaf' field also" in output
+    assert "omicsclaw/skillenv/deps_registry.py: entry 'oc-leaf' field also" in output
     assert "Nothing was run" in output
 
 
@@ -286,13 +285,13 @@ def test_the_card_names_every_skill(tmp_path):
     assert f"for skills {SKILL}, oc-other, wheels only" in asked[0].reason
 
 
-def test_the_result_says_how_to_run_a_module_with_the_overlay(tmp_path):
-    runner = str(tmp_path / "skills" / "_sdk" / "notebook" / "run.py")
-    tool, _, builder = _tool(tmp_path, step_runner=runner)
+def test_the_result_loads_sidecar_helpers_with_the_overlay(tmp_path):
+    tool, _, builder = _tool(tmp_path)
     output, _ = _call(tool, ["oc-leaf"])
     python = builder.python(builder.builds[0][1])
-    assert f"PYTHONNOUSERSITE=1 {python} {runner} run analysis/<NN_slug>" in output
-    assert "or run a skill's CLI with it:" in output
+    kernel = tmp_path / "skills" / "demo" / SKILL / "kernel.py"
+    assert f"PYTHONNOUSERSITE=1 {python} -i {kernel}" in output
+    assert "Existing Notebook kernels keep their current interpreter." in output
 
 
 # ---- the card ----------------------------------------------------------------------------------
@@ -380,8 +379,8 @@ def test_the_result_lists_wheels_sources_and_plaintext(tmp_path):
     assert "Imports in the overlay: oc_leaf ok\n" in output
     assert "Other modules of the skill that do not import here (not requested): banksy" in output
     assert "Not installed (git-only): pybanksy" in output
-    assert f"PYTHONNOUSERSITE=1 {builder.root}/0123456789abcdef/.venv/bin/python " in output
-    assert "oc_skill.py" in output
+    assert f"PYTHONNOUSERSITE=1 {builder.root}/0123456789abcdef/.venv/bin/python -i " in output
+    assert "kernel.py" in output
 
 
 def test_a_failure_after_the_dry_run_carries_the_plan(tmp_path):

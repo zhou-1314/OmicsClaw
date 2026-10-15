@@ -48,17 +48,18 @@ def test_component_manifest_verifies_files_and_refuses_changed_payload(tmp_path)
         verified_source_metadata(tmp_path)
 
 
-def test_component_manifest_allows_declared_catalogue_data_but_not_algorithm_payload(
-    tmp_path,
+@pytest.mark.parametrize("relative", ["skills/sc-filter/algorithm.py", "omicsclaw_science_worker.py"])
+def test_component_manifest_refuses_algorithm_payload_and_retired_entry(
+    tmp_path, relative,
 ):
     from omicsclaw.entry.ssh.manifest import verified_source_metadata
 
-    path = tmp_path / "skills/sc-filter/algorithm.py"
-    path.parent.mkdir(parents=True)
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("")
     rows = [
         {
-            "path": "skills/sc-filter/algorithm.py",
+            "path": relative,
             "bytes": 0,
             "sha256": hashlib.sha256(b"").hexdigest(),
         }
@@ -87,7 +88,7 @@ def test_scientific_worker_entry_is_packaged_without_skill_algorithm_source():
 
     closure = source_closure(Path(__file__).parents[2])
     assert "omicsclaw.entry.ssh.science_worker" in closure
-    assert "omicsclaw_science_worker" in closure
+    assert "omicsclaw_science_worker" not in closure
     assert not any(name == "skills" or name.startswith("skills.") for name in closure)
 
 

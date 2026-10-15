@@ -228,8 +228,12 @@ async def execute(request_path: Path, *, result_writer):
     os.replace(temporary, workspace / "_omicsclaw_worker.json")
 
 
-def main(*, result_writer):
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True, type=Path)
     arguments = parser.parse_args()
-    asyncio.run(execute(arguments.request, result_writer=result_writer))
+    asyncio.run(execute(arguments.request, result_writer=write_result))
+
+
+if __name__ == "__main__":
+    main()

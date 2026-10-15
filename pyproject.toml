@@ -381,7 +381,7 @@ markers = [
     "slow: tests requiring full optional deps or significant runtime (excluded by default)",
     "requires_torch: tests requiring PyTorch (SpaGCN, Cell2Location, scVI)",
     "requires_r: tests requiring R (Rscript on PATH)",
-    "demo: Skill demo-mode integration tests (excluded by default; Skill-local demo tests are classified during collection)",
+    "demo: scientific demo integration tests (excluded by default)",
     "eval: real-LLM evals (network and API key required); manual or nightly, never gates a PR (excluded by default)",
     "scripted_eval: deterministic scripted agent evals (hermetic, no network); run on every PR by the eval job",
     "skill_example: historical skill examples (retired with the SDK step runner)",

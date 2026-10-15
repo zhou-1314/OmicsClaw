@@ -25,11 +25,16 @@ def test_malformed_exports_are_validation_errors(exports, validator):
 
 
 def test_first_sidecar_can_load_another_domain():
+    import sys
+
     root = Path(__file__).resolve().parents[2] / "skills"
     path = root / "spatial" / "spatial-de" / "kernel.py"
     namespace = {}
+    modules = ("skills", "skills._sdk", "skills._sdk.notebook")
+    before = {name: sys.modules.get(name) for name in modules}
     exec(build_sidecar_bootstrap_code("spatial-de", path, path.read_text()), namespace)
     assert callable(namespace["load_skill"]("sc-qc").qc_summary)
+    assert {name: sys.modules.get(name) for name in modules} == before
 
 
 def test_failed_injection_can_be_retried(tmp_path):

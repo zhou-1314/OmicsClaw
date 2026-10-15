@@ -250,6 +250,10 @@ MODULE_GUARDS = {
         "Finite SSH controller launcher. Parses an explicit workspace only; "
         "the Mac supplies model authority over stdio and it uses shared build_app."
     ),
+    "entry/ssh/science_worker.py": (
+        "Finite scientific job worker. Parses a request file, verifies its "
+        "payload and runs in the selected interpreter without a root launcher."
+    ),
     "launch/__main__.py": "the shell; plan 0037 §5.1",
     "__main__.py": (
         "python -m omicsclaw, repointed at this shell on the owner's "

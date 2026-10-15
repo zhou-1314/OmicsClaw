@@ -9,10 +9,8 @@ we are waiting for (a kernel that posts status for a comm or a
 background thread must not be read as our cell finishing), and ending at
 ``status: idle``.
 
-The kernel is started from a **temporary kernelspec** whose ``argv`` is
-this interpreter — the same isolation
-``skills/_sdk/notebook/_runners.py`` established for the step-runner
-(track A, deliberately untouched): IPython and Jupyter directories point
+The kernel starts from a temporary kernelspec whose ``argv`` names the
+selected interpreter. IPython and Jupyter directories point
 into a per-session scratch folder under ``<workspace>/.omicsclaw/kernel/``,
 so the user's ``~/.ipython`` startup profile never runs inside an
 analysis kernel, and the kernel never writes under ``$HOME``.
@@ -960,4 +958,3 @@ def _win_cpu_seconds(pid: int) -> float | None:
 
 
 KernelSession = SessionKernel
-

@@ -41,12 +41,12 @@ from omicsclaw.tools.base import Tool
 from omicsclaw.tools.builtin.bash import without_control_credentials
 
 from .config import AppConfig, AppConfigError, SkillEnvMode, SkillsIndex
-from .project import STEP_RUNNER
 from .sandbox import SandboxBinding
 
 __all__ = ["SkillEnvBinding", "build_skill_env", "log_skill_env"]
 
 _log = logging.getLogger(__name__)
+REGISTRY_PATH = Path(__file__).resolve().parents[1] / "skillenv" / "deps_registry.py"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +82,7 @@ def build_skill_env(
     """The environment check for *config*, or ``None`` when it is off.
 
     ``None`` when ``skill_env`` is ``off`` or ``skills_index`` is ``off``.
-    The registry is ``<skills root>/_sdk/deps.py``; when it cannot be read a
+    The registry is the framework's ``skillenv/deps_registry.py``; when it cannot be read a
     warning is logged and every name is resolved by the fallback rule, the
     note saying why. The probe runs in the sandbox while one is running and
     on this machine otherwise. In read-only mode no callback is built.
@@ -97,12 +97,7 @@ def build_skill_env(
         return None
     registry_error = ""
     try:
-        registry_path = skills.root / "_sdk" / "deps.py"
-        if not registry_path.is_file():
-            bundled = skills.root.parent / "omicsclaw" / "skillenv" / "deps_registry.py"
-            if bundled.is_file():
-                registry_path = bundled
-        registry = read_registry(registry_path)
+        registry = read_registry(REGISTRY_PATH)
     except RegistryFormatError as exc:
         if config.skill_env is SkillEnvMode.INSTALL:
             raise AppConfigError(f"skill_env=install needs the dependency registry: {exc}") from exc
@@ -143,7 +138,6 @@ def build_skill_env(
                 limits=InstallLimits(total_s=config.skill_env_install_timeout_s),
             ),
             pyproject=config.repo_root() / "pyproject.toml",
-            step_runner=_step_runner(config),
         )
     made = SkillEnvBinding(
         mode=config.skill_env,
@@ -161,12 +155,6 @@ def build_skill_env(
     if config.permission_mode is PermissionMode.READ_ONLY:
         return made
     return dataclasses.replace(made, annotate=_annotator(made))
-
-
-def _step_runner(config: AppConfig) -> str | None:
-    """The step runner's path in this deployment's skill tree, if it has one."""
-    runner = config.skills_root().joinpath(*STEP_RUNNER)
-    return str(runner) if runner.is_file() else None
 
 
 def _annotator(binding: SkillEnvBinding) -> Annotator:

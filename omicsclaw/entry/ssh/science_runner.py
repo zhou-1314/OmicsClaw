@@ -292,7 +292,7 @@ class ScienceJobRunner:
             )
             + " "
             + shell_quote(str(self.interpreter))
-            + " -B -m omicsclaw_science_worker --request science-request.json"
+            + " -B -m omicsclaw.entry.ssh.science_worker --request science-request.json"
         )
         outcome = await self._bridge.plane.submit(
             record.target_alias,

@@ -58,6 +58,11 @@ and intentional golden files.
 
 ## Code and pull requests
 
+Install the framework into an existing Python 3.11+ environment for ordinary
+development. `0_setup_env.sh` is the optional full R/CLI/science installation;
+Python environment provisioning does not replace that stack. Its smoke script
+checks imports and sidecar contracts rather than invoking retired skill CLIs.
+
 Use type hints, `pathlib` and the existing package boundaries. Framework code
 must not import skill modules. Skill helpers keep optional imports local and
 must not import the framework. Keep credentials out of source, test data and

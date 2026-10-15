@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import Any
 
 from omicsclaw.entry.config import SkillEnvMode, SkillsIndex
-from omicsclaw.entry.project import STEP_RUNNER
 from omicsclaw.permission.gate import DOTENV_NAME
 from omicsclaw.provider import Completion, LLMProvider, ProviderError
 from omicsclaw.schema import (
@@ -491,7 +490,8 @@ def routing_policy(
         denials.append(Denial(tool, kind, detail))
         return ApprovalDecision(approved=False, reason="not permitted in the routing eval")
 
-    runner = Path(index.root).joinpath(*STEP_RUNNER)
+    # Historical routing seeds still describe the retired runner's command.
+    runner = Path(index.root) / "_sdk" / "notebook" / "run.py"
 
     def decide(request: ApprovalRequest) -> ApprovalDecision:
         tool = request.tool_name

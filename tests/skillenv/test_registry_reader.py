@@ -1,4 +1,4 @@
-"""Reading ``skills/_sdk/deps.py`` as a file, and resolving names against it (plan 0061 case 6).
+"""Reading ``omicsclaw/skillenv/deps_registry.py`` as a file, and resolving names against it (plan 0061 case 6).
 
 The framework never imports ``skills``: the registry is a file contract,
 read with ``ast.literal_eval`` and checked here against the same field
@@ -189,11 +189,11 @@ def test_contract_violations_are_refused_with_file_and_line(tmp_path, body, frag
         assert ":1" in message
 
 
-def test_a_missing_file_says_the_skills_dir_is_not_a_skills_tree(tmp_path):
-    with pytest.raises(RegistryFormatError, match="not an OmicsClaw skills tree") as info:
-        read_registry(tmp_path / "_sdk" / "deps.py")
+def test_a_missing_file_names_the_unavailable_registry(tmp_path):
+    with pytest.raises(RegistryFormatError, match="framework dependency registry is unavailable") as info:
+        read_registry(tmp_path / "missing_registry.py")
     assert "install_skill_deps" not in str(info.value)
-    assert "no dependency registry to read" in str(info.value)
+    assert str(tmp_path / "missing_registry.py") in str(info.value)
 
 
 # ---- expansion and categories come from fields, never from `install` --------------------

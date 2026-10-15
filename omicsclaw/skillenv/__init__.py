@@ -1,7 +1,7 @@
 """``omicsclaw.skillenv`` — which Python packages a skill needs, whether ``bash`` can import them, and adding them.
 
 ``registry`` reads a skill's ``## Dependencies`` line and the dependency
-registry file ``<skills root>/_sdk/deps.py`` (as a file, never imported);
+registry file ``skillenv/deps_registry.py`` (as a file, never imported);
 ``probe`` runs fixed Python programs where ``bash`` runs; ``report``
 renders what it found as a note for ``use_skill``. ``sources`` checks what
 reaches pip, ``overlay`` builds overlay environments over the base

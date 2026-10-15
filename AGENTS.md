@@ -41,9 +41,9 @@ historical. Follow `OMICSCLAW.md`, `templates/skill/README.md` and
 
 OmicsClaw is a multi-omics analysis platform supporting 88 domain skills
 across 7 domains: spatial transcriptomics, single-cell omics, genomics,
-proteomics, metabolomics, bulk RNA-seq, and literature. Each
-skill is a self-contained module that performs a specific analysis task via CLI
-or Python API. All processing is local-first. Design is inspired by
+proteomics, metabolomics, bulk RNA-seq, and literature. Each skill pairs method
+instructions with small Python helpers. Analysis uses upstream Python, R or
+command-line tools. All processing is local-first. Design is inspired by
 [ClawBio](https://github.com/ClawBio/ClawBio).
 
 **Note**: OmicsClaw evolved from SpatialClaw. The agent framework was rebuilt
@@ -55,7 +55,7 @@ of what shipped, what was deleted, and what is still carried forward.
 ```bash
 cd /path/to/OmicsClaw
 
-# Recommended: full conda-primary install (R + CLIs + Python in one shot)
+# Optional full conda install (R + CLIs + Python in one shot)
 bash 0_setup_env.sh
 conda activate OmicsClaw
 
@@ -65,6 +65,14 @@ conda activate OmicsClaw
 
 oc cli                     # terminal REPL
 ```
+
+The full conda setup is optional for an existing analysis environment.
+`--env-supply true` mounts `manage_environments` (off by default), which
+provisions Python environments through uv with approval. It does not install
+R/Bioconductor or bioinformatics CLIs, or switch existing Notebook kernels.
+Keep `0_setup_env.sh` and `environment.yml` for workflows needing that stack.
+The unused vendored builder, its `tools/` directory and the BANKSY bootstrap
+for a missing environment file have been removed.
 
 > **`oc` short alias**: After installing OmicsClaw (either path), both
 > `omicsclaw` and `oc` commands are available system-wide via the

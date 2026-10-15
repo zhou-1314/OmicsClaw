@@ -29,9 +29,7 @@ def source_closure(root: Path) -> dict[str, Path]:
         if parts[-1] == "__init__":
             parts.pop()
         modules[".".join(parts)] = path
-    modules["omicsclaw_science_worker"] = root / "omicsclaw_science_worker.py"
     pending = [
-        "omicsclaw_science_worker",
         "omicsclaw.entry.ssh.__main__",
         "omicsclaw.entry.ssh.science_runner",
         "omicsclaw.entry.ssh.science_worker",

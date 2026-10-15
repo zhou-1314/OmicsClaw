@@ -133,8 +133,6 @@ def _golden_install(tmp_path, **overrides):
     workspace.mkdir()
     skills = tmp_path / "skills"
     shutil.copytree(FAKE_SKILLS, skills)
-    (skills / "_sdk").mkdir()
-    (skills / "_sdk" / "deps.py").write_text((FIXTURE_SKILLS / "_sdk" / "deps.py").read_text())
     config = golden_config(workspace, skill_env=SkillEnvMode.INSTALL, skill_env_dir=tmp_path / "envs", **overrides)
     return workspace, AppConfig(**{**{f: getattr(config, f) for f in config.__dataclass_fields__}, "skills_dir": skills})
 
@@ -254,7 +252,8 @@ def _tree_without_registry(tmp_path):
     return root
 
 
-def test_install_refuses_to_start_without_a_readable_registry(tmp_path, offline):
+def test_install_refuses_to_start_without_a_readable_registry(tmp_path, offline, monkeypatch):
+    monkeypatch.setattr("omicsclaw.entry.skill_env.REGISTRY_PATH", tmp_path / "missing_registry.py")
     config = _install_config(tmp_path, skills_dir=_tree_without_registry(tmp_path))
     with pytest.raises(AppConfigError, match="skill_env=install needs the dependency registry"):
         build_skill_env(config, _skills(config), SandboxBinding())
@@ -262,7 +261,8 @@ def test_install_refuses_to_start_without_a_readable_registry(tmp_path, offline)
         assembly.build_app(config)
 
 
-def test_probe_still_starts_without_a_readable_registry(tmp_path):
+def test_probe_still_starts_without_a_readable_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr("omicsclaw.entry.skill_env.REGISTRY_PATH", tmp_path / "missing_registry.py")
     config = _install_config(tmp_path, skills_dir=_tree_without_registry(tmp_path), skill_env=SkillEnvMode.PROBE)
     assert build_skill_env(config, _skills(config), SandboxBinding()).registry_error
 

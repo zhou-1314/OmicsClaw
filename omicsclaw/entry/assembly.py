@@ -192,7 +192,6 @@ from .memory import (
     prepare_memory,
 )
 from .planning import build_plan_book
-from .project import step_runner_line
 from .sandbox import (
     EgressMode,
     RequestNetworkAccessTool,
@@ -1171,9 +1170,7 @@ def _environment_source(config: AppConfig) -> Section:
     reason is why the field is here at all.
 
     Rendered fresh each turn, like every other section: a process that
-    runs past midnight tells the model the new date. When the skill tree
-    has a step runner, the section ends with the command that calls it;
-    the contract refers to that line instead of naming a path.
+    runs past midnight tells the model the new date.
     """
 
     def read() -> str:
@@ -1182,9 +1179,6 @@ def _environment_source(config: AppConfig) -> Section:
             f"- Platform: {platform.system()} ({sys.platform})",
             f"- Today: {date.today().isoformat()}",
         ]
-        runner = step_runner_line(config)
-        if runner is not None:
-            lines.append(runner)
         return "\n".join(lines)
 
     return Section("environment", "## Environment", read)

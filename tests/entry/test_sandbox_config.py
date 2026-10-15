@@ -115,10 +115,10 @@ def test_code_in_the_image_turns_the_mounts_off(tmp_path):
 
 
 def test_code_in_image_does_not_advertise_a_deleted_step_runner(tmp_path):
-    from omicsclaw.entry.project import step_runner_line
+    from omicsclaw.entry.assembly import _environment_source
 
     config = _sandboxed(tmp_path, skills_dir=REPO / "skills", sandbox_code_in_image=True)
-    assert step_runner_line(config) is None
+    assert "Step runner" not in _environment_source(config).source()
 
 
 def test_operator_mounts_come_first_and_are_not_repeated(tmp_path):

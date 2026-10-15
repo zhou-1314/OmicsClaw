@@ -42,7 +42,7 @@ output/
 outputs/
 sessions/
 
-# A project opened in the checkout itself (skills/_sdk/notebook/run.py new)
+# Analysis workspaces and generated results
 /analysis/
 /results/
 /manifests/

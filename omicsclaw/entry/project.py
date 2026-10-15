@@ -7,8 +7,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import AppConfig
-
 __all__ = [
     "MANIFEST_FILE",
     "MANIFEST_STATUS_KEY",
@@ -16,14 +14,9 @@ __all__ = [
     "REPORT_FILE",
     "RESULTS_DIR",
     "REVIEW_BRIEF_FILE",
-    "STEP_RUNNER",
     "ModuleSummary",
     "recent_modules",
-    "step_runner_line",
 ]
-
-STEP_RUNNER = ("_sdk", "notebook", "run.py")
-"""The runner's path inside the skill tree."""
 
 RESULTS_DIR = "results"
 MODULE_DIR_PATTERN = r"^(\d{2})_([a-z0-9][a-z0-9_]*)$"
@@ -35,14 +28,6 @@ REVIEW_BRIEF_FILE = "provenance/review_brief.md"
 REPORT_FILE = "M{nn}_{slug}_REPORT.md"
 
 _MODULE = re.compile(MODULE_DIR_PATTERN)
-
-
-def step_runner_line(config: AppConfig) -> str | None:
-    """Advertise a legacy runner only when it exists in the configured tree."""
-    runner = config.skills_root().joinpath(*STEP_RUNNER)
-    if not runner.is_file():
-        return None
-    return f"- Step runner: python {runner}"
 
 
 @dataclass(frozen=True, slots=True)

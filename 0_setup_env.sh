@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # OmicsClaw environment setup
 #
-# Strategy (5 tiers):
+# Optional full scientific environment (3 tiers):
 #   1. mamba/conda env create from environment.yml — Tier 0 toolchain +
 #      Tier 1-3 R/CLI packages + Tier 4 heavy Python science stack.
 #   2. uv pip install -e ".[full,singlecell-upstream]" for the thin pip
@@ -10,9 +10,6 @@
 #      is unavailable. Plus pip install velocyto (no py3.11 bioconda
 #      build).
 #   3. inline Rscript -e 'devtools::install_github(...)' (GitHub R packages)
-#   4. symlink vendored tools/ binaries into $CONDA_PREFIX/bin (stub for now)
-#   5. optional sub-environments (omicsclaw_<tool>), only with --with-banksy
-#      or OMICSCLAW_WITH_BANKSY=1
 #
 # Usage:
 #     bash 0_setup_env.sh              # creates env named "OmicsClaw"
@@ -23,7 +20,6 @@ set -euo pipefail
 ENV_NAME="${1:-OmicsClaw}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$PROJECT_ROOT/environment.yml"
-TOOLS_DIR="$PROJECT_ROOT/tools"
 
 TORCH_BACKEND_RAW="${OMICSCLAW_TORCH_BACKEND:-auto}"
 TORCH_BACKEND="$(printf '%s' "$TORCH_BACKEND_RAW" | tr '[:upper:]' '[:lower:]')"
@@ -340,7 +336,6 @@ if [ -z "$ENV_PREFIX" ] || [ ! -d "$ENV_PREFIX" ]; then
     echo "  ($INSTALLER run returned: '$ENV_PREFIX')" >&2
     exit 1
 fi
-ENV_BIN="$ENV_PREFIX/bin"
 echo "[setup_env] env prefix: $ENV_PREFIX"
 
 configure_torch_backend
@@ -529,68 +524,6 @@ cat("[r-extras] all GitHub R packages OK\n")
 RSCRIPT
 echo "[setup_env] ✔ Tier 3 complete"
 
-# ----- Tier 4: vendored binaries → $CONDA_PREFIX/bin (stub) ----------
-# No tools are vendored today. To add one:
-#   1. add a build block to 0_build_vendored_tools.sh
-#   2. add `link_if_exists "$TOOLS_DIR/<tool>/<binary>"` below
-
-link_if_exists() {
-    local src="$1"
-    local name
-    name="$(basename "$src")"
-    if [ -e "$src" ]; then
-        chmod +x "$src" 2>/dev/null || true
-        ln -sf "$src" "$ENV_BIN/$name"
-        echo "  ✔ linked $name"
-    else
-        echo "  ⚠ skipped $name (not found at $src)"
-    fi
-}
-
-echo "[setup_env] Tier 4: linking vendored tools (currently empty stub)"
-# Add link_if_exists calls here when vendoring real tools.
-echo "[setup_env] ✔ Tier 4 complete (no tools vendored)"
-
-# ----- Tier 5: optional sub-environments (Layer 4) -----------------
-# Tools whose dependency pins conflict with the main env live in dedicated
-# sub-envs named `omicsclaw_<tool>`, invoked at runtime via subprocess
-# bridge (see skills/_sdk/external_env.py).
-#
-# Bootstrap is opt-in: pass `--with-banksy` (or set OMICSCLAW_WITH_BANKSY=1)
-# to install. Default skips to keep base-install fast.
-
-bootstrap_subenv() {
-    local sub_name="$1"
-    local sub_yml="$2"
-    if [ ! -f "$sub_yml" ]; then
-        echo "[setup_env] ⚠ sub-env file missing: $sub_yml" >&2
-        return 1
-    fi
-    if "$INSTALLER" env list | awk '{print $1}' | grep -qx "$sub_name"; then
-        echo "[setup_env] sub-env '$sub_name' exists — updating"
-        CONDA_CHANNEL_PRIORITY=strict "$INSTALLER" env update -n "$sub_name" -f "$sub_yml" --prune
-    else
-        echo "[setup_env] creating sub-env '$sub_name'"
-        CONDA_CHANNEL_PRIORITY=strict "$INSTALLER" env create -n "$sub_name" -f "$sub_yml"
-    fi
-}
-
-# Detect --with-banksy in any positional position (after $ENV_NAME = $1).
-WITH_BANKSY=0
-for arg in "$@"; do
-    case "$arg" in
-        --with-banksy) WITH_BANKSY=1 ;;
-    esac
-done
-
-if [ "${OMICSCLAW_WITH_BANKSY:-0}" = "1" ] || [ "$WITH_BANKSY" = "1" ]; then
-    echo "[setup_env] Tier 5: bootstrapping omicsclaw_banksy sub-env"
-    bootstrap_subenv "omicsclaw_banksy" "$PROJECT_ROOT/environments/banksy.yml"
-    echo "[setup_env] ✔ Tier 5 (banksy) complete"
-else
-    echo "[setup_env] Tier 5 skipped (set OMICSCLAW_WITH_BANKSY=1 or pass --with-banksy to enable banksy)"
-fi
-
 # ----- summary ------------------------------------------------------
 
 cat <<EOF
@@ -602,8 +535,5 @@ cat <<EOF
 To rebuild from scratch:
   $INSTALLER env remove -n $ENV_NAME -y
   bash 0_setup_env.sh
-
-To vendor a new tool (currently no vendored tools):
-  see tools/README.md and 0_build_vendored_tools.sh
 
 EOF

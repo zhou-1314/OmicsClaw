@@ -123,13 +123,18 @@ HTTP 接口约定见 [`docs/core-features/surfaces.md`](docs/core-features/surfa
 
 | 方式 | 命令 | 覆盖范围 |
 |---|---|---|
-| conda（推荐） | `bash 0_setup_env.sh` | skill 需要的 Python、R 和命令行工具，以及桌面后端 |
+| conda（可选完整环境） | `bash 0_setup_env.sh` | skill 需要的 Python、R 和命令行工具，以及桌面后端 |
 | pip | `pip install -e .` | 只够终端对话。多数 skill 需要的包由 conda 环境提供，桌面后端依赖的 FastAPI 和 uvicorn 也来自 conda |
 
 聊天平台各自需要 SDK：Telegram 和飞书用 `pip install -e ".[channels]"`，Slack 用
 `pip install slack-sdk aiohttp`，Discord 用 `pip install discord.py`，钉钉用
 `pip install httpx websockets`，QQ 用 `pip install qq-botpy`；Email 只用标准库。依赖清单见
 [`environment.yml`](environment.yml) 和 [`pyproject.toml`](pyproject.toml)。
+
+已有分析环境时不必运行完整 conda 安装。`oc cli --env-supply true` 可启用
+`manage_environments`，让 agent 在审批后创建 Python 环境和补装包；此能力默认关闭，
+需要 uv，不安装 R、Bioconductor 或生信 CLI，也不会把现有 Notebook 内核自动切到新环境。
+需要这些组件的工作流仍可使用完整安装脚本。
 
 ## 领域
 

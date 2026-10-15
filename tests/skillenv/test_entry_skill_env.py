@@ -150,6 +150,21 @@ def test_skills_index_off_builds_nothing(tmp_path):
     assert build_skill_env(config, assembly.build_skill_index(config), SandboxBinding()) is None
 
 
+def test_custom_skill_roots_use_the_framework_registry(tmp_path):
+    root = tmp_path / "catalogue"
+    target = root / "demo" / "demo-skill"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text((FIXTURE_SKILLS / "demo" / "demo-skill" / "SKILL.md").read_text())
+    legacy = root / "_sdk"
+    legacy.mkdir()
+    (legacy / "deps.py").write_text("DEPENDENCIES = {'obsolete': {}}")
+    config = AppConfig(workspace=tmp_path, skills_dir=root, skill_env=SkillEnvMode.INSTALL)
+    binding = build_skill_env(config, assembly.build_skill_index(config), SandboxBinding())
+    assert binding is not None and not binding.registry_error
+    assert binding.registry["pybanksy"]["kind"] == "git"
+    assert "obsolete" not in binding.registry
+
+
 # ---- where the probe runs --------------------------------------------------------------------
 
 
@@ -183,7 +198,8 @@ def test_local_and_sandbox_bindings_pick_their_runner(tmp_path):
 # ---- an unreadable registry (case 6b) ---------------------------------------------------------
 
 
-def test_an_unreadable_registry_degrades_the_note_in_probe_mode(tmp_path, caplog):
+def test_an_unreadable_registry_degrades_the_note_in_probe_mode(tmp_path, caplog, monkeypatch):
+    monkeypatch.setattr("omicsclaw.entry.skill_env.REGISTRY_PATH", tmp_path / "missing_registry.py")
     root = tmp_path / "skills"
     target = root / "demo" / "demo-skill"
     target.mkdir(parents=True)
@@ -197,11 +213,12 @@ def test_an_unreadable_registry_degrades_the_note_in_probe_mode(tmp_path, caplog
     note = asyncio.run(binding.annotate(skills.get("demo-skill"), skills.get_full_content("demo-skill")))
     lines = note.splitlines()
     assert lines[1].startswith("dependency registry unreadable: ")
-    assert "not an OmicsClaw skills tree" in lines[1]
+    assert "framework dependency registry is unavailable" in lines[1]
     assert "Missing" in note
 
 
-def test_an_unreadable_registry_is_kept_when_the_probe_fails(tmp_path):
+def test_an_unreadable_registry_is_kept_when_the_probe_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("omicsclaw.entry.skill_env.REGISTRY_PATH", tmp_path / "missing_registry.py")
     class _Failing:
         location = "local"
 

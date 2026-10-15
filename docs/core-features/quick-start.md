@@ -1,6 +1,6 @@
 # OmicsClaw 快速开始
 
-> 本文带你完成安装、配置 LLM、第一次运行 `oc cli`、跑通一个 skill demo。
+> 本文介绍安装、LLM 配置和 `oc cli`；分析方法与示例由 skill 的 `SKILL.md` 提供。
 > 所有命令、变量与默认值均按当前代码核实（`pyproject.toml`、`environment.yml`、`0_setup_env.sh`、`omicsclaw/launch/`、`omicsclaw/entry/`、`.env.example`）。
 
 ---
@@ -18,7 +18,7 @@
 
 ## 2. 安装
 
-### 2.1 完整环境（推荐，真实分析用）
+### 2.1 可选完整环境（包含 R 和生信 CLI）
 
 ```bash
 git clone https://github.com/TianGzlab/OmicsClaw.git
@@ -32,10 +32,9 @@ conda activate OmicsClaw
 1. `mamba env create` / `conda env create` 读 `environment.yml`：工具链、R 与生信 CLI、重量级 Python 科学栈，
    以及 agent 运行所需的 `rich`、`prompt-toolkit`、`openai`、`fastapi`、`uvicorn` 等；
 2. `uv pip install -e ".[full,singlecell-upstream]"`（没有 uv 时退回 pip）安装 omicsclaw 本身与 PyPI-only 包；
-3. `Rscript` 安装 GitHub 上的 R 包；
-4. 链接 `tools/` 下的 vendored 二进制（当前为空）。
+3. `Rscript` 安装 GitHub 上的 R 包。
 
-可选环境变量：`OMICSCLAW_TORCH_BACKEND=auto|cuda|cpu`、`OMICSCLAW_WITH_BANKSY=1`（额外建 banksy 子环境）。
+可选环境变量：`OMICSCLAW_TORCH_BACKEND=auto|cuda|cpu`。
 `make setup-env` / `make setup-env-name NAME=foo` 是同一脚本的快捷方式。
 
 ### 2.2 轻量安装（只想跑 agent 或纯 Python skill）
@@ -47,6 +46,10 @@ pip install -e .                    # 核心依赖：rich、openai、anthropic�
 纯 pip 环境装完就能运行 `oc cli` 并调用模型。`fastapi`/`uvicorn`、`prompt-toolkit`、`questionary`、`python-dotenv` 和科学计算栈只在 `environment.yml` 里：
 `oc desktop` 在纯 pip 环境里要自己补装 `fastapi` 与 `uvicorn`；没有 `prompt_toolkit` 时 REPL 降级为无补全的行读取，
 没有 `questionary` 时 `--configure` 改用编号菜单，没有 `python-dotenv` 时 `.env` 由内置的解析器读取，三者都不会失败。
+
+已有分析环境时不必运行完整安装。`oc cli --env-supply true` 启用默认关闭的
+`manage_environments`，在审批后通过 uv 创建 Python 环境或补装包。它不安装
+R/Bioconductor 或生信 CLI，也不会切换现有 Notebook 内核的解释器。
 
 ### 2.3 可选 extras
 
@@ -320,7 +323,8 @@ Channel 需要的变量见 `.env.example` 第 11 节；飞书需要 `FEISHU_APP_
 Channel 界面要求审批期限：加 `--approval-timeout <秒>` 或 `OMICSCLAW_APPROVAL_TIMEOUT_S`。注意当前 Channel 上还无法回答审批，需要审批的工具会在期限到时被拒。
 
 **Q：有没有 `oc run <skill>`、`python omicsclaw.py replot`？**
-没有，都已删除。直接运行 `python skills/<domain>/<skill>/<script>.py`，或让 agent 在会话里跑。要改图就重跑 skill；旧运行的 `result.json` 里如果还有 `replot` 块，它指向的命令已不存在。
+没有，都已删除。让 agent 调用 `use_skill` 后在持久 Python 内核中运行分析；
+Python 用户也可以用 `omicsclaw.skills.sidecar.load_skill` 加载 `kernel.py` 的辅助函数。
 
 **Q：会话存在哪里？怎么继续？**
 `<workspace>/.omicsclaw/memory.db`。`/sessions` 查看，`/resume` 或 `oc cli --session <id>` 继续。
@@ -344,7 +348,7 @@ Channel 界面要求审批期限：加 `--approval-timeout <秒>` 或 `OMICSCLAW
 |---|---|
 | `0_setup_env.sh`、`environment.yml` | 完整 conda 环境 |
 | `pyproject.toml` | 核心依赖、extras、`[project.scripts]`（`oc`、`omicsclaw`） |
-| `Makefile` | `setup-env`、`install`、`demo`、`list`、`skill-index`、`test` 等快捷方式 |
+| `Makefile` | `setup-env`、`install`、`list`、`skill-index`、`test` 等快捷方式 |
 | `.env.example` | 全部环境变量（12 节） |
 | `omicsclaw/launch/` | `oc` 外壳：文法、`.env`、三个界面的启动 |
 | `omicsclaw/entry/cli/_configure.py` | `oc cli --configure` 向导 |

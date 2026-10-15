@@ -4,7 +4,7 @@
         list skill-index \
         bot-telegram bot-multi bot-list
 
-## ── Conda environment (recommended, full functionality) ──────────────
+## ── Optional full conda environment ─────────────────────────────────
 ## Single-command install of R 4.3, ~130 R/Bioconductor packages, ~15
 ## bioconda CLIs, and OmicsClaw (editable) with its `full` and
 ## `singlecell-upstream` extras.

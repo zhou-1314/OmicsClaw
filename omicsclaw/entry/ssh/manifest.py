@@ -39,7 +39,7 @@ def verified_source_metadata(root: Path) -> dict:
             path.startswith("omicsclaw/")
             or path.startswith("skills/")
             and path.endswith("/SKILL.md")
-            or path in {"OMICSCLAW.md", "LICENSE", "omicsclaw_science_worker.py"}
+            or path in {"OMICSCLAW.md", "LICENSE"}
         )
         if (
             not allowed

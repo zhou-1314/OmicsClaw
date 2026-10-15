@@ -62,7 +62,7 @@ def make_skills(
     declared: Sequence[str] = DEFAULT_DECLARED,
     registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> SkillIndex:
-    """A skills tree with one skill, :data:`SKILL`, and a registry file ``_sdk/deps.py``."""
+    """A skills tree with one skill, :data:`SKILL`, and a separate registry fixture."""
     skill_dir = root / "demo" / SKILL
     skill_dir.mkdir(parents=True, exist_ok=True)
     line = ", ".join(f"`{name}`" for name in declared)
@@ -70,11 +70,9 @@ def make_skills(
         f"---\nname: {SKILL}\ndescription: A fixture skill for install_skill_deps tests.\n---\n\n"
         f"# {SKILL}\n\n## Dependencies\n\nPackages this skill needs.\n\n{line}\n"
     )
-    (skill_dir / "oc_skill.py").write_text("print('ran')\n")
-    sdk = root / "_sdk"
-    sdk.mkdir(exist_ok=True)
+    (skill_dir / "kernel.py").write_text("__all__ = ['helper']\ndef helper():\n    return 1\n")
     table = DEFAULT_REGISTRY if registry is None else registry
-    (sdk / "deps.py").write_text(f"DEPENDENCIES = {json.dumps(table, indent=1)}\n")
+    (root.parent / "deps_registry.py").write_text(f"DEPENDENCIES = {json.dumps(table, indent=1)}\n")
     return load_skills(root)
 
 
@@ -215,7 +213,7 @@ def harness(
     workspace.mkdir(exist_ok=True)
     tool = install_skill_deps_tool(
         skills,
-        registry=read_registry(tmp_path / "skills" / "_sdk" / "deps.py"),
+        registry=read_registry(tmp_path / "deps_registry.py"),
         probe_runner=probe,
         workspace=str(workspace),
         builder=OverlayBuilder(overlay_root, environment=lambda: environment, runner=runner, limits=limits),

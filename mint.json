@@ -108,8 +108,7 @@
     "OMICSCLAW.md",
     "README.md",
     "README_zh-CN.md",
-    "SPEC.md",
-    "llms.txt"
+    "SPEC.md"
   ],
   "footerSocials": {
     "github": "https://github.com/TianGzlab/OmicsClaw"

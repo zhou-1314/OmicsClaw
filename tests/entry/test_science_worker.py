@@ -125,7 +125,7 @@ def test_worker_calls_original_api_in_selected_process_with_payload_resource(tmp
         [
             sys.executable,
             "-m",
-            "omicsclaw_science_worker",
+            "omicsclaw.entry.ssh.science_worker",
             "--request",
             str(request),
         ],
@@ -346,7 +346,7 @@ def test_worker_uses_sidecar_and_real_r_in_owned_library(
             sys.executable,
             "-B",
             "-m",
-            "omicsclaw_science_worker",
+            "omicsclaw.entry.ssh.science_worker",
             "--request",
             str(request),
         ],

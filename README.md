@@ -37,7 +37,6 @@ terminal, in the desktop app and on chat platforms.
 - [Interactive analysis](docs/core-features/notebook.md) connects chat, a persistent Notebook kernel and hosted HTML/JS apps, with approval-gated publishing and versioned interaction state for the next model request.
 - The chat stream's approval frames carry the tool's risk tier and a one-line plain-language summary of the call, the agent may close an answer with up to three suggested follow-up questions (additive  frames), and the model is prompted for exactly that — the P6 usability round's first three items, on top of the Desktop jobs plane P1 built.
 - Domain skills now pair a four-part `SKILL.md` with a lightweight `kernel.py`; `use_skill` registers its helpers for the persistent Python kernel, replacing the former SDK step runner.
-- A real-model routing eval (`tests/evals/live/`, run by hand) measures whether the model picks the right skill for 26 seed requests, the CI unit-test job now also runs the launch shell, attachments, top-level and desktop HTTP tests, and the four consensus skills whose scripts could not start have since been deleted ([0068](docs/plans/0068-eval-hardening.md), [0070](docs/plans/0070-notebook-skill-runtime.md)).
 - The agent framework has been rebuilt around three entry points, `oc cli`, `oc desktop` and `oc channel`, and the old `oc interactive`, `oc tui`, `oc onboard` and `oc run` commands are gone ([rebuild status](docs/FRAMEWORK-REBUILD.md)).
 
 Earlier entries are in [CHANGELOG.md](CHANGELOG.md).
@@ -153,8 +152,15 @@ and restart `oc desktop` to use this control.
 
 | Method | Command | Covers |
 |---|---|---|
-| conda (recommended) | `bash 0_setup_env.sh` | Python, R and the command-line tools the skills need, plus the Desktop backend |
+| conda (optional full environment) | `bash 0_setup_env.sh` | Python, R and the command-line tools the skills need, plus the Desktop backend |
 | pip | `pip install -e .` | Terminal chat only. Most skills need packages that the conda environment provides, and the Desktop backend's FastAPI and uvicorn come from conda |
+
+An existing analysis environment does not need the full conda setup. Enable
+`oc cli --env-supply true` to let the agent request Python environments and
+packages with approval; this feature is off by default and needs uv. It does
+not install R, Bioconductor or bioinformatics CLIs, or switch an existing
+Notebook kernel to a newly created environment. Keep the full setup for
+workflows that need those components.
 
 Chat platforms need their own SDKs: `pip install -e ".[channels]"` for
 Telegram and Feishu, `pip install slack-sdk aiohttp` for Slack,

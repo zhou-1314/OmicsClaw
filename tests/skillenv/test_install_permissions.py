@@ -45,7 +45,7 @@ def _tool(tmp_path, missing=("oc_leaf",)):
     builder = _Builder(tmp_path)
     tool = install_skill_deps_tool(
         skills,
-        registry=read_registry(tmp_path / "skills" / "_sdk" / "deps.py"),
+        registry=read_registry(tmp_path / "deps_registry.py"),
         probe_runner=_Inventory(missing=missing),
         workspace=str(tmp_path),
         builder=builder,

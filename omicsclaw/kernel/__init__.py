@@ -1,9 +1,7 @@
 """P4 track B: the session-scoped persistent analysis kernels.
 
-The package the front-back plan adds beside the step-runner (track A,
-``skills/_sdk/notebook``, untouched): one IPython kernel per session,
-variables alive across cells, the iopub consumption primitive written
-once and parameterised per face —
+One IPython kernel per session keeps variables alive across cells. The
+iopub consumption primitive is shared by two callers:
 
 * the **chat face** reaches it through the ``python`` built-in tool
   (:mod:`omicsclaw.tools.builtin.python_kernel`, whose

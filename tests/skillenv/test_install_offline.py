@@ -83,7 +83,14 @@ def test_a_leaf_and_its_dependency_install_verify_and_are_reused(tmp_path):
     python = key_dir / ".venv" / "bin" / "python"
     assert f"- oc-leaf==1.0  oc_leaf-1.0-py3-none-any.whl  from file:{wheels}\n" in output
     assert f"- oc-dep==1.0  oc_dep-1.0-py3-none-any.whl  from file:{wheels}\n" in output
-    assert f"PYTHONNOUSERSITE=1 {python} " in output and "oc_skill.py" in output
+    kernel = tmp_path / "skills" / "demo" / SKILL / "kernel.py"
+    assert f"PYTHONNOUSERSITE=1 {python} -i {kernel}" in output
+    loaded = subprocess.run(
+        [str(python), "-i", str(kernel)],
+        input="import sys; sys.exit(0 if helper() == 1 else 1)\n",
+        text=True, capture_output=True, timeout=60,
+    )
+    assert loaded.returncode == 0, loaded.stderr
     assert "oc_leaf ok" in output
 
     # asked exactly once, before any process of the installation

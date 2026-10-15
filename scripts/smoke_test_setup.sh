@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for 0_setup_env.sh.
-# Builds a fresh env in a throwaway name, runs core demos, verifies imports.
+# Builds a fresh env in a throwaway name and checks imports and sidecars.
 # Run on a clean machine before tagging a release.
 #
 # Usage:
 #   bash scripts/smoke_test_setup.sh                   # auto-named throwaway env
 #   bash scripts/smoke_test_setup.sh OmicsClaw_my      # custom env name
 #
-# Side effects: creates and removes one or two conda envs (the main test env
-# and optionally omicsclaw_banksy if Stage 4 runs). Both are cleaned up on
-# exit via trap.
+# Side effects: creates and removes the named test environment.
 
 set -euo pipefail
 
@@ -19,7 +17,6 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cleanup() {
     echo "[smoke] removing test env $ENV_NAME"
     mamba env remove -n "$ENV_NAME" -y >/dev/null 2>&1 || true
-    mamba env remove -n omicsclaw_banksy -y >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -29,7 +26,7 @@ echo "[smoke] === Stage 1: bash 0_setup_env.sh $ENV_NAME ==="
 time bash 0_setup_env.sh "$ENV_NAME"
 
 echo "[smoke] === Stage 2: import smoke ==="
-mamba run -n "$ENV_NAME" python - <<'PY'
+mamba run --no-capture-output -n "$ENV_NAME" python - <<'PY'
 import importlib
 mods = [
     "scanpy", "anndata", "squidpy", "scvi", "scvelo", "cellrank",
@@ -39,7 +36,7 @@ mods = [
     "multiqc", "kb_python",
     "esda", "libpysal", "pysal", "ot",
     # thin pip residue (some are optional / may not import without input)
-    "spagcn", "GraphST", "tangram",
+    "SpaGCN", "GraphST", "tangram",
     # omicsclaw itself
     "omicsclaw",
 ]
@@ -55,15 +52,17 @@ if failed:
     raise SystemExit(f"{len(failed)} import(s) failed: {failed}")
 PY
 
-echo "[smoke] === Stage 3: demo skills ==="
-mamba run -n "$ENV_NAME" python omicsclaw.py run spatial-preprocess --demo
-mamba run -n "$ENV_NAME" python omicsclaw.py run spatial-domains --demo --method leiden
-mamba run -n "$ENV_NAME" python omicsclaw.py run bulkrna-de --demo
+echo "[smoke] === Stage 3: skill sidecar contracts ==="
+mamba run --no-capture-output -n "$ENV_NAME" python - <<'PY'
+from omicsclaw.skills import load_skills
+from omicsclaw.skills.sidecar import validate_skill_dir
 
-echo "[smoke] === Stage 4: banksy sub-env (opt-in) ==="
-OMICSCLAW_WITH_BANKSY=1 bash 0_setup_env.sh "$ENV_NAME"
-mamba env list | awk '{print $1}' | grep -qx 'omicsclaw_banksy' \
-    || { echo "[smoke] FAIL: omicsclaw_banksy not created"; exit 1; }
-mamba run -n "$ENV_NAME" python omicsclaw.py run spatial-domains --demo --method banksy
+index = load_skills("skills")
+assert len(index) and not index.skipped, index.skipped
+for skill in index.skills:
+    errors = validate_skill_dir(skill.directory)
+    assert not errors, (skill.name, errors)
+print(f"Validated {len(index)} skill sidecars")
+PY
 
 echo "[smoke] ✔ all stages passed"

@@ -1,7 +1,7 @@
 ---
 title: "快速上手 OmicsClaw"
-description: "建好 conda 环境，用 oc cli --configure 配置模型，在终端里和 agent 对话，再直接跑一个技能 demo。"
-keywords: ["OmicsClaw 安装", "quickstart", "oc cli", "conda 环境", "demo"]
+description: "安装框架或可选完整 conda 环境，配置模型，在终端中通过 skill 和持久内核分析数据。"
+keywords: ["OmicsClaw 安装", "quickstart", "oc cli", "conda 环境", "kernel.py"]
 og:image: "/docs/images/og-cover.png"
 ---
 
@@ -18,13 +18,18 @@ conda activate OmicsClaw
 
 `0_setup_env.sh` 优先用 `mamba`，找不到时回退到 `conda`。它按 `environment.yml` 建一个名为 `OmicsClaw` 的环境，装入 R 4.3 与 R/Bioconductor 包、samtools、STAR、fastqc 等命令行工具和 Python 科学计算栈，再以可编辑模式安装 OmicsClaw 及其 `full`、`singlecell-upstream` extra，`oc` 命令随之可用。整个过程通常要 10 到 30 分钟，取决于网络和镜像速度。想用别的环境名，运行 `bash 0_setup_env.sh <环境名>`。
 
+已有分析环境时，可用 `python -m pip install -e .` 只安装框架。
+`oc cli --env-supply true` 可启用默认关闭的 Python 环境供给，在审批后通过 uv
+创建环境或补装包。它不安装 R/Bioconductor 或生信 CLI，也不切换现有 Notebook 内核。
+需要这些组件时再使用完整安装。
+
 确认技能已就位：
 
 ```bash
 make list
 ```
 
-第一行应为 `94 skill(s), 0 skipped`，下面按领域列出 7 个领域的技能名。
+当前索引包含 88 个领域技能和 `skill-creator`，应显示 `89 skill(s), 0 skipped`。
 
 ## 2. 配置模型
 
@@ -49,24 +54,27 @@ oc cli
 只问一次、拿到回答就退出：
 
 ```bash
-oc cli --prompt "用 demo 数据跑一次 spatial-preprocess，并总结结果"
+oc cli --prompt "说明 spatial-preprocess 的输入要求和质量检查"
 ```
 
 较长的问题可以写进文件，用 `oc cli --prompt-file brief.md` 传入。`oc cli --help` 列出全部参数。
 
 没有配置 API key 时 `oc cli` 照样能启动，启动时会在 stderr 提示运行 `oc cli --configure`，但对模型的调用都不会成功。
 
-## 4. 直接运行技能 demo
+## 4. 使用技能辅助函数
 
-技能是普通的 Python 脚本，不经过 agent 也能运行。大多数技能支持 `--demo`，用内置或现场生成的演示数据，不需要准备输入文件：
+Agent 调用 `use_skill` 读取方法说明并注册 `kernel.py` 的辅助函数，随后在持久
+Python 内核中运行分析。Python 用户可以直接查看一个技能提供的函数：
 
-```bash
-python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/quickstart_demo
+```python
+from omicsclaw.skills.sidecar import load_skill
+
+helpers = load_skill("spatial-preprocess")
+print(helpers.__all__)
 ```
 
-结束时终端打印 `Preprocessing complete: 200 cells, 3 clusters`。输出目录里有 `report.md`、`result.json`、`processed.h5ad`，以及 `figures/`、`tables/` 等子目录。
-
-其他技能的脚本在各自的技能目录里，形如 `skills/<领域>/<技能>/<脚本>.py`（单细胞技能多一层 `scrna/` 或 `scatac/`），参数写在同一目录的 `SKILL.md` 里。`make demo-all` 依次跑 15 个空间转录组技能的 demo。
+实际方法、输入、上游库示例和输出检查写在技能目录的 `SKILL.md` 中。运行分析前，
+确认所需科学计算包在实际使用的解释器中可导入。
 
 ## 下一步
 
