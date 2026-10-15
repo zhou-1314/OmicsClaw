@@ -2,6 +2,8 @@
 
 状态：已实现，独立审核有条件通过，审核意见已处理，待 owner 过目和下令合并（2026-10-10）。实现在分支 `feat/truncation-notice` 上，从 `feat/ask-user-r4` 和计划 0080 的实现都已合入的 `main`（`4d6c473d`）开出，没有合并，没有 push；提交、与计划的差异和验证结果见 §13，审核意见的处理见 §13.9。计划是定稿的第 2 版（2026-10-09）：第 1 版（提交 `83c245b9`）经独立审核，结论是"可以交 owner 批准"，owner 2026-10-09 批准了计划并作了裁定（§9），这一版把裁定和审核意见并进正文，没有再审一轮。§0 至 §12 是派发实现之前写的。实现之后只改了两处：§3.3 关于折行宽度的说法，和 §5 里引用它的半句，都是按实现的审核意见改准的。
 
+§14 是 0081 合入之后单独做的一项：exchange 停在轮数上限时 CLI 显示的一行（§9 第 8 条）。它在分支 `feat/turn-limit-notice` 上，已实现，待独立审核和 owner 过目。措辞 owner 2026-10-10 选定了甲（§14.3），由派发方转述；按 0081 类推来的其余假设还没有逐条确认（§14.5）。
+
 基线：行号以 `main` 的 `5daf5482` 为准。实现开工时的 `main` 会比它新，按符号名重新定位，三处改动在合并后的树上落在哪里见 §10。
 
 范围：只做"截断时 CLI 显示一句"。只是显示，不碰给模型看的文字，不碰 Desktop 的线上契约。
@@ -354,7 +356,7 @@ owner 被问到时没有选、这次不做的：
 
 顺带看到、不在本计划里的。前两条 owner 已经定了去向（§9）：
 
-- 到达轮数上限的交换，CLI 上同样没有任何说明（`out_01_shapes_base.log` 的 h 段）。`TurnOutcome.hit_the_turn_ceiling`（`turn.py:142-145`）在 `omicsclaw/` 里没有调用方。
+- 到达轮数上限的交换，写这份计划时 CLI 上同样没有任何说明（`out_01_shapes_base.log` 的 h 段），`TurnOutcome.hit_the_turn_ceiling`（`turn.py:142-145`）在 `omicsclaw/` 里没有调用方。之后按 §9 第 8 条单独做了：这样的交换下面现在有一行，读的就是这个属性，见 §14。
 - Channel 上，一次交换没有产出文字时，会把上一次交换的回答再发一遍。`_answer` 在整段轨迹里倒着找最后一条有文字的 assistant 消息，轨迹包含带进来的历史；`TurnOutcome.reply`（`turn.py:134-140`）是同样的找法。第 1 版把触发条件写成"被截断且没有文字"，写窄了：审核方跑出一次没有被截断、回复为空的交换同样重发（`RV81/logs/channel_replay_base.log`），和截断无关。
 - 摘要调用被截断时没有人知道（§4）。
 - `CLI_USAGE`（`_surfaces.py:275-278`）和 `docs/core-features/cli.md:113` 说 `oc cli --prompt … > answer.txt` 只写答案。实际还有 `Context: …`、`Turn N done, …` 和工具行（`out_02_oneshot_base.log`）。
@@ -556,7 +558,7 @@ O7 没有测试转红。它是 §3.2 定下不钉的那一条：这一行后面�
 | 提问卡答了 `2`，之后的回复带调用被截 | 第二种形式，在 `Turn 2 done` 之后 |
 | 提问卡过了期限（提示符到期时已经收回），之后的回复只有文字被截 | 第一种形式，前面没有残留的提示符 |
 | 模型还没回复时按 Ctrl-C；文字流出一半时按 Ctrl-C | 只有 `Cancelled.` |
-| 后端报错；轮数上限 | 只有 `Failed: RuntimeError`；什么都没有 |
+| 后端报错；轮数上限 | 只有 `Failed: RuntimeError`；什么都没有（轮数上限之后有了自己的一行，见 §14） |
 | 截断后 `/compact` | 这一行只在被截断的那次出现，`/compact` 打印自己的结论 |
 | 连续两次截断，第三次正常 | 出现两次，第三次没有 |
 | 一次性执行：只有文字、带调用、失败 | 前两种各一行，退出码 0；失败时没有这一行，退出码 1 |
@@ -654,3 +656,323 @@ O7 没有测试转红。它是 §3.2 定下不钉的那一条：这一行后面�
 3. 审核方另外存活的变异它认为不用钉：这一行前后的空行，名字或列表按长度截断，`no_wrap`，只有换行的名字，改在 `ask()` 里打印（`RV81/logs/r2_mutations.log`）。
 
 这一轮没有跑的：第 2 档的两条命令没有在新的 tip 上重跑。改动是一条测试和文档，跑了 `tests/entry/test_cli_repl.py` 和变异；审核方在 `a3aa7532` 上跑过第 2 档。没有合并 `main`，没有 push，`CHANGELOG.md` 没有写。
+
+## 14. exchange 停在轮数上限时的一行
+
+2026-10-10，实现方写。§9 第 8 条裁定这一项不并进 0081，0081 落地后单独做，不另写计划，所以记录接在这里。分支 `feat/turn-limit-notice` 从 `main` 的 `7253e8c7` 开出，之后把前进到 `db2accda` 的 `main` 合了进来（§14.10）。分支没有合入 `main`，没有 push，`CHANGELOG.md` 没有写。脚本和日志在 `/tmp/claude-0/-workspace-dataset-private-zhouwg-data-OmicsClaw/350239cf-9d42-4751-bf4c-70e3fddeea39/scratchpad/turn-limit-notice/`，下面记作 `TL`：探针在 `TL/probes/`，日志在 `TL/logs/`，清单是 `TL/INDEX.txt`。每个探针和 pty 进程都把这个 worktree 放在 `PYTHONPATH` 最前面，日志里打了 `omicsclaw.__file__`。模型是脚本化的替身，只有 §14.4 末尾的一次会话用了真实的 DeepSeek。
+
+措辞已经定了：owner 2026-10-10 选定甲，就是实现的那一句，由派发方转述（§14.3）。还没有定的是沿用的 0081 裁定，它们是派发方按 0081 类推的，owner 没有逐条确认过，等独立审核之后一起过目（§14.5）。
+
+### 14.1 做了什么
+
+改动前：引擎用完 `max_turns` 次模型调用、模型还在请求工具时，以 `StopReason.MAX_TURNS` 结束，`terminal` 是 `converged`。CLI 等到了 handle，没有读停止原因。屏幕上最后是工具结果和 `Turn N done`，接着就是提示符，和模型自己答完的交换看不出区别（`TL/logs/out_01_facts_base.log`）。
+
+改动都在 `omicsclaw/entry/cli/_repl.py`，新增 35 行、去掉 2 行：
+
+- `_cut_off_notice` 之后、`class Repl` 之前，加常量 `_TURN_LIMIT_NOTICE` 和函数 `_turn_limit_notice(outcome)`。函数在 `outcome` 是 `None` 或 `outcome.hit_the_turn_ceiling` 为假时返回空串，否则返回填好数字的那一句。`TurnOutcome.hit_the_turn_ceiling` 从此有了调用方。
+- `Repl._drive` 末尾，原来的 `notice = _cut_off_notice(handle.outcome)` 改成 `outcome = handle.outcome` 和 `notice = _cut_off_notice(outcome) or _turn_limit_notice(outcome)`。打印的那一句没有动。所以这一行和 0081 的那一行走的是同一句打印代码：位置在 `finally` 之后、`return handle` 之前，黄色，用 `Text`，后面不补空行，一次交换至多一行。
+
+| 提交 | 内容 |
+|---|---|
+| `a41b8af2` `feat(cli): say so when an exchange stops at the turn limit` | `_repl.py` 的改动，18 条测试（24 个用例），`cli.md` 的 §9.3 和五处指向它的短句，`agent-loop.md` §4.1 的一段 |
+| `6fc535f4` `docs(cli): record the turn-limit line beside plan 0081` | 这一节的 §14.1 至 §14.9，本文件开头的一段，§8 第一条和 §13.6 表里各半句 |
+| `15c7eb22` `Merge branch 'main' into feat/turn-limit-notice` | 把 `main` 的 `db2accda` 合进来（§14.10） |
+| `f3e8ee2c` `test(cli): give the outcome built for the notice tests a reply` | `outcome_of` 补上 `reply=""`（§14.10） |
+| 本提交 | owner 对措辞的裁定，§14.10，以及随它们改的几处 |
+
+这一项自己没有动的：`omicsclaw/engine/`、`entry/turn.py`、`entry/events.py`、`entry/render.py`、`entry/session.py`、`entry/desktop/`、`entry/channel/`、`launch/_surfaces.py`（包括 `CLI_USAGE`）、`OMICSCLAW.md`、工具描述。其中 `entry/turn.py` 和 `entry/channel/` 在合进来的 `main` 上改过（§14.10）。`tests/entry/golden/` 没有重录。`README.md` 和 `CHANGELOG.md` 没有动，CHANGELOG 的草稿在 `TL/CHANGELOG_draft.md`。
+
+测试文件里改了一个原有的辅助函数：`outcome_of` 原来返回只带 `result` 的 `SimpleNamespace`，现在返回真的 `TurnOutcome`，这样被测的函数读到的是真的 `hit_the_turn_ceiling`。0081 的三条单元测试（T8、T9、T10）也用它，只读 `result`，结果不变。合入 `main` 之后 `TurnOutcome` 多了必填的 `reply`，`outcome_of` 给它传空串（§14.10）。
+
+### 14.2 哪些情形显示
+
+| 情形 | 屏幕上 |
+|---|---|
+| 以 `max_turns` 停下，模型每轮只发工具调用 | 这一行，数字是这次的上限 |
+| 以 `max_turns` 停下，工具调用旁边写过文字 | 同一句 |
+| 没有传 `--max-turns` | `(50)` |
+| 同一个 REPL 里再次停在上限 | 再出一次 |
+| 一次性执行以 `max_turns` 停下 | 同一句，在标准输出末尾，退出码 0 |
+| 管道输入的 REPL 以 `max_turns` 停下 | 同一句，在标准输出，文件里的下一行照常当下一条消息 |
+| 最后一次允许的模型调用正常作答 | 两行都不出 |
+| 最后一次允许的模型调用被输出上限截断 | 只出 0081 的那一行 |
+| `--max-turns 0` | 没有上限，不出 |
+| `/compact`，包括紧跟在停在上限的交换之后 | 不出，照常打印压缩的结论 |
+| 被取消（包括在最后一轮上按 Ctrl-C）、失败 | 只有 `Cancelled.` 或 `Failed: <类型名>` |
+| 子代理停在它自己的上限，父代理随后答完 | 不出。`task` 的报错 `sub-agent '<name>' stopped at the turn limit (N) without a conclusion` 在结果预览里 |
+| 子代理停在它自己的上限，父代理随后也停在上限 | 出一次，数字是父代理的 |
+| Desktop、Channel | 不变 |
+
+一次交换只有一个停止原因，所以这一行和 0081 的那一行不会同时出现。代码上两个函数用 `or` 接在一起，只有一处打印。
+
+### 14.3 措辞
+
+owner 2026-10-10 选定了甲，由派发方转述。实现的就是甲，这条裁定没有带来代码改动。乙和丙是没有选的备选，原文和当时的比较留在这里。三组都以 `Stopped at the turn limit (50)` 开头，50 的位置是实际的数字。
+
+甲，选定的一组。一句，REPL 和一次性执行相同，写没写过文字相同：
+
+```
+Stopped at the turn limit (50) before the model finished. Say "continue" to go on, or raise --max-turns.
+```
+
+乙，没有选。按这次交换写没写过文字分两句，没写时和 owner 给 Channel 选定的那一句逐字相同：
+
+```
+Stopped at the turn limit (50) without a written reply. Say "continue" to go on.
+Stopped at the turn limit (50) before the reply was finished. Say "continue" to go on.
+```
+
+丙，没有选。按之后还能不能再说一句分两句，REPL 用前一句，一次性执行用后一句：
+
+```
+Stopped at the turn limit (50) before the model finished. Say "continue" to go on.
+Stopped at the turn limit (50) before the model finished. Run it again with a higher --max-turns.
+```
+
+实现方推荐甲时的理由：
+
+1. 和 Channel 的那一句对得上。到括号为止的开头相同，建议用户说的也是同一个词。Channel 那一句的 "without a written reply" 说的是 Channel 自己的处境：没有文字可发，所以才要说这一句。CLI 上模型写过的文字都已经在屏幕上。停在上限时最后一条模型消息一定带着工具调用，所以写没写过文字，模型都还没有给出收尾的回答，"before the model finished" 一句管两种情形。
+2. 乙要判断"这次交换写没写过文字"，这个判断在最需要它的时候不可靠。写这一条时它只能像那时 Channel 的 `_answer` 一样，从轨迹末尾往回找到最近的用户消息为止。合入 `main` 之后有了现成的 `TurnOutcome.reply`（`docs/core-features/surfaces.md` §3.3），Channel 读的也是它，乙可以直接看它是不是空串。不可靠的地方没有变：`reply` 读的是交换结束时的轨迹。跑到上限的交换往往很长，中途压缩过的话，早先写的文字已经换成摘要，`reply` 是空串，屏幕上却有，这时乙会在一段文字下面说 "without a written reply"。`surfaces.md` §10 第 10 条记着 Channel 上同样的情形。0081 分两种形式，是因为第二种告诉用户一件屏幕上看不到的事（哪些调用没有执行），这里没有这样的事。
+3. "continue" 在一次性执行里说不了（§14.4），所以甲的后半句给了第二条路 `or raise --max-turns`，那是一次性执行里做得到的。句式和 0081 的 "Ask for a shorter answer, or for it in parts." 一样是"甲，或者乙"。它还告诉用户这个上限叫什么，屏幕上别处没有出现过这个名字。
+4. 一个常量，没有新的分支，打印和 0081 的那一行共用。
+
+甲的代价：一次性执行的输出里，前半句建议对读日志的人用不上；REPL 里后半句要退出重启才用得上。整句靠 "or" 的另一半成立，`cli.md` §9.3 写明了哪一半在哪里适用。要让每种模式下句子里的每个建议都能当场照做，就是丙。丙要 `Repl` 知道自己是不是一次性执行，`run_once` 建它的时候得多传一个参数，而 0081 的那一行在两种模式下是同一句。
+
+以后要换的话要动的地方：
+
+- 只换说法、不改结构（比如去掉 `, or raise --max-turns`，或者换前半句的说法）：改 `_TURN_LIMIT_NOTICE` 一处，再改 `test_the_limit_line_reads_as_agreed_and_opens_with_stable_words` 里写死的原文。
+- 乙：`_turn_limit_notice` 按 `outcome.reply` 是不是空串选句子，多一个常量，`test_text_beside_the_tool_calls_does_not_change_the_line` 改成断言两种形式。
+- 丙：`Repl.__init__` 加一个参数，`run_once` 传它，`_drive` 按它选句子，一次性执行的那条测试改成断言后一句。
+
+开头 `Stopped at the turn limit` 是 25 个字符，在行首，和 0081 的开头一样当脚本的接口。子代理停在它自己的上限时，`task` 的报错里有小写的 `stopped at the turn limit (N)`，所以脚本要按行首、区分大小写匹配。
+
+括号里的数字取 `outcome.result.turns`，即这次交换做了几次模型调用。引擎只在 `0 < max_turns <= turns` 时才从循环条件退出，`turns` 每轮加一，所以以 `MAX_TURNS` 停下时它等于这次生效的上限。子代理的调用是另一个引擎的，不计在内。没有读 `AppConfig.max_turns`：两者在 CLI 里相等，但函数只拿 `outcome` 就能算出这一句，不用认识 app；引擎和配置不一致时（app 是围着别处建的引擎装起来的），`turns` 是真正拦下这次交换的那个数，U18 钉的是这一点。子代理那条路的报错用的也是 `result.turns`（`entry/subagent.py` 的 `_conclusion`）。
+
+### 14.4 说 "continue" 之后发生什么
+
+脚本化的验证是 `TL/probes/probe_02_continue.py`，经真实的装配、`SessionRegistry` 和 `Repl`。替身遇到没有结果的工具调用就报 DeepSeek 的那句 400。它打印每次模型调用收到的消息，并把那份请求按两种方言编码一遍。改动前后各跑一遍（`out_02_continue_base.log`、`out_02_continue_a41b8af2.log`），除了多出来的这一行、随机的会话 id 和审批 id、时间和路径，两份输出相同。
+
+1. 停在上限的交换以 `converged` 结束，历史照常保存，末尾是最后一轮工具的结果。引擎执行完工具才会从循环条件退出，所以末尾一定是工具结果，没有未回答的调用，0080 的清理在这里什么都不用做。
+2. "continue" 作为下一条用户消息接在工具结果后面，请求是 `… assistant(tool_calls) → tool → user`。替身没有拒绝，`assert_both_dialects_accept` 通过。OpenAI 方言的角色序列以 `assistant tool user` 结尾。Anthropic 方言下编码器给出连续两个 user turn，一个装 `tool_result`，一个装文字，编码器不合并它们。
+3. 新的交换有自己的一整份轮数：上限是 2 时，"continue" 之后又做了 2 次模型调用。连续两次停在上限、各说一次 "continue"，第三次交换答完。
+4. 进程退出后在新进程里用同一个会话 id 说 "continue"，接得上，前提是没有关掉 memory。
+5. 一次性执行：会话存了下来，会话 id 不上屏。新起一个 REPL，`/sessions` 列得出它，`/resume 1` 之后说 "continue" 接得上。
+6. 中间插一条 `/compact`，之后照常接上。
+7. 最后一轮的工具在审批卡上被拒时，末尾是那条报错的工具结果，"continue" 之后模型读到的是它。
+8. 模型不知道自己是被上限拦下的。它看到的是工具结果后面跟着一条用户消息。
+
+它不成立或有条件的情形：
+
+- 一次性执行。进程打印完就退出，没有地方说。要走上面第 5 条的路，而且 `--session` 和 `--prompt` 不能同用，只能进 REPL。甲的后半句是给这里的。
+- 关掉了 memory 又退出了进程。对话没有留下。
+- Anthropic 方言没有实测，没有凭据。连续两个 user turn 能不能被 API 接受，这里没有验证。
+- 真实模型收到 "continue" 之后怎么走取决于模型，下面只有一次会话。
+
+真实模型，一次会话（`TL/probes/real_child.py`，`TL/logs/real_a_deepseek_max_turns_2.log`）：pty 里起真实的 `oc cli --max-turns 2 --permission-mode read-only`，provider 是 DeepSeek，workspace 里四个各含一个数的文件，要求每轮读一个文件，最后求和。第一次交换读了 `a.txt` 和 `b.txt`，停在上限，出这一行。输入 "continue"，模型先说 "b.txt contains 5. Now c.txt."，接着读 `c.txt` 和 `d.txt`，没有重读前两个，又停在上限。再输入 "continue"，回答 "The four numbers are 3, 5, 7, and 11, so the sum is 26."。一共 5 次模型调用，请求没有被拒。此前有两次启动以 `Failed: ProviderError` 结束：探针没有把 key 放进进程环境（`provider_from_env` 读的是进程环境，不读传给 `main` 的那份映射），第一次还没有把代理换成 `AI_PROXY`。这两次没有成功的模型调用，日志是 `real_0_no_proxy_failed.log` 和 `real_0b_no_key_in_process_env_failed.log`。`TL/probes/check_no_secret.py` 扫过证据目录和 worktree，没有文件含 key。
+
+### 14.5 待 owner 确认的假设
+
+第 8 条已经定了。其余的 owner 还没有逐条确认，等独立审核之后一起过目。
+
+下面是派发方按 0081 的裁定类推的，实现照着做了：
+
+1. 只改 `omicsclaw/entry/cli/_repl.py`，不加跨层字段。
+2. 交换结果、事件帧、`terminal`、历史和发给模型的内容都不变。模型不知道自己停在了上限。
+3. Desktop 和 Channel 不变。
+4. 一次性执行时这一行打到标准输出，和 REPL 是同一句，退出码仍是 0。
+5. 子代理停在它自己的上限不另外显示。
+6. 黄色、用 `Text` 打印、在卡片收掉之后、后面不补空行、`_drive` 因异常离开时不打印，都和 0081 的那一行相同。
+7. `Stopped at the turn limit` 这个开头当脚本的接口。
+
+实现方自己定的：
+
+8. 措辞用甲（§14.3）。已定：owner 2026-10-10 选定甲，由派发方转述。
+9. 写没写过文字用同一句。
+10. 数字取 `RunResult.turns`。
+11. `CLI_USAGE` 没有改。它本来就不列部署 flag，句子里的 `--max-turns` 在 `oc cli --help` 里查不到（§14.9 第 1 条）。
+
+对轮数上限不完全合适的只有第 4 条里的"同一句"。0081 的建议在两种模式下都能照做，轮数上限最顺手的建议在一次性执行里做不到。实现没有改方向，仍是两种模式同一句，用后半句补上一次性执行的那一半。甲本身就是"两种模式同一句、写没写过文字同一句"的那一组，选定甲之后乙和丙都没有走。第 4 条里"同一句"的部分和第 9 条是不是随措辞一起算定，留到过目时由 owner 说。
+
+### 14.6 测试
+
+`tests/entry/test_cli_repl.py` 末尾新开一节，18 条测试，24 个用例，写法照 0081 的那一节：真实的装配、真实的 `SessionRegistry` 和 `Repl`，屏幕写进缓冲；U15 至 U17 直接调函数或读常量。函数和常量经模块属性取（`_repl._turn_limit_notice`），在没有它们的树上文件照常收集，每条测试各自失败。原文只在 U17 里写了一遍。
+
+| 编号 | 测试 | 钉住什么 | 改动前 |
+|---|---|---|---|
+| U1 | `test_an_exchange_that_stops_at_the_turn_limit_is_reported_under_it`（上限 1、3） | 以固定开头起头的行恰好一行，就是这一句，数字等于上限；在最后的工具结果之后、退出语之前；提示符照常回来 | 红 |
+| U2 | `test_text_beside_the_tool_calls_does_not_change_the_line` | 工具调用旁边写过文字时还是同一句 | 红 |
+| U3 | `test_an_exchange_that_did_not_stop_at_the_limit_prints_no_such_line`（正常回答、在最后一轮答完、`max_turns=0`、失败） | 这些结束方式不出这一行 | 绿，护栏 |
+| U4 | `test_an_exchange_cancelled_on_its_last_turn_prints_only_cancelled` | 在最后一轮上被取消，只有 `Cancelled.` | 绿，护栏 |
+| U5 | `test_one_exchange_never_gets_both_lines`（最后一轮截在工具调用里、截在文字里、工具照常执行） | 三次交换都用完两次模型调用。前两种只出 0081 的一行，第三种只出这一行 | 前两个绿，第三个红 |
+| U6 | `test_a_cut_and_a_limit_in_one_repl_each_get_their_own_line` | 同一个 REPL 里先截断、后停在上限：各出各的一行，先后对，之后的正常回答不出 | 红 |
+| U7 | `test_the_limit_line_is_not_repeated_by_compact_or_by_the_next_answer` | 之后的 `/compact` 和正常回答不再出这一行 | 红 |
+| U8 | `test_reaching_the_limit_again_is_reported_again` | 连续两次停在上限出两行 | 红 |
+| U9 | `test_continue_after_the_limit_goes_on_from_the_tool_results` | 说 "continue" 之后：请求末尾是工具结果加这条用户消息，两种方言的编码都接受，新交换有自己的轮数并答完；这一行只出一次 | 红，只红在最后一条断言 |
+| U10 | `test_a_single_shot_run_reports_the_limit_and_still_converges` | `run_once` 出同一行，`terminal` 仍是 `converged` | 红 |
+| U11 | `test_a_sub_agent_that_stops_at_its_own_limit_gets_no_line` | 子代理停在它的上限、父代理答完：没有以固定开头起头的行，`task` 的报错在屏幕上 | 绿，护栏 |
+| U12 | `test_the_number_is_the_parent_s_when_it_stops_after_a_sub_agent_did` | 子代理上限 1、父代理上限 3：一行，数字是 3 | 红 |
+| U18 | `test_the_number_is_the_run_s_own_and_not_the_configured_one` | 引擎的上限和配置里写的不一样时，数字是引擎实际用的那个 | 红 |
+| U13 | `test_the_limit_line_is_printed_after_open_cards_are_taken_down` | 这一行在 `_reap_asking` 之后 | 红 |
+| U14 | `test_the_limit_line_is_handed_to_the_screen_as_yellow_text` | 交给 `Screen.print` 的是黄色的 `Text`，没有以字符串交出去 | 红 |
+| U15 | `test_the_limit_notice_is_empty_for_every_ending_but_the_turn_limit` | `None`、`CONVERGED`、`TRUNCATED` 返回空串；`MAX_TURNS` 返回这一句，数字是 `turns` | 红 |
+| U16 | `test_no_outcome_is_given_both_notices` | 每个停止原因下两个函数至多一个有话，逐个列出；`StopReason` 加了成员这条测试会失败 | 红 |
+| U17 | `test_the_limit_line_reads_as_agreed_and_opens_with_stable_words` | 原文逐字；以 `Stopped at the turn limit (50) ` 开头 | 红 |
+
+先红后绿：
+
+| 步骤 | 结果 | 日志 |
+|---|---|---|
+| 新测试并进文件，生产代码没改（那时还没有 U18） | 99 个用例里 15 failed、84 passed。84 个里 76 个是原有的，8 个是护栏 | `red_first.log` |
+| 改了 `_repl.py` 之后 | 99 passed | `green_after.log` |
+| `a41b8af2` 的测试文件，配 `7253e8c7` 的 `_repl.py`（在 `TL/mut/` 的副本上） | 100 个用例里 16 failed、84 passed，多出来的红是 U18 | `red_first_committed_a41b8af2.log` |
+| `a41b8af2` | 100 passed | `green_on_a41b8af2.log` |
+
+U9 在改动前只红在最后一条断言：请求的形状、两种方言、新交换的轮数这几条在改动前就成立，它们钉的是句子里的建议照做得通。
+
+变异在 worktree 的一份副本上做（`TL/mut/`），不写 worktree，脚本是 `TL/probes/mutate.py`，每处跑整个 `tests/entry/test_cli_repl.py`。`a41b8af2` 上 37 处，35 处有测试转红（`mutations_on_a41b8af2.log`）。L 是打在新代码上的，K 是照 0081 的变异打在共用的打印处，看 0081 的测试还钉不钉得住。
+
+| 编号 | 变异 | 转红的测试 |
+|---|---|---|
+| L1 | 这一行从不打印（打印处改回原样） | U1、U2、U5 至 U10、U12、U13、U14、U18 |
+| L2 | 凡不是 `CONVERGED` 函数都返回这一句 | U15、U16 |
+| L3 | `outcome` 是 `None` 时不挡 | U3、U4、U15、U16、T4，另有 4 条原有的取消和审批测试 |
+| L4 | 数字写死 50 | U1、U2、U6、U8、U9、U10、U12、U14、U15、U18 |
+| L5 | 数字数的是整段轨迹里的 assistant 消息，更早的交换也算 | U6、U8、U15 |
+| L6 | 数字多 1 | U1、U2、U6、U8、U9、U10、U12、U14、U15、U18 |
+| L7 | 被截断的回复两行都出 | U5、U6 |
+| L8 | 在收卡片之前打印 | U1、U2、U5 至 U10、U12、U13、U14、U18 |
+| L9 | 一次性执行不打印这一行 | U10 |
+| L10 | 打印两次 | U1、U2、U5 至 U10、U12、U14、U18，T1、T2、T3、T5、T6、T11、T12、T13、T15 |
+| L11 | `/compact` 也出这一行 | U7 |
+| L12 | 一个 REPL 里只在第一次停在上限时出 | U8 |
+| L13 | 后面的提示都重复这个 REPL 里的第一句 | U6、T15 |
+| L14 | 换掉开头那几个字 | U1、U2、U5 至 U10、U12、U13、U14、U17、U18 |
+| L15 | 去掉后半句的 `, or raise --max-turns` | U17 |
+| L16 | 写过文字就不出这一行 | U2、U6、U16 |
+| L17 | 没写文字时换成另一句（乙的第一句） | U1、U8、U9、U10、U12、U14、U15、U18 |
+| L18 | 子代理停在它的上限也出这一行 | U11 |
+| L19 | 取消或失败的交换也出这一行 | U3、U4、U15、U16 |
+| L20 | 上限是 1 时不出 | U1、U13、U14 |
+| L21 | 在最后一轮答完的交换也出这一行 | U3、U9 |
+| L22 | 两个函数用 `and` 接 | U1、U2、U5 至 U10、U12、U13、U14、U18，T1、T2、T3、T5、T6、T7、T11、T12、T13、T15 |
+| L23 | 这一行后面补一个空行 | 没有 |
+| L24 | 挪进 `finally` 里打印 | 没有 |
+| L25 | 这一行后面不换行 | U1、U2、U6、U8、U9、U12、U18，T1、T2、T3、T11、T12、T15 |
+| L26 | 这一行打到标准错误 | U1、U2、U5 至 U10、U12、U13、U14、U18 |
+| L27 | 这一行拼成 markup 字符串打印 | U14 |
+| L28 | 这一行不带颜色 | U14 |
+| L29 | 这一行用红色 | U14 |
+| L30 | 这一行绕过 `Screen.print` 直接打到 console | U14 |
+| L31 | 数字读 `AppConfig.max_turns` | U18 |
+| L32 | 最后一轮被截断的回复出这一行，不出截断的那一行 | U5 |
+| L33 | 凡不是 `CONVERGED` 都先出这一行，截断的函数排在后面 | U5、U6，T1、T2、T3、T5、T6、T7、T11、T12、T13、T15 |
+| K1 | 截断的那一行从不打印 | U5、U6，T1、T2、T3、T5、T6、T7、T11、T12、T13、T15 |
+| K2 | 共用的打印处去掉颜色 | U14、T13 |
+| K3 | 共用的打印处拼成 markup 字符串 | U14、T12、T13 |
+| K4 | 在 `handle.wait()` 之前读结果 | U1、U2、U5 至 U10、U12、U13、U14、U18，T1、T2、T3、T5、T6、T7、T11、T12、T13、T15 |
+
+存活的 L23 和 L24 是 0081 决定不钉的那两处（§6.2 的 R7、§13.5 的 O7），这一行和 0081 的那一行共用那段代码，一起留着。L31 在提交前的第一轮变异里存活过（`round1_uncommitted/mutations_round1_uncommitted.log`），U18 是为它加的。
+
+档位：`SPEC.md` 第 2 档，和 0081 一样。改动在 `omicsclaw/entry/cli` 一个包里，不改别的代码 import 的东西，不改 agent 看到的任何文字，provider 适配器、权限门、Desktop 线上契约都没有碰。按第 2 档跑了新增的测试和 `tests/entry`。一次性执行从 `omicsclaw/launch` 进来，bench 读 CLI 的标准输出，`tests/bench/test_oc_cli_contract.py` 里有一条用真实的 `oc cli` 进程跑到轮数上限，所以把 `tests/launch` 和 bench 的两个文件也带上了。命令都是 `/opt/conda/envs/rapids_singlecell/bin/python -m pytest <路径> -p no:cacheprovider -q`，改动后的三条另加 `-p no:randomly`：
+
+| 命令 | 改动前 `7253e8c7` | 改动后 `a41b8af2` |
+|---|---|---|
+| `tests/entry` | 2193 passed、6 skipped、3 xfailed，94 秒 | 2217 passed、6 skipped、3 xfailed，91 秒 |
+| `tests/launch` | 没有跑 | 341 passed、1 skipped，29 秒 |
+| bench 的两个文件 | 没有跑 | 60 passed，11 秒 |
+
+多出来的 24 个就是新增的用例。日志是 `level2_entry_before_7253e8c7.log`、`level2_entry_a41b8af2.log`、`level2_launch_a41b8af2.log`、`level2_bench_a41b8af2.log`。全量没有跑。
+
+### 14.7 真实终端
+
+pty 驱动是 `TL/probes/tl_pty.py`，屏幕用 pyte 模拟。子进程 `tl_child.py` 经 `omicsclaw.launch.main` 起真实的 `oc cli`，只换掉 provider。`a41b8af2` 上跑了 29 个情形，除注明的以外都是 80 列、`--max-turns 2`，日志是 `TL/logs/pty_<名字>_<列数>_a41b8af2.log`，汇总在 `pty_all_summary_a41b8af2.log`。
+
+| 情形 | 屏幕上 |
+|---|---|
+| 只有工具调用，40、80、120 列 | 这一行，黄色，分别折成 3 行、2 行、1 行，前面隔一个空行，后面紧跟提示符 |
+| 工具调用旁边写过文字 | 同一句 |
+| 没有传 `--max-turns` | 50 轮之后出这一行，括号里是 50 |
+| 停在上限后输入 "continue" | 新交换从 `(1)` 重新编号，再读一次，然后回答，不再出这一行 |
+| 连续两次停在上限，各输入一次 "continue" | 这一行出现两次，第三次交换答完后没有 |
+| 停在上限后 `/compact`，再 "continue" | 这一行只在停在上限的那次出现，`/compact` 打印自己的结论，之后照常接上 |
+| 第一轮的审批卡答了 `y`，第二轮停在上限 | `write_file` 执行了，这一行在 `Turn 2 done` 之后 |
+| 最后一轮的审批卡答了 `y` | 卡片、工具结果、`Turn 2 done`、空行、这一行、提示符 |
+| 最后一轮的审批卡答了 `n`，再 "continue" | 这一行在被拒的工具结果之后；"continue" 之后模型照常回复 |
+| 最后一轮的审批卡过了期限还开着（`--approval-timeout 3`） | 留下的 `approve write_file [#1]? [y/N/a=always]` 一行在前，这一行在后，再后是提示符 |
+| 第一轮的审批卡过了期限还开着，第二轮停在上限 | 同上，留下的那一行在这一行的上面 |
+| 第一轮的提问卡答了 `2`，第二轮停在上限 | 这一行在 `Turn 2 done` 之后 |
+| 最后一轮的提问卡答了 `2`，再 "continue" | 答完就停在上限，出这一行；"continue" 之后模型读到答案并回复 |
+| 最后一轮的提问卡过了期限（提示符到期时已经收回） | `No answer […]` 一行和工具结果之后是 `Turn 2 done`、空行、这一行，中间没有残留的提示符 |
+| 最后一轮上按 Ctrl-C | 只有 `Cancelled.` |
+| 后端报错 | 只有 `Failed: RuntimeError` |
+| 最后一轮被输出上限截断 | 只有 0081 的那一行 |
+| 在最后一轮答完；`--max-turns 0` | 两行都没有 |
+| 子代理上限 1、父代理上限 3，父代理随后答完 | 没有这一行；`task` 的报错是红色，折行后有一行以 `turn limit (1) without a conclusion` 开头 |
+| 同上，父代理随后也停在上限 | 一行，括号里是 3 |
+| `--max-turns 2` 停在上限后退出，再用 `--max-turns 5 -- --session <同一个 id>` 启动并输入 "continue"（memory 开着） | 第二个进程里连做 4 次模型调用后答完，没有这一行 |
+| 一次性执行：只有工具调用、写过文字、正常回答、失败 | 前两种各一行，在最后，退出码 0；正常回答没有，退出码 0；失败没有，退出码 1 |
+
+进程级的另一个探针是 `TL/probes/probe_03_process.py`（`out_03_process_a41b8af2.log`），三个流都不连终端：
+
+- 一次性执行把标准输出和标准错误写进两个文件，11 种安排。停在上限时这一行在 `stdout.txt` 末尾，`stderr.txt` 只有探针自己打的两行，退出码 0。bench 适配器对标准输出用的两个正则（行首的 `Approval` 和 `Failed:`）在这一行上都不命中。
+- 折行。这一行的长度随数字的位数变：一位数 103 个字符，两位数 104，三位数 105。`COLUMNS` 不小于整句的长度时在一行上，80 列时折成两行，前一行行尾带一个空格。开头在宽度不小于 25 列时完整地在行首，24 列和 20 列时被折断。宽度从哪里来和 §13.9 量到的一样，这次没有重量。
+- 管道输入的 REPL（`oc cli --max-turns 2 < questions.txt`，文件里是一个问题和一行 `continue`）：这一行在标准输出上，后面接着第二次交换的输出，最后答完。
+
+### 14.8 没有验证的
+
+- 全量测试。按 `SPEC.md` 第 2 档不需要。
+- PR 上的 `Eval CI`。分支没有 push，没有开 PR。
+- Anthropic 方言下 "continue" 的那份请求，没有凭据。
+- 真实模型只有一次 DeepSeek 会话，任务是读四个小文件。长任务、中途压缩过的交换停在上限之后说 "continue"，没有用真实模型跑过；脚本化的 `/compact` 一例里对话太短，实际没有压缩。
+- `tests/launch` 和 bench 的两个文件没有取改动前的数字，改动后都通过。
+- Desktop 和 Channel 的进程。这次没有改它们经过的代码。
+- 没有 `termios` 的平台，Windows 上的折行宽度。
+- black 和 ruff。跑测试的环境里没有，新代码是手工按 88 列排的。
+- 独立审核还没有做。
+
+### 14.9 顺带看到的，这次没有动
+
+1. `CLI_USAGE` 说部署 flag "run it with an unknown one to see the list it refuses"。实际 `oc cli --bogus` 只回一句 `unknown option '--bogus'` 加同一份 usage，没有列出任何部署 flag。所以 `--max-turns` 在 `oc cli --help` 和这条报错里都查不到，只在 `cli.md` §13 里有。这一行让用户去找这个 flag，查不到会更显眼。
+2. `CLI_USAGE`、`cli.md` §3 和 `quick-start.md` 写着 `> answer.txt` 只写答案（§8、§13.8 第 7 条已经记过）。停在上限的那次标准输出里又多一行不是答案的东西。
+3. 一次性执行不打印会话 id。停在上限之后想接着做，只能进 REPL 从 `/sessions` 的列表里按时间和第一句话认。
+4. 模型不知道自己是被上限拦下的。这次真实会话里它接上了，要用的工具结果都在历史末尾。任务的状态只在模型的思考里、历史里看不出来时，"continue" 能不能接上没有验证。
+5. 审批卡过了期限后留着的那一行提示符紧贴在这一行上面，和 0081 的那一行一样（§13.8 第 4 条），`main` 上本来就有那一行。
+6. 本文件开头的状态行还写着 0081 "待 owner 过目和下令合并"，它已经随 `08d0e10f` 合入 `main`。这次只在它后面加了一段，没有改它。
+7. `CHANGELOG.md` 里 0081 那一条写着 "an exchange that reached the turn limit, get no line"。那句话说的是截断的那一行，本身没错，这一项合入后读起来会像是在说轮数上限没有任何提示，写新条目时可以顺手带一句。
+
+### 14.10 owner 对措辞的裁定，和合入 `main`
+
+2026-10-10，§14.1 至 §14.9 写完之后。
+
+措辞。owner 选定了甲，由派发方转述。实现的就是甲，生产代码没有动。乙和丙留在 §14.3。按 0081 类推来的假设 owner 还没有逐条确认，等独立审核之后一起过目（§14.5）。
+
+合入 `main`。`main` 从 `7253e8c7` 前进到了 `db2accda`，多出来的是 `fix/outcome-reply-scope-r2` 和它的文档：`TurnOutcome.reply` 从属性变成必填的 dataclass 字段，排在 `prompt` 后面，交换结束时由 `entry/turn.py` 的 `_reply` 算出，Channel 的 `_answer` 改读它（`docs/core-features/surfaces.md` §3.3）。`15c7eb22` 用 `git merge --no-ff main` 把它合进了 `feat/turn-limit-notice`。没有文本冲突，`agent-loop.md` 两边改的是不同的行，自动合并。`_repl.py` 在 `main` 上没有变。
+
+文本上没有冲突，测试上有一处出入。`outcome_of` 构造 `TurnOutcome` 时没有给 `reply`，合并提交上 `tests/entry/test_cli_repl.py` 是 5 failed、95 passed（`merge_before_fix_test_cli_repl.log`）。五条都是经过 `outcome_of` 的单元测试，报 `TypeError: TurnOutcome.__init__() missing 1 required positional argument: 'reply'`：0081 的 T8、T9、T10，和这一节的 U15、U16。`f3e8ee2c` 给 `outcome_of` 传 `reply=""`。两个提示函数都不读 `reply`，那份 outcome 的 `history` 和 `prompt` 本来就是空的占位。改后 100 passed。单独检出 `15c7eb22` 会看到这 5 条红，从 `f3e8ee2c` 起是绿的。
+
+对着新的 `main` 另外查过的：
+
+- `omicsclaw/entry/cli/` 里没有读 `outcome.reply` 的地方，这一节的测试和 `TL/probes/` 里的探针也没有。`TurnOutcome(` 在 `entry/turn.py` 之外只有 `outcome_of` 这一处构造。
+- `main` 给 `Scripted` 和 `Finishing` 的 docstring 加了一段：同一个消息对象回答多次交换、压缩又写回时，`reply` 可能是空串。这一节的测试正是让一个消息对象回答多次调用。它们断言的是屏幕和发给模型的请求，不读 `reply`，结果不受影响。
+- §14.3 第 2 条理由原来说乙要像 Channel 的 `_answer` 那样往回找文字。`main` 上 `_answer` 已经改读 `reply`，那一条改成了现在的说法，结论没有变：压缩过的交换里 `reply` 可以是空串而屏幕上有字。
+- `surfaces.md` §10 第 10 条的编号没有变。
+- 本文件 §8 里说 `TurnOutcome.reply` 和 `_answer` 是同样的找法，写的是那时的代码，这次没有改。
+
+合入后跑的，都在 `f3e8ee2c` 上，命令同 §14.6，加 `-p no:randomly`：
+
+| 命令 | 结果 |
+|---|---|
+| `tests/entry/test_cli_repl.py` | 100 passed |
+| `tests/entry --ignore-glob='tests/entry/test_desktop*'` | 1887 passed、1 skipped、3 xfailed，88 秒 |
+| `tests/launch --ignore=tests/launch/test_surfaces.py` | 192 passed、1 skipped，28 秒 |
+| bench 的两个文件 | 60 passed，11 秒 |
+
+这一次按派发方的要求没有带 Desktop 的测试文件和 `tests/launch/test_surfaces.py`，数字不能和 §14.6 的直接比。全量没有跑。日志是 `merged_test_cli_repl_f3e8ee2c.log`、`merged_entry_no_desktop_f3e8ee2c.log`、`merged_launch_no_surfaces_f3e8ee2c.log`、`merged_bench_f3e8ee2c.log`。
+
+在 `f3e8ee2c` 上另外重做了这几样，结果和 `a41b8af2` 上一样：
+
+- 37 处变异，每处转红的测试逐行相同，存活的仍是 L23 和 L24（`mutations_on_f3e8ee2c.log`）。
+- `probe_01_facts.py`、`probe_02_continue.py`、`probe_03_process.py`（`out_01_facts_f3e8ee2c.log`、`out_02_continue_f3e8ee2c.log`、`out_03_process_f3e8ee2c.log`）。"continue" 的请求形状、退出码、这一行出现的次数和折行位置都没有变。
+- pty 的 29 个情形，汇总和之前逐行相同（`pty_all_summary_f3e8ee2c.log`）。
+
+没有重做的：真实 DeepSeek 的那次会话，和"提交后的测试配改动前的 `_repl.py`"那一步。`_repl.py` 在 `main` 上没有变。Desktop 的测试文件和 `tests/launch/test_surfaces.py` 在合入后没有跑。

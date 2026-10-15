@@ -602,6 +602,36 @@ def _cut_off_notice(outcome: TurnOutcome | None) -> str:
     return _CUT_OFF_CALLS_NOTICE.format(names=names)
 
 
+_TURN_LIMIT_NOTICE = (
+    "Stopped at the turn limit ({turns}) before the model finished. "
+    'Say "continue" to go on, or raise --max-turns.'
+)
+"""Printed under an exchange that stopped at the turn limit.
+
+*turns* is the number of model calls the exchange made, which is the
+limit it ran under. The tools the last call asked for have run, and the
+model has not read their results. The exchange is kept, so in the REPL
+the next message follows those results and opens an exchange with turns
+of its own. A single-shot run exits after this line, and only the second
+half of the advice applies to it: a higher ``--max-turns`` next time.
+
+The line opens with ``Stopped at the turn limit``. ``oc cli --prompt``
+prints it on standard output and still exits 0, so those words are what
+a script can match. Treat a change to them as a change to an interface."""
+
+
+def _turn_limit_notice(outcome: TurnOutcome | None) -> str:
+    """The line for an exchange that stopped at the turn limit, or ``""``.
+
+    ``""`` for every other ending: an exchange that finished on its own,
+    one the output limit cut off, and one that was cancelled or failed
+    and so has no outcome.
+    """
+    if outcome is None or not outcome.hit_the_turn_ceiling:
+        return ""
+    return _TURN_LIMIT_NOTICE.format(turns=outcome.result.turns)
+
+
 class Repl:
     """One terminal, one conversation, one exchange at a time.
 
@@ -1250,7 +1280,9 @@ class Repl:
         — is the same for a compaction as for a question.
 
         A reply the output limit cut off gets one more line under it,
-        from :func:`_cut_off_notice`.
+        from :func:`_cut_off_notice`. An exchange that stopped at the
+        turn limit gets one from :func:`_turn_limit_notice`. An exchange
+        has one stop reason, so it gets at most one of the two.
         """
         self._running = handle
         try:
@@ -1266,7 +1298,8 @@ class Repl:
             await self._reap_asking()
         # Once the cards are taken down: the line of a prompt the exchange
         # left open would otherwise land between this one and the next prompt.
-        notice = _cut_off_notice(handle.outcome)
+        outcome = handle.outcome
+        notice = _cut_off_notice(outcome) or _turn_limit_notice(outcome)
         if notice:
             # ``Text``, not markup: a tool name may hold square brackets.
             self._screen.print(Text(notice, style="yellow"))

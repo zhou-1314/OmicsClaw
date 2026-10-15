@@ -39,6 +39,7 @@ from omicsclaw.entry.cli._slash_command_support import (
 )
 from omicsclaw.entry.events import TurnEvent
 from omicsclaw.entry.session import attach_sessions
+from omicsclaw.entry.turn import TurnOutcome
 from omicsclaw.schema import Message, Role, ToolCall
 from omicsclaw.tools import ApprovalRequest
 from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
@@ -49,6 +50,7 @@ from tests.entry.test_turn_runner import (  # type: ignore[import-not-found]
     Reporting,
     Scripted,
     Sleeping,
+    assert_both_dialects_accept,
     calling,
     make_app,
 )
@@ -1284,10 +1286,15 @@ def writes(text: str = "", *names: str) -> Message:
     )
 
 
-def outcome_of(stop: StopReason, *messages: Message):
-    """What ``_cut_off_notice`` reads, without running an exchange."""
-    return types.SimpleNamespace(
-        result=RunResult(messages=tuple(messages), stop_reason=stop)
+def outcome_of(stop: StopReason, *messages: Message, turns: int = 0) -> TurnOutcome:
+    """An outcome for the notice helpers to read, without running an exchange.
+
+    Only the run is filled in. The helpers read nothing else, so the
+    history, the prompt and the reply are left empty.
+    """
+    result = RunResult(messages=tuple(messages), stop_reason=stop, turns=turns)
+    return TurnOutcome(
+        result=result, history=(), prompt=None, reply=""  # type: ignore[arg-type]
     )
 
 
@@ -1598,3 +1605,444 @@ def test_the_two_forms_read_as_agreed_and_open_with_the_same_words():
     )
     assert _repl._CUT_OFF_NOTICE.startswith(OPENS_WITH)
     assert _repl._CUT_OFF_CALLS_NOTICE.startswith(OPENS_WITH)
+
+
+# ---- an exchange that stopped at the turn limit --------------------------
+#
+# The helper and the sentence are reached through ``_repl``, as in the
+# section above and for the same reason.
+
+LIMIT_OPENS_WITH = "Stopped at the turn limit"
+"""How the line begins.
+
+Written out here on purpose, like :data:`OPENS_WITH`: ``oc cli --prompt``
+prints the line on standard output and exits 0, so these words are what a
+script matches.
+"""
+
+
+def limit_line(turns: int) -> str:
+    return _repl._TURN_LIMIT_NOTICE.format(turns=turns)
+
+
+def lines_about_the_limit(printed: str) -> list[str]:
+    return [
+        line for line in printed.splitlines() if line.startswith(LIMIT_OPENS_WITH)
+    ]
+
+
+def narrating(text: str) -> Message:
+    """An assistant message that says *text* and asks for ``report``."""
+    return Message.assistant(
+        text, tool_calls=(ToolCall(id="c0", name="report", arguments="{}"),)
+    )
+
+
+def delegating_to(agent: str) -> Message:
+    """An assistant message that hands a task to the sub-agent *agent*."""
+    arguments = json.dumps({"subagent_type": agent, "prompt": "read it"})
+    return Message.assistant(
+        "", tool_calls=(ToolCall(id="d1", name="task", arguments=arguments),)
+    )
+
+
+def write_reader(workspace: pathlib.Path) -> None:
+    """Define ``reader``, a sub-agent allowed one model call."""
+    agents = workspace / ".omicsclaw" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "reader.md").write_text(
+        "---\nname: reader\ndescription: reads\nmax_turns: 1\n---\nRead it.\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("limit", [1, 3])
+def test_an_exchange_that_stops_at_the_turn_limit_is_reported_under_it(
+    tmp_path, limit
+):
+    """One line, after the last tool result, before the next prompt.
+
+    The number in it is the limit the exchange ran under.
+    """
+    provider = Scripted(calling("report"))
+
+    source, printed = run_repl(
+        tmp_path, provider, ["go", "/exit"], tools=[Reporting()], max_turns=limit
+    )
+
+    assert provider.calls == limit
+    assert lines_about_the_limit(printed) == [limit_line(limit)]
+    assert printed.rindex("<- report ok") < printed.index(LIMIT_OPENS_WITH)
+    assert printed.index(LIMIT_OPENS_WITH) < printed.index("Goodbye")
+    assert source.prompts == [PROMPT, PROMPT]
+
+
+def test_text_beside_the_tool_calls_does_not_change_the_line(tmp_path):
+    """The model had not finished either way, so the line is the same."""
+    provider = Scripted(narrating("Looking once."), narrating("Looking again."))
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["go", "/exit"], tools=[Reporting()], max_turns=2
+    )
+
+    assert "Looking again." in printed
+    assert lines_about_the_limit(printed) == [limit_line(2)]
+
+
+@pytest.mark.parametrize(
+    ("provider", "overrides"),
+    [
+        (Scripted(says("An ordinary answer.")), {}),
+        (
+            Scripted(calling("report"), says("Twelve clusters.")),
+            {"max_turns": 2, "tools": [Reporting()]},
+        ),
+        (
+            Scripted(calling("report"), calling("report"), says("Twelve clusters.")),
+            {"max_turns": 0, "tools": [Reporting()]},
+        ),
+        (Exploding(), {"max_turns": 1}),
+    ],
+    ids=["answer", "answer-on-the-last-turn", "no-limit", "failed"],
+)
+def test_an_exchange_that_did_not_stop_at_the_limit_prints_no_such_line(
+    tmp_path, provider, overrides
+):
+    """Answering on the last turn allowed is not stopping at the limit."""
+    _source, printed = run_repl(tmp_path, provider, ["go", "/exit"], **overrides)
+
+    assert "turn limit" not in printed
+
+
+def test_an_exchange_cancelled_on_its_last_turn_prints_only_cancelled(tmp_path):
+    """A cancelled exchange has no outcome, whichever turn it was on."""
+
+    async def drive():
+        sleeping = Sleeping()
+        app = build(
+            tmp_path, Scripted(calling("sleep")), tools=(sleeping,), max_turns=1
+        )
+        repl, _source, buffer = repl_over(app, ["hang please", "/exit"])
+        loop = asyncio.create_task(repl.run())
+        await asyncio.wait_for(sleeping.entered.wait(), WAIT_S)
+
+        assert repl.interrupt() is True
+
+        await asyncio.wait_for(loop, WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return buffer.getvalue()
+
+    printed = asyncio.run(drive())
+
+    assert "Cancelled." in printed
+    assert "turn limit" not in printed
+
+
+@pytest.mark.parametrize(
+    ("second_reply", "cut_lines", "limit_lines"),
+    [
+        ((writes("Writing the notes now.", "write_file"), "length"), 1, 0),
+        ((says("It reports twelve clu"), "length"), 1, 0),
+        ((calling("report"), "tool_calls"), 0, 1),
+    ],
+    ids=["cut-in-a-tool-call", "cut-in-text", "tool-call-that-ran"],
+)
+def test_one_exchange_never_gets_both_lines(
+    tmp_path, second_reply, cut_lines, limit_lines
+):
+    """All three exchanges make the two model calls they are allowed.
+
+    Which line follows depends on how the second call ended. A reply cut
+    off there is reported as cut off, and its calls did not run. A reply
+    whose calls ran leaves the exchange stopped at the limit.
+    """
+    provider = Finishing((calling("report"), "tool_calls"), second_reply)
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["go", "/exit"], tools=[Reporting()], max_turns=2
+    )
+
+    assert provider.calls == 2
+    assert len(lines_that_open_with_it(printed)) == cut_lines
+    assert len(lines_about_the_limit(printed)) == limit_lines
+
+
+def test_a_cut_and_a_limit_in_one_repl_each_get_their_own_line(tmp_path):
+    """Each exchange is judged by itself, and the answer after them gets none."""
+    provider = Finishing(
+        (says("Moran's I measures spatial autocorre"), "length"),
+        (calling("report"), "tool_calls"),
+        (calling("report"), "tool_calls"),
+        says("Moran's I measures spatial autocorrelation."),
+    )
+
+    _source, printed = run_repl(
+        tmp_path,
+        provider,
+        ["what is Moran's I?", "look it up", "and now?", "/exit"],
+        tools=[Reporting()],
+        max_turns=2,
+    )
+
+    assert lines_that_open_with_it(printed) == [_repl._CUT_OFF_NOTICE]
+    assert lines_about_the_limit(printed) == [limit_line(2)]
+    assert printed.index(OPENS_WITH) < printed.index(LIMIT_OPENS_WITH)
+    assert printed.index(LIMIT_OPENS_WITH) < printed.index("spatial autocorrelation.")
+
+
+def test_the_limit_line_is_not_repeated_by_compact_or_by_the_next_answer(tmp_path):
+    """``/compact`` goes through the same ``_drive`` and reports its own way."""
+    provider = Scripted(calling("report"), calling("report"), says("Twelve clusters."))
+
+    _source, printed = run_repl(
+        tmp_path,
+        provider,
+        ["go", "/compact", "continue", "/exit"],
+        tools=[Reporting()],
+        max_turns=2,
+    )
+
+    assert printed.count(LIMIT_OPENS_WITH) == 1
+    assert printed.index(LIMIT_OPENS_WITH) < printed.index("Nothing to compact")
+    assert "Twelve clusters." in printed
+
+
+def test_reaching_the_limit_again_is_reported_again(tmp_path):
+    """Two exchanges that stop at the limit are two lines."""
+    provider = Scripted(*[calling("report")] * 4, says("Twelve clusters."))
+
+    _source, printed = run_repl(
+        tmp_path,
+        provider,
+        ["go", "continue", "continue", "/exit"],
+        tools=[Reporting()],
+        max_turns=2,
+    )
+
+    assert lines_about_the_limit(printed) == [limit_line(2), limit_line(2)]
+    assert printed.rindex(LIMIT_OPENS_WITH) < printed.index("Twelve clusters.")
+
+
+def test_continue_after_the_limit_goes_on_from_the_tool_results(tmp_path):
+    """What the line tells the person to do works.
+
+    The exchange that stopped is kept, ending on its last tool results.
+    The next message follows them in a request both API dialects accept,
+    and the exchange it opens has turns of its own.
+    """
+    provider = Scripted(
+        calling("report"),
+        calling("report"),
+        calling("report"),
+        says("Twelve clusters."),
+    )
+
+    _source, printed = run_repl(
+        tmp_path,
+        provider,
+        ["go", "continue", "/exit"],
+        tools=[Reporting()],
+        max_turns=2,
+    )
+
+    resumed = provider.seen[2]
+    assert provider.calls == 4
+    assert [message.role for message in resumed[-2:]] == [Role.TOOL, Role.USER]
+    assert resumed[-1].content == "continue"
+    assert_both_dialects_accept(resumed)
+    assert "Twelve clusters." in printed
+    assert lines_about_the_limit(printed) == [limit_line(2)]
+
+
+def test_a_single_shot_run_reports_the_limit_and_still_converges(tmp_path):
+    """Same line, same screen; the verdict the exit code reads is unchanged."""
+
+    async def drive():
+        app = build(
+            tmp_path, Scripted(calling("report")), tools=[Reporting()], max_turns=2
+        )
+        buffer = io.StringIO()
+        handle = await asyncio.wait_for(
+            run_once(app, "go", screen=Screen.into(buffer)), WAIT_S
+        )
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return handle, buffer.getvalue()
+
+    handle, printed = asyncio.run(drive())
+
+    assert lines_about_the_limit(printed) == [limit_line(2)]
+    assert handle is not None and handle.terminal == "converged"
+    assert handle.outcome.result.stop_reason is StopReason.MAX_TURNS
+
+
+def test_a_sub_agent_that_stops_at_its_own_limit_gets_no_line(tmp_path):
+    """The ``task`` result says so, to the parent and on the screen.
+
+    The line is about the exchange the person is in, and that one ended
+    with an answer.
+    """
+    write_reader(tmp_path)
+    provider = Scripted(
+        delegating_to("reader"),
+        calling("report"),
+        says("The reader ran out of turns."),
+    )
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["delegate it", "/exit"], tools=[Reporting()], max_turns=3
+    )
+
+    assert "stopped at the turn limit (1)" in printed
+    assert lines_about_the_limit(printed) == []
+
+
+def test_the_number_is_the_parent_s_when_it_stops_after_a_sub_agent_did(tmp_path):
+    """``reader`` is allowed one model call and the parent three."""
+    write_reader(tmp_path)
+    provider = Scripted(delegating_to("reader"), calling("report"))
+
+    _source, printed = run_repl(
+        tmp_path, provider, ["delegate it", "/exit"], tools=[Reporting()], max_turns=3
+    )
+
+    assert provider.calls == 4
+    assert "stopped at the turn limit (1)" in printed
+    assert lines_about_the_limit(printed) == [limit_line(3)]
+
+
+def test_the_number_is_the_run_s_own_and_not_the_configured_one(tmp_path):
+    """The run reports how many model calls it made before it was stopped.
+
+    Here the engine was built to allow two and the configuration is then
+    changed to name seven, as in an app assembled around an engine built
+    elsewhere. The line gives the limit that stopped the exchange.
+    """
+
+    async def drive():
+        app = make_app(
+            tmp_path, Scripted(calling("report")), tools=[Reporting()], max_turns=2
+        )
+        renamed = dataclasses.replace(app.config, max_turns=7)
+        app = attach_sessions(dataclasses.replace(app, config=renamed))
+        repl, _source, buffer = repl_over(app, ["go", "/exit"])
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return buffer.getvalue()
+
+    printed = asyncio.run(drive())
+
+    assert lines_about_the_limit(printed) == [limit_line(2)]
+
+
+def test_the_limit_line_is_printed_after_open_cards_are_taken_down(tmp_path):
+    """A card's prompt can outlive its exchange; the line waits for it to go."""
+
+    class Marking(Repl):
+        async def _reap_asking(self) -> None:
+            await super()._reap_asking()
+            self._screen.print("-- cards taken down --")
+
+    async def drive():
+        app = build(
+            tmp_path, Scripted(calling("report")), tools=[Reporting()], max_turns=1
+        )
+        buffer = io.StringIO()
+        repl = Marking(
+            app, source=ScriptedSource(["go", "/exit"]), screen=Screen.into(buffer)
+        )
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return buffer.getvalue()
+
+    printed = asyncio.run(drive())
+
+    assert printed.index("-- cards taken down --") < printed.index(LIMIT_OPENS_WITH)
+
+
+def test_the_limit_line_is_handed_to_the_screen_as_yellow_text(tmp_path):
+    """A ``Text`` styled yellow, like the line for a reply that was cut off."""
+
+    class Keeping(Screen):
+        def __init__(self, sink) -> None:
+            super().__init__(Screen.into(sink).console)
+            self.handed: list[object] = []
+
+        def print(self, *args: object, **kwargs: object) -> None:
+            self.handed.extend(args)
+            super().print(*args, **kwargs)
+
+    async def drive():
+        app = build(
+            tmp_path, Scripted(calling("report")), tools=[Reporting()], max_turns=1
+        )
+        screen = Keeping(io.StringIO())
+        repl = Repl(app, source=ScriptedSource(["go", "/exit"]), screen=screen)
+        await asyncio.wait_for(repl.run(), WAIT_S)
+        await asyncio.wait_for(app.aclose(), WAIT_S)
+        return screen.handed
+
+    handed = asyncio.run(drive())
+
+    ours = [
+        item
+        for item in handed
+        if isinstance(item, Text) and item.plain.startswith(LIMIT_OPENS_WITH)
+    ]
+    assert [item.plain for item in ours] == [limit_line(1)]
+    assert str(ours[0].style) == "yellow"
+    assert not [
+        item for item in handed if isinstance(item, str) and LIMIT_OPENS_WITH in item
+    ]
+
+
+def test_the_limit_notice_is_empty_for_every_ending_but_the_turn_limit():
+    """No outcome is a cancelled or failed exchange.
+
+    The number is the count of model calls the exchange made. At the
+    limit that count is the limit.
+    """
+    trail = (Message.user("go"), calling("report"))
+
+    assert _repl._turn_limit_notice(None) == ""
+    for stop in (StopReason.CONVERGED, StopReason.TRUNCATED):
+        assert _repl._turn_limit_notice(outcome_of(stop, *trail, turns=50)) == ""
+    at_fifty = outcome_of(StopReason.MAX_TURNS, *trail, turns=50)
+    assert _repl._turn_limit_notice(at_fifty) == limit_line(50)
+    assert _repl._turn_limit_notice(outcome_of(StopReason.MAX_TURNS, turns=7)) == (
+        limit_line(7)
+    )
+
+
+def test_no_outcome_is_given_both_notices():
+    """One stop reason, so at most one of the two helpers answers.
+
+    Every stop reason is listed, so a new one has to be given a row.
+    """
+    cut = writes("Writing the notes now.", "write_file")
+
+    def given(outcome) -> tuple[bool, bool]:
+        return (
+            bool(_repl._cut_off_notice(outcome)),
+            bool(_repl._turn_limit_notice(outcome)),
+        )
+
+    by_stop = {
+        stop: given(outcome_of(stop, Message.user("go"), cut, turns=2))
+        for stop in StopReason
+    }
+
+    assert given(None) == (False, False)
+    assert by_stop == {
+        StopReason.CONVERGED: (False, False),
+        StopReason.TRUNCATED: (True, False),
+        StopReason.MAX_TURNS: (False, True),
+    }
+
+
+def test_the_limit_line_reads_as_agreed_and_opens_with_stable_words():
+    """The wording is written out once, here; see :data:`LIMIT_OPENS_WITH`."""
+    assert limit_line(50) == (
+        "Stopped at the turn limit (50) before the model finished. "
+        'Say "continue" to go on, or raise --max-turns.'
+    )
+    assert limit_line(50).startswith(LIMIT_OPENS_WITH + " (50) ")

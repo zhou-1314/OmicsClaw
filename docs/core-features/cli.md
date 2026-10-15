@@ -180,7 +180,8 @@ while self.state.running:
 （`slash_token`）。
 
 `ask` 通过 `app.sessions.submit(session_id, text)` 提交，拿到 `TurnHandle`，再由 `_drive` → `_pump` 把事件流画到屏幕，
-最后 `await handle.wait()` 等注册表完成持久化，避免下一个提示与保存赛跑。回复被输出上限截断时，`_drive` 在这之后再打印一行（§9.2）。
+最后 `await handle.wait()` 等注册表完成持久化，避免下一个提示与保存赛跑。回复被输出上限截断时，`_drive` 在这之后再打印一行（§9.2）；
+exchange 停在轮数上限时打印另一行（§9.3）。
 
 **Ctrl-C 取消的是本次 exchange，不是进程**：`Repl.interrupt()` 取消正在运行的 handle，注册表发布
 `EXCHANGE_END(terminal="cancelled")`，循环回到提示符；对话历史保持**逐字节不变**（取消的 exchange 不保留半截轨迹）。
@@ -491,7 +492,7 @@ approve bash [#2]? [y/N/a=always]
 | `PROGRESS` | 更新活动行的细节 |
 | `CONTEXT` / `COMPACTION` / `QUEUED` / `APPROVAL_SETTLED` / `QUESTION_SETTLED` / `GAP` | `TextRenderer` 的一行控制文本；已回答的提问不出字。`QUESTION_SETTLED` 到达时提示符还开着的话先收回它（§7.4） |
 | `TURN_END` | 累加 usage 供 `/usage`（`usage=None` 跳过，零值照加）。子代理的轮次不在这条流里，它们的用量在 exchange 结束后从 `TurnHandle.delegated` 读一次 |
-| `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印。被输出上限截断的 exchange 也是 `converged`，它的说明在帧流结束后由 `_drive` 打印（§9.2） |
+| `EXCHANGE_END` | `converged` 不打印（每个回答下面一行 "Done." 是噪音）；`cancelled` / `failed` 打印。被输出上限截断的 exchange 和停在轮数上限的 exchange 也是 `converged`，它们的说明在帧流结束后由 `_drive` 打印（§9.2、§9.3） |
 
 `TextRenderer`（`omicsclaw/entry/render.py`）在 CLI 以 `batched=False` 使用：token 一到就上屏。它从不渲染工具参数或输出的原始载荷
 （审批行例外，展示给做决定的人，且不写日志）；工具耗时带 `ELAPSED_INCLUDES_APPROVAL_WAIT` 后缀——这个时间包含人思考审批的时间。
@@ -546,8 +547,51 @@ The reply was cut off at the output limit, so the tool calls in it were not run:
 |---|---|
 | 子代理的回复被截断 | 父代理的 exchange 没有被截断，不出这一行。子代理写了文字时，`task` 的结果以 `[<name>] was cut off at the output limit; …` 开头，结果预览里看得到；没写文字时 `task` 报错 |
 | 摘要调用被截断（自动压缩、`/compact`） | 没有提示。摘要器只取回复的文字，被截断的摘要按完整的写回 |
-| 到达轮数上限（`--max-turns`） | 没有提示 |
+| 到达轮数上限（`--max-turns`） | 不出这一行，出的是 §9.3 的那一行 |
 | `length`、`max_tokens` 之外的中断（如 `content_filter`） | 引擎不算截断，不出这一行 |
+| 取消、失败 | 只有 `Cancelled.` 或 `Failed: <类型名>` |
+| Desktop、Channel | 不经过 `_drive`，没有这一行 |
+
+### 9.3 exchange 停在轮数上限时的一行
+
+一次 exchange 最多做 `--max-turns` 次模型调用（默认 50，§13）。用完时模型还在请求工具，引擎就以 `max_turns` 停下（[agent-loop.md](agent-loop.md) §4.1）。
+最后一次模型调用请求的工具已经执行，结果在历史里，模型还没有读到。`terminal` 是 `converged`，历史照常保存。
+和 §9.2 一样，事件帧不带停止原因，`Repl._drive` 在 `handle.wait()` 之后读 `handle.outcome.hit_the_turn_ceiling`，停止原因是 `max_turns` 时它为真，这时用黄字打印一行（`_turn_limit_notice`）。
+位置和打印方式与 §9.2 的那一行相同：在最后的工具结果和 `Turn N done` 之后、下一个提示符之前，exchange 留下的卡片提示符先收掉，后面不补空行。
+
+原文只有一种：
+
+```
+Stopped at the turn limit (50) before the model finished. Say "continue" to go on, or raise --max-turns.
+```
+
+- 括号里的数字是 `RunResult.turns`，即这次 exchange 做了几次模型调用。以 `max_turns` 停下时它等于这次生效的上限，用 `--max-turns 2` 启动时显示的是 `(2)`。
+  子代理的模型调用不计在内。
+- 模型写没写过文字，句子都一样。停在上限时最后一条模型消息一定带着工具调用，所以两种情形下模型都没有给出收尾的回答；它写过的文字已经在屏幕上。
+- `Say "continue"`：在 REPL 里，下一条消息接在最后的工具结果后面发给模型，新的 exchange 有自己的一整份轮数。
+  请求的形状是 `assistant(tool_calls) → tool → user`，没有未回答的调用。模型不知道自己是被上限拦下的，它看到的只是工具结果后面跟着一条用户消息。
+- `raise --max-turns`：`--max-turns` 是部署 flag，只在启动时读（§13），REPL 里没有命令能改它。要让一次 exchange 跑得更久，退出后用更大的值重新启动；
+  要接着原来的对话，再带上 `--session <id>`（`/current` 显示当前的 id；对话只在没有关掉 memory 时留到下次启动）。`--max-turns 0` 不设上限。
+
+一次性执行（`--prompt`、`--prompt-file`）打印同一行，在标准输出上，退出码仍是 0。进程打印完就退出，"continue" 在那里说不了，适用的是后半句：换一个更大的 `--max-turns` 重跑。
+这次的对话在没有关掉 memory 时也存了下来，可以在同一个 workspace 里起 REPL，用 `/resume` 选它再说 "continue"。一次性执行不打印会话 id，要从 `/sessions` 的列表里找。
+管道输入的 REPL（`oc cli < questions.txt`）也打印这一行，文件里的下一行就是下一条消息。
+
+这一行以 `Stopped at the turn limit` 开头。这个开头是脚本匹配的事实接口，改这几个字要当接口改，
+`tests/entry/test_cli_repl.py::test_the_limit_line_reads_as_agreed_and_opens_with_stable_words` 把原文和这个开头都写死了。
+匹配时按行首、区分大小写：子代理停在它自己的上限时，`task` 的报错里有小写的 `stopped at the turn limit (N)`，那不是这一行。
+折行的规则和 §9.2 相同，宽度从哪里来见那里。上限是两位数时整句 104 个字符；宽度小于 25 列时开头也会被折断。
+
+一次 exchange 只有一个停止原因，所以这一行和 §9.2 的那一行不会同时出现。最后一次允许的模型调用被输出上限截断时，停止原因是 `truncated`，出的是 §9.2 的那一行；
+最后一次允许的模型调用正常作答时两行都不出。
+
+下面这些场合不出这一行：
+
+| 场合 | 现在的行为 |
+|---|---|
+| 子代理停在它自己的上限 | 父代理的 exchange 没有停在上限，不出这一行。`task` 报错 `sub-agent '<name>' stopped at the turn limit (N) without a conclusion`，结果预览里看得到（[sub-agent.md](sub-agent.md) §4.4）。父代理随后自己也停在上限时才出，数字是父代理的 |
+| `--max-turns 0` | 没有上限，不会以 `max_turns` 停下 |
+| `/compact` | 这次 exchange 只做压缩，不进模型循环，停止原因固定是 `converged` |
 | 取消、失败 | 只有 `Cancelled.` 或 `Failed: <类型名>` |
 | Desktop、Channel | 不经过 `_drive`，没有这一行 |
 
@@ -626,7 +670,7 @@ workspace 默认是启动时的当前目录（`--workspace` / `OMICSCLAW_WORKSPA
 | `--model` | `OMICSCLAW_MODEL`, `LLM_MODEL` | `""`（provider 预设默认） | |
 | `--provider` | `OMICSCLAW_PROVIDER`, `LLM_PROVIDER` | `""`（按 key 探测） | |
 | `--tool-timeout` | `OMICSCLAW_TOOL_TIMEOUT_S` | `600` | 工具上限的唯一来源；`bash` 用它减 15 s |
-| `--max-turns` | `OMICSCLAW_MAX_TURNS` | `50` | 每次 exchange 的模型调用上限 |
+| `--max-turns` | `OMICSCLAW_MAX_TURNS` | `50` | 每次 exchange 的模型调用上限，`0` 不设上限。exchange 停在上限时 CLI 打印一行（§9.3） |
 | `--turn-timeout` | `OMICSCLAW_TURN_TIMEOUT_S` | 无 | 单次 exchange 墙钟上限 |
 | `--approval-timeout` | `OMICSCLAW_APPROVAL_TIMEOUT_S` | 无 | 单次审批期限，到期拒绝；提问共用这个期限，到期为 `no_answer` |
 | `--ask-user` | `OMICSCLAW_ASK_USER` | 开 | `ask_user` 工具；只在终端 REPL 生效（§7.4） |
@@ -669,7 +713,7 @@ workspace 默认是启动时的当前目录（`--workspace` / `OMICSCLAW_WORKSPA
 | `omicsclaw/launch/_surfaces.py` | `CLI_USAGE`、`CLI_FLAGS`、`ReplOptions`、`start_cli`、`_run_cli`、`_release`、`_interrupts`、`_replay`；Desktop/Channel 启动 |
 | `omicsclaw/entry/config.py` | `AppConfig`、`resolve_app_config`、全部部署 flag |
 | `omicsclaw/entry/cli/__init__.py` | 包说明与公开符号 |
-| `omicsclaw/entry/cli/_repl.py` | `Repl`、`run_once`、审批、提问卡片、截断提示（`_cut_off_notice`）、`/sessions` `/resume` `/compact` 等 |
+| `omicsclaw/entry/cli/_repl.py` | `Repl`、`run_once`、审批、提问卡片、截断提示（`_cut_off_notice`）、轮数上限提示（`_turn_limit_notice`）、`/sessions` `/resume` `/compact` 等 |
 | `omicsclaw/entry/question.py` | `QuestionBroker`、`question_card`、`reply_hint`、`read_reply` |
 | `omicsclaw/entry/cli/_slash_command_support.py`、`_constants.py` | 命令目录、`REPL_SLASH_COMMAND_SPECS`、`slash_token` |
 | `omicsclaw/entry/cli/_activity.py` | `ActivityLine` 活动行 |
