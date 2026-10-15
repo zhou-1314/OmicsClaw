@@ -73,7 +73,14 @@ from omicsclaw.engine import EngineConfig
 from omicsclaw.permission import PermissionMode
 from omicsclaw.planning import DEFAULT_GATE_TURNS
 from omicsclaw.skills import DEFAULT_SKILL_DISCOVERY_TOP_K
-from omicsclaw.sandbox import SandboxConfig, host_user
+from omicsclaw.sandbox import (
+    EgressMode,
+    SandboxBackendName,
+    SandboxConfig,
+    SandboxConfigError,
+    SandboxMode,
+    host_user,
+)
 from omicsclaw.tools.builtin.bash import ENGINE_TIMEOUT_MARGIN
 
 __all__ = [
@@ -123,17 +130,6 @@ class SkillEnvMode(StrEnum):
     on this machine: after approval it installs declared packages into an
     overlay environment, from this machine's pip configuration. Refused by
     ``oc desktop``, which has no approval channel."""
-
-
-class SandboxMode(StrEnum):
-    """Where ``bash`` runs."""
-
-    OFF = "off"
-    """On this machine, as the agent's own user. The default."""
-
-    DOCKER = "docker"
-    """In a container started by :mod:`omicsclaw.sandbox`. Needs
-    :attr:`AppConfig.sandbox_image`."""
 
 
 STATE_DIRNAME = ".omicsclaw"
@@ -535,67 +531,85 @@ class AppConfig:
     connect concurrently, so start-up waits about this long at most."""
 
     sandbox: SandboxMode = SandboxMode.OFF
-    """Where ``bash`` runs. See :class:`SandboxMode`."""
+    """Where ``bash`` and persistent kernels run. See :class:`SandboxMode`."""
+
+    sandbox_backend: SandboxBackendName = SandboxBackendName.AUTO
+    """Preferred native OS sandbox backend (``auto``, ``bwrap``, ``netns``,
+    ``seatbelt``, ``appcontainer``, ``off``)."""
+
+    sandbox_egress: EgressMode = EgressMode.PROXY
+    """Outbound network policy inside the sandbox (``proxy``, ``none``, ``open``)."""
+
+    sandbox_egress_groups: tuple[str, ...] = ("pkg",)
+    """Preset domain allowlist groups for the egress proxy."""
+
+    sandbox_egress_allow: tuple[str, ...] = ()
+    """Additional domain patterns allowed through the egress proxy."""
+
+    sandbox_egress_endpoints: tuple[str, ...] = ()
+    """Explicit ``host:port`` endpoints allowed through the egress proxy."""
+
+    sandbox_allow_domain: tuple[str, ...] = ()
+    """Alias for additional allowed egress domains."""
+
+    sandbox_allow_private_cidr: tuple[str, ...] = ()
+    """Private/internal CIDR ranges allowed through the egress proxy."""
+
+    sandbox_kernels: bool = True
+    """Whether local Python and R persistent kernels also run inside the sandbox."""
 
     sandbox_image: str = ""
-    """Container image for :attr:`SandboxMode.DOCKER`. Required there, and
-    must already be pulled: nothing is downloaded at start-up."""
+    """Legacy container image setting retained for compatibility."""
 
     sandbox_network: str = "none"
-    """Container network. ``none`` means commands cannot reach any network;
-    any other value is passed to ``--network`` as given."""
+    """Legacy network setting retained for compatibility."""
 
     sandbox_memory: str = "auto"
-    """``--memory`` for the container. ``auto`` is 80% of this machine's
-    ``MemTotal``, leaving the rest to the host and its page cache; empty means
-    no cap. See :meth:`sandbox_memory_value`."""
+    """Legacy memory limit setting retained for compatibility."""
 
     sandbox_cpus: str = ""
-    """``--cpus`` for the container; empty means no cap."""
+    """Legacy CPU limit setting retained for compatibility."""
 
     sandbox_gpus: str = ""
-    """``--gpus`` for the container, e.g. ``all``; empty means none."""
+    """Legacy GPU setting retained for compatibility."""
 
     sandbox_user: str = ""
-    """``--user`` for the container. Empty means this process's
-    ``uid:gid``; rootless Docker and Podman usually want ``0:0``."""
+    """Legacy user setting retained for compatibility."""
 
     sandbox_mounts: tuple[Path, ...] = ()
     """Extra host directories mounted read-only, at the same path."""
 
     sandbox_tmpfs_size: str = "64g"
-    """Size of the container's ``/tmp`` tmpfs."""
+    """Size of the sandbox ``/tmp`` tmpfs."""
 
     sandbox_shm_size: str = "128g"
-    """``--shm-size`` for the container; empty keeps the runtime's 64 MiB."""
+    """Shared-memory limit setting."""
 
     sandbox_pids_limit: int = 65536
-    """``--pids-limit`` for the container; threads count against it."""
+    """Process limit setting."""
 
     sandbox_nofile: int = 65536
-    """``--ulimit nofile`` for the container; ``0`` keeps the image's."""
+    """Open file descriptor limit setting."""
 
     sandbox_code_in_image: bool = False
-    """The image already holds this repository's ``omicsclaw/`` and
-    ``skills/``, so they are not mounted from the host. See
-    :meth:`sandbox_config`."""
+    """Skip mounting ``omicsclaw/`` and ``skills/`` into the sandbox."""
 
     sandbox_bootstrap: str = ""
-    """Command run once in the workspace after the container starts."""
+    """Bootstrap command setting."""
 
     sandbox_bootstrap_timeout_s: float = 600.0
     """Budget for :attr:`sandbox_bootstrap`."""
 
     sandbox_runtime: str = "docker"
-    """Container CLI: a name on ``PATH`` or a path."""
+    """Legacy runtime setting retained for compatibility."""
 
     sandbox_required: bool = False
     """Refuse to start when the sandbox cannot be started, instead of
     running ``bash`` on this machine."""
 
     sandbox_auto_approve: bool = False
-    """Run ``bash`` without asking, but only while the sandbox is running
-    with :attr:`sandbox_network` ``none``. Otherwise ``bash`` still asks."""
+    """Run ``bash`` and ``python`` without asking when isolated with
+    filtered/no network egress."""
 
     permission_mode: PermissionMode = PermissionMode.DEFAULT
     """How much this session is trusted. See
@@ -737,20 +751,40 @@ class AppConfig:
         return f"{int(total_gib * 0.8)}g"
 
     def sandbox_config(self) -> SandboxConfig | None:
-        """The container settings, or ``None`` when :attr:`sandbox` is off.
-
-        The repository's ``omicsclaw/`` and ``skills/`` are added to the
-        read-only mounts (see :meth:`code_mounts`), so ``bash`` sees the
-        skill code of the repository this process runs from.
-
-        Raises :exc:`~omicsclaw.sandbox.SandboxConfigError` for an unusable
-        setting, including a missing :attr:`sandbox_image`.
-        """
+        """The resolved :class:`~omicsclaw.sandbox.SandboxConfig`, or ``None`` when off."""
         if self.sandbox is SandboxMode.OFF:
             return None
         mounts = tuple(self.sandbox_mounts)
         mounts += tuple(path for path in self.code_mounts() if path not in mounts)
+
+        backend = self.sandbox_backend
+        if backend == SandboxBackendName.AUTO and self.sandbox in (
+            SandboxMode.BWRAP,
+            SandboxMode.NETNS,
+            SandboxMode.SEATBELT,
+            SandboxMode.APPCONTAINER,
+        ):
+            backend = SandboxBackendName(self.sandbox.value)
+
+        egress = self.sandbox_egress
+        net_norm = self.sandbox_network.strip().lower()
+        if net_norm and net_norm not in ("none", "proxy"):
+            egress = EgressMode.OPEN
+
+        extra_domains = tuple(
+            dict.fromkeys((*self.sandbox_egress_allow, *self.sandbox_allow_domain))
+        )
         return SandboxConfig(
+            mode=self.sandbox,
+            backend=backend,
+            egress=egress,
+            egress_groups=self.sandbox_egress_groups,
+            egress_allow=extra_domains,
+            egress_endpoints=self.sandbox_egress_endpoints,
+            extra_allowed_domains=frozenset(extra_domains),
+            allow_private_cidr=self.sandbox_allow_private_cidr,
+            extra_read_paths=mounts,
+            sandbox_kernels=self.sandbox_kernels,
             image=self.sandbox_image,
             network=self.sandbox_network,
             memory=self.sandbox_memory_value(),
@@ -887,11 +921,50 @@ def _as_positive_float(raw: str) -> float:
 
 
 def _as_sandbox_mode(raw: str) -> SandboxMode:
+    norm = raw.strip().lower()
+    if norm in {"1", "true", "yes"}:
+        return SandboxMode.ON
+    if norm in {"0", "false", "no", "none"}:
+        return SandboxMode.OFF
+    if norm in {"docker", "local"}:
+        return SandboxMode.AUTO
     try:
-        return SandboxMode(raw.strip().lower())
+        return SandboxMode(norm)
     except ValueError as exc:
         modes = ", ".join(mode.value for mode in SandboxMode)
         raise AppConfigError(f"{raw!r} is not a sandbox mode ({modes})") from exc
+
+
+def _as_sandbox_backend(raw: str) -> SandboxBackendName:
+    norm = raw.strip().lower()
+    if norm in {"docker", "on"}:
+        return SandboxBackendName.AUTO
+    if norm == "none":
+        return SandboxBackendName.OFF
+    try:
+        return SandboxBackendName(norm)
+    except ValueError as exc:
+        modes = ", ".join(mode.value for mode in SandboxBackendName)
+        raise AppConfigError(
+            f"{raw!r} is not a sandbox backend ({modes})"
+        ) from exc
+
+
+def _as_sandbox_egress(raw: str) -> EgressMode:
+    norm = raw.strip().lower()
+    if norm == "deny":
+        return EgressMode.NONE
+    try:
+        return EgressMode(norm)
+    except ValueError as exc:
+        modes = ", ".join(mode.value for mode in EgressMode)
+        raise AppConfigError(
+            f"{raw!r} is not a sandbox egress mode ({modes})"
+        ) from exc
+
+
+def _as_csv_tuple(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 def _as_permission_mode(raw: str) -> PermissionMode:
@@ -1138,6 +1211,59 @@ _OPTIONS: tuple[_Option, ...] = (
         _as_float,
     ),
     _Option("sandbox", "--sandbox", ("OMICSCLAW_SANDBOX",), _as_sandbox_mode),
+    _Option(
+        "sandbox_backend",
+        "--sandbox-backend",
+        ("OMICSCLAW_SANDBOX_BACKEND",),
+        _as_sandbox_backend,
+    ),
+    _Option(
+        "sandbox_egress",
+        "--sandbox-egress",
+        ("OMICSCLAW_SANDBOX_EGRESS",),
+        _as_sandbox_egress,
+    ),
+    _Option(
+        "sandbox_egress_groups",
+        "--sandbox-egress-groups",
+        ("OMICSCLAW_SANDBOX_EGRESS_GROUPS",),
+        _as_csv_tuple,
+        repeatable=True,
+    ),
+    _Option(
+        "sandbox_egress_allow",
+        "--sandbox-egress-allow",
+        ("OMICSCLAW_SANDBOX_EGRESS_ALLOW",),
+        _as_csv_tuple,
+        repeatable=True,
+    ),
+    _Option(
+        "sandbox_egress_endpoints",
+        "--sandbox-egress-endpoints",
+        ("OMICSCLAW_SANDBOX_EGRESS_ENDPOINTS",),
+        _as_csv_tuple,
+        repeatable=True,
+    ),
+    _Option(
+        "sandbox_allow_domain",
+        "--sandbox-allow-domain",
+        ("OMICSCLAW_SANDBOX_ALLOW_DOMAINS",),
+        _as_csv_tuple,
+        repeatable=True,
+    ),
+    _Option(
+        "sandbox_allow_private_cidr",
+        "--sandbox-allow-private-cidr",
+        ("OMICSCLAW_SANDBOX_ALLOW_PRIVATE_CIDR",),
+        _as_csv_tuple,
+        repeatable=True,
+    ),
+    _Option(
+        "sandbox_kernels",
+        "--sandbox-kernels",
+        ("OMICSCLAW_SANDBOX_KERNELS",),
+        _as_bool,
+    ),
     _Option(
         "sandbox_image",
         "--sandbox-image",

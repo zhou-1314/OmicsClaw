@@ -62,6 +62,7 @@ class SkillEnvBinding:
     """The dependency registry; empty when it could not be read."""
     registry_error: str = ""
     sandbox: SandboxContext | None = None
+    native_sandbox: bool = False
     annotate: Annotator | None = None
     """What ``use_skill`` awaits; ``None`` in read-only mode."""
     tool: Tool | None = None
@@ -96,27 +97,41 @@ def build_skill_env(
         return None
     registry_error = ""
     try:
-        registry = read_registry(skills.root / "_sdk" / "deps.py")
+        registry_path = skills.root / "_sdk" / "deps.py"
+        if not registry_path.is_file():
+            bundled = skills.root.parent / "omicsclaw" / "skillenv" / "deps_registry.py"
+            if bundled.is_file():
+                registry_path = bundled
+        registry = read_registry(registry_path)
     except RegistryFormatError as exc:
         if config.skill_env is SkillEnvMode.INSTALL:
             raise AppConfigError(f"skill_env=install needs the dependency registry: {exc}") from exc
         registry, registry_error = {}, str(exc)
         _log.warning("dependency registry unreadable: %s", registry_error)
+    native_sandbox = False
     if binding.active:
         runner: ProbeRunner = SandboxProbeRunner(binding.environment)
         location = "sandbox"
-        network = binding.config.network if binding.config is not None else "none"
+        network = binding.config.network if (binding.config is not None and binding.config.network) else binding.effective_egress.value
+        image_label = (
+            binding.config.image
+            if (binding.config is not None and binding.config.image)
+            else binding.backend.value
+        )
         sandbox = SandboxContext(
-            image=binding.config.image if binding.config is not None else "",
+            image=image_label,
             isolated=binding.isolates_network,
             network=network,
         )
+        native_sandbox = str(binding.backend.value) not in ("", "none", "off")
     else:
         runner, location, sandbox = LocalProbeRunner(), "local", None
     environment = without_control_credentials
     root = config.skill_env_dir or default_root(environment())
     tool: Tool | None = None
-    if config.skill_env is SkillEnvMode.INSTALL and location == "local":
+    if config.skill_env is SkillEnvMode.INSTALL and (
+        location == "local" or native_sandbox
+    ):
         tool = install_skill_deps_tool(
             skills,
             registry=registry,
@@ -138,6 +153,7 @@ def build_skill_env(
         registry=registry,
         registry_error=registry_error,
         sandbox=sandbox,
+        native_sandbox=native_sandbox,
         tool=tool,
         overlay_root=root,
         environment=environment,
@@ -167,7 +183,7 @@ def _annotator(binding: SkillEnvBinding) -> Annotator:
         except ProbeError as exc:
             return render_annotation(plan, None, error=str(exc), registry_error=binding.registry_error)
         overlays: tuple[str, ...] = ()
-        if binding.location == "local" and binding.overlay_root is not None:
+        if (binding.location == "local" or binding.native_sandbox) and binding.overlay_root is not None:
             absent = set(result.missing)
             names_missing = [r.name for r in plan.probed if r.kind == "pip" and r.module in absent]
             overlays = await find_overlays(

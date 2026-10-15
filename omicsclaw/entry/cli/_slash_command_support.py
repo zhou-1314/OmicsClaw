@@ -139,6 +139,7 @@ REPL_SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = tuple(
         "/mcp",
         "/auto",
         "/handoff",
+        "/sandbox",
         "/help",
         "/exit",
     }

@@ -43,30 +43,86 @@ Python ``str`` cannot cut a code point in half — the argument
 from __future__ import annotations
 
 import base64
+import contextlib
+import ctypes
 import json
 import logging
 import os
 import re
+import shutil
 import signal
+import subprocess
 import sys
+import tempfile
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Protocol, runtime_checkable
 
 from queue import Empty
 
 __all__ = [
     "CellResult",
     "KernelCallbacks",
+    "KernelSession",
     "KERNEL_NAME",
     "OutputLimits",
     "SessionKernel",
+    "SpawnWrapper",
     "figure_basename",
 ]
 
 _log = logging.getLogger(__name__)
+
+_KERNEL_CREDENTIAL_NAMES: frozenset[str] = frozenset({
+    "OMICSCLAW_REMOTE_AUTH_TOKEN",
+    "OMICSCLAW_API_KEY",
+    "LLM_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GOOGLE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "NVIDIA_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "VOLCENGINE_API_KEY",
+    "ZHIPU_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "FEISHU_APP_SECRET",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "DINGTALK_CLIENT_SECRET",
+    "QQ_APP_SECRET",
+    "SSH_AUTH_SOCK",
+})
+
+
+@runtime_checkable
+class SpawnWrapper(Protocol):
+    """Structural protocol for wrapping kernel processes in an OS sandbox."""
+
+    @property
+    def kernel_transport(self) -> str:
+        """``"ipc"`` (POSIX Unix sockets) or ``"tcp"`` (Windows TCP loopback)."""
+        ...
+
+    def wrap(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        extra_read_paths: Sequence[Path] = (),
+        extra_write_paths: Sequence[Path] = (),
+    ) -> tuple[list[str], dict[str, str]]:
+        """Return ``(wrapped_argv, child_env)``."""
+        ...
+
 
 KERNEL_NAME: Final = "omicsclaw-session"
 _ANSI: Final = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -238,6 +294,8 @@ class SessionKernel:
         on_figure: Callable[[Path, str], tuple[str, str]] | None = None,
         startup_timeout: float = 120.0,
         language: str = "python",
+        spawn_wrapper: SpawnWrapper | None = None,
+        env_scrubber: Callable[[Mapping[str, str]], dict[str, str]] | None = None,
     ) -> None:
         self.session_id = session_id
         self.workspace = Path(workspace)
@@ -246,11 +304,15 @@ class SessionKernel:
         self._on_figure = on_figure
         self._startup_timeout = startup_timeout
         self.language = language
+        self._spawn_wrapper = spawn_wrapper
+        self._env_scrubber = env_scrubber
         self._km: Any = None
         self._kc: Any = None
         self._scratch: Path | None = None
+        self._ipc_dir: Path | None = None
         self.started_at = 0.0
         self.cells = 0
+        self._interrupted = False
         # Per-kernel monotonic figure number; seeded in start() past
         # whatever earlier kernels of this session already wrote, so the
         # second cell (and the lazy cold restart) never overwrite the
@@ -282,48 +344,78 @@ class SessionKernel:
         from jupyter_client.kernelspec import KernelSpecManager
         from jupyter_client.manager import KernelManager
 
-        scratch = self.workspace / ".omicsclaw" / "kernel" / re.sub(
-            r"[^0-9A-Za-z_.-]", "-", self.session_id
-        )[:48].strip("-") or "session"
+        slug = re.sub(r"[^0-9A-Za-z_.-]", "-", self.session_id)[:48].strip("-") or "session"
+        scratch = self.workspace / ".omicsclaw" / "kernel" / slug
         scratch.mkdir(parents=True, exist_ok=True)
-        # The connection file lives here for both languages; the python
-        # branch used to get it via the isolated JUPYTER_RUNTIME_DIR, the
-        # R branch has no such env, so it is created unconditionally.
-        (scratch / "runtime").mkdir(parents=True, exist_ok=True)
-        env = {
-            name: value
-            for name, value in os.environ.items()
-            if name.upper() != "OMICSCLAW_REMOTE_AUTH_TOKEN"
-        }
-        if self.language == "r":
-            manager = KernelManager(
-                kernel_name="ir",
-                kernel_spec_manager=_r_spec_manager(),
-                connection_file=str(scratch / "runtime" / "kernel.json"),
-            )
+        runtime_dir = scratch / "runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+
+        if self._env_scrubber is not None:
+            env = dict(self._env_scrubber(os.environ))
         else:
-            spec_dir = scratch / "kernels" / KERNEL_NAME
-            spec_dir.mkdir(parents=True, exist_ok=True)
-            (spec_dir / "kernel.json").write_text(
-                json.dumps(
-                    {
-                        "argv": [
-                            self.python,
-                            "-m",
-                            "ipykernel_launcher",
-                            "-f",
-                            "{connection_file}",
-                            "--HistoryManager.enabled=False",
-                        ],
-                        "display_name": "OmicsClaw session",
-                        "language": "python",
-                    }
-                ),
-                encoding="utf-8",
-            )
+            env = {
+                name: value
+                for name, value in os.environ.items()
+                if name.upper() not in _KERNEL_CREDENTIAL_NAMES
+            }
+
+        extra_write_paths: list[Path] = [scratch]
+        ipc_prefix: str | None = None
+        if (
+            self._spawn_wrapper is not None
+            and self._spawn_wrapper.kernel_transport == "ipc"
+        ):
+            candidate_ipc = runtime_dir / "ipc"
+            if len(str(candidate_ipc)) <= 84:
+                ipc_prefix = str(candidate_ipc)
+            else:
+                self._ipc_dir = Path(tempfile.mkdtemp(prefix="oc-kipc-"))
+                extra_write_paths.append(self._ipc_dir)
+                ipc_prefix = str(self._ipc_dir / "ipc")
+
+        if self.language == "r":
+            r_specs = _r_spec_manager()
+            if self._spawn_wrapper is None:
+                manager = KernelManager(
+                    kernel_name="ir",
+                    kernel_spec_manager=r_specs,
+                    connection_file=str(runtime_dir / "kernel.json"),
+                )
+            else:
+                ir_spec = r_specs.get_kernel_spec("ir")
+                if getattr(ir_spec, "env", None):
+                    env.update(ir_spec.env)
+                wrapped_argv, env = self._spawn_wrapper.wrap(
+                    list(ir_spec.argv),
+                    cwd=self.workspace,
+                    env=env,
+                    extra_write_paths=tuple(extra_write_paths),
+                )
+                spec_dir = scratch / "kernels" / KERNEL_NAME
+                spec_dir.mkdir(parents=True, exist_ok=True)
+                (spec_dir / "kernel.json").write_text(
+                    json.dumps(
+                        {
+                            "argv": wrapped_argv,
+                            "display_name": getattr(ir_spec, "display_name", "R"),
+                            "language": "r",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                spec_manager = KernelSpecManager(
+                    kernel_dirs=[str(scratch / "kernels")],
+                    ensure_native_kernel=False,
+                )
+                manager = KernelManager(
+                    kernel_name=KERNEL_NAME,
+                    kernel_spec_manager=spec_manager,
+                    connection_file=str(runtime_dir / "kernel.json"),
+                )
+        else:
             isolated = {
                 "IPYTHONDIR": str(scratch / "ipython"),
-                "JUPYTER_RUNTIME_DIR": str(scratch / "runtime"),
+                "JUPYTER_RUNTIME_DIR": str(runtime_dir),
                 "JUPYTER_DATA_DIR": str(scratch / "data"),
                 "JUPYTER_CONFIG_DIR": str(scratch / "config"),
             }
@@ -333,15 +425,59 @@ class SessionKernel:
             # A headless host may use Agg; notebook kernels must emit display_data.
             # This startup default still allows cells to select another backend.
             env["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
+
+            base_argv: list[str] = [
+                self.python,
+                "-m",
+                "ipykernel_launcher",
+                "-f",
+                "{connection_file}",
+                "--HistoryManager.enabled=False",
+            ]
+            if self._spawn_wrapper is not None:
+                base_argv, env = self._spawn_wrapper.wrap(
+                    base_argv,
+                    cwd=self.workspace,
+                    env=env,
+                    extra_write_paths=tuple(extra_write_paths),
+                )
+
+            spec_dir = scratch / "kernels" / KERNEL_NAME
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            (spec_dir / "kernel.json").write_text(
+                json.dumps(
+                    {
+                        "argv": base_argv,
+                        "display_name": "OmicsClaw session",
+                        "language": "python",
+                    }
+                ),
+                encoding="utf-8",
+            )
             spec_manager = KernelSpecManager(
                 kernel_dirs=[str(scratch / "kernels")], ensure_native_kernel=False
             )
             manager = KernelManager(
                 kernel_name=KERNEL_NAME,
                 kernel_spec_manager=spec_manager,
-                connection_file=str(scratch / "runtime" / "kernel.json"),
+                connection_file=str(runtime_dir / "kernel.json"),
             )
-        manager.start_kernel(env=env, cwd=str(self.workspace))
+
+        if ipc_prefix is not None:
+            manager.transport = "ipc"
+            manager.ip = ipc_prefix
+
+        # When wrapped inside a POSIX PID namespace (bwrap --unshare-pid /
+        # unshare --pid), _bridge.py is PID 1 so os.getppid() == 1 inside the
+        # kernel. Passing independent=True prevents jupyter_client from setting
+        # the host's JPY_PARENT_PID, which would mismatch PID 1 and trigger
+        # ipykernel's ParentPollerUnix immediate shutdown.
+        env.pop("JPY_PARENT_PID", None)
+        manager.start_kernel(
+            env=env,
+            cwd=str(self.workspace),
+            independent=bool(self._spawn_wrapper is not None and os.name == "posix"),
+        )
         client = manager.client()
         client.start_channels()
         try:
@@ -349,12 +485,18 @@ class SessionKernel:
         except Exception:
             self._shutdown_client(client)
             self._kill_manager(manager)
+            self._cleanup_ipc_dir()
             raise
         self._km = manager
         self._kc = client
         self._scratch = scratch
         self.started_at = time.time()
         self._seed_figure_sequence()
+
+    def _cleanup_ipc_dir(self) -> None:
+        if self._ipc_dir is not None:
+            shutil.rmtree(self._ipc_dir, ignore_errors=True)
+            self._ipc_dir = None
 
     def _seed_figure_sequence(self) -> None:
         """Start figure numbering past this session's earlier kernels.
@@ -382,6 +524,7 @@ class SessionKernel:
 
     def interrupt(self) -> None:
         """Tier 1 of the cancel ladder. Safe from any thread."""
+        self._interrupted = True
         if self._km is not None:
             try:
                 self._km.interrupt_kernel()
@@ -392,11 +535,18 @@ class SessionKernel:
         """SIGKILL the kernel's process group. Safe from any thread."""
         if self._km is not None:
             self._kill_manager(self._km)
+        self._cleanup_ipc_dir()
 
     def shutdown(self) -> None:
         """Polite shutdown; falls back to kill."""
         if self._km is None:
+            self._cleanup_ipc_dir()
             return
+        descendants = (
+            _descendant_pids(self.pid)
+            if (os.name == "posix" and self.pid and self.pid > 0)
+            else []
+        )
         try:
             self._shutdown_client(self._kc)
         finally:
@@ -404,10 +554,12 @@ class SessionKernel:
                 if self._km.has_kernel:
                     self._km.shutdown_kernel(now=True)
             except Exception:  # noqa: BLE001
-                self._kill_manager(self._km)
+                pass
             finally:
+                self._kill_manager(self._km, descendants=descendants)
                 self._km = None
                 self._kc = None
+                self._cleanup_ipc_dir()
 
     @staticmethod
     def _shutdown_client(client: Any) -> None:
@@ -417,49 +569,89 @@ class SessionKernel:
             pass
 
     @staticmethod
-    def _kill_manager(manager: Any) -> None:
+    def _kill_manager(manager: Any, *, descendants: Sequence[int] | None = None) -> None:
         provisioner = getattr(manager, "provisioner", None)
         pid = getattr(provisioner, "pid", None)
         pgid = getattr(provisioner, "pgid", None)
-        # A pid of zero or less is a broadcast id to os.kill, not a
-        # process: ``os.kill(-1, SIGKILL)`` signals everything the caller
-        # may. A provisioner reporting one is broken, and the honest
-        # response is to signal nothing — the same refusal the remote
-        # kernel's _valid_pid makes at every one of its splice sites.
+        if os.name != "posix":
+            if pid and pid > 0:
+                with contextlib.suppress(Exception):
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3.0,
+                        check=False,
+                    )
+            return
+
+        sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+        # Collect descendant PIDs before killing the parent wrapper so
+        # sandboxed children (bwrap/unshare -> bridge -> kernel) are all reached.
+        if descendants is None:
+            descendants = _descendant_pids(pid) if (pid and pid > 0) else []
         try:
             if pgid and pgid > 0 and pgid != os.getpgrp():
-                os.killpg(pgid, signal.SIGKILL)
+                os.killpg(pgid, sig)
             elif pid and pid > 0:
-                os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+                os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
+        for child_pid in reversed(descendants):
+            if child_pid != pid and child_pid > 0 and child_pid != os.getpid():
+                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                    os.kill(child_pid, sig)
 
     # ---- resource probes ----
 
     def peak_rss_kb(self) -> int | None:
-        """The kernel's high-water RSS, from ``/proc`` when it exists."""
+        """The kernel tree's high-water RSS in KiB."""
         pid = self.pid
-        if not pid:
+        if not pid or pid <= 0:
             return None
-        try:
-            for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-                if line.startswith("VmHWM:"):
-                    return int(line.split()[1])
-        except (OSError, ValueError, IndexError):
-            return None
-        return None
+        if sys.platform == "win32":
+            return _win_peak_rss_kb(pid)
+        pids = _descendant_pids(pid)
+        best: int | None = None
+        for target_pid in pids:
+            try:
+                for line in Path(f"/proc/{target_pid}/status").read_text().splitlines():
+                    if line.startswith("VmHWM:"):
+                        val = int(line.split()[1])
+                        best = val if best is None else max(best, val)
+                        break
+            except (OSError, ValueError, IndexError):
+                continue
+        return best
 
     def cpu_seconds(self) -> float | None:
+        """Total CPU seconds across the kernel and its sandbox wrapper tree."""
         pid = self.pid
-        if not pid:
+        if not pid or pid <= 0:
             return None
+        if sys.platform == "win32":
+            return _win_cpu_seconds(pid)
         try:
-            fields = Path(f"/proc/{pid}/stat").read_text().split()
-            # utime + stime, in clock ticks; fields 14 and 15 (1-based)
-            ticks = int(fields[13]) + int(fields[14])
-            return ticks / os.sysconf("SC_CLK_TCK")
-        except (OSError, ValueError, IndexError):
+            clk_tck = os.sysconf("SC_CLK_TCK")
+        except (AttributeError, ValueError, OSError):
             return None
+        pids = _descendant_pids(pid)
+        total_ticks = 0
+        found = False
+        for target_pid in pids:
+            try:
+                raw = Path(f"/proc/{target_pid}/stat").read_text()
+                rparen = raw.rfind(")")
+                if rparen == -1:
+                    continue
+                after_comm = raw[rparen + 2 :].split()
+                # after_comm[0] is state (field 3); utime is field 14 (index 11), stime is field 15 (index 12)
+                total_ticks += int(after_comm[11]) + int(after_comm[12])
+                found = True
+            except (OSError, ValueError, IndexError):
+                continue
+        return (total_ticks / clk_tck) if found else None
+
 
     # ---- execution ----
 
@@ -502,6 +694,7 @@ class SessionKernel:
 
             return forward
 
+        self._interrupted = False
         msg_id = self._kc.execute(code)
         deadline = began + max(1.0, float(timeout_s))
         interrupted_at: float | None = None
@@ -580,7 +773,12 @@ class SessionKernel:
                             except Exception:  # noqa: BLE001
                                 pass
         if idle:
-            result.status = "ok"
+            if interrupted_at is not None:
+                result.status = "timeout"
+            elif self._interrupted:
+                result.status = "interrupted"
+            else:
+                result.status = "ok"
             reply = self._shell_reply(msg_id)
             if reply is not None:
                 result.execution_count = reply.get("content", {}).get(
@@ -588,11 +786,15 @@ class SessionKernel:
                 )
         if error is not None:
             result.error = error
-            result.status = (
-                "interrupted"
-                if error.get("ename") == "KeyboardInterrupt"
-                else ("timeout" if result.status == "timeout" else "error")
-            )
+            if interrupted_at is not None or result.status == "timeout":
+                result.status = "timeout"
+            elif (
+                error.get("ename") == "KeyboardInterrupt"
+                or self._interrupted
+            ):
+                result.status = "interrupted"
+            else:
+                result.status = "error"
         result.stdout = tallies["stdout"].text()
         result.stderr = tallies["stderr"].text()
         result.figures = figures
@@ -654,3 +856,106 @@ def _last_label(tallies: dict[str, _StreamTally]) -> str:
             if tail:
                 return f"{name}: {tail[-1][:80]}"
     return "no output yet"
+
+
+def _descendant_pids(root_pid: int) -> list[int]:
+    """Return ``[root_pid, ...descendants...]`` by walking ``/proc/<pid>/task/*/children``."""
+    seen: list[int] = []
+    visited: set[int] = set()
+    queue = [root_pid]
+    while queue:
+        current = queue.pop(0)
+        if current in visited or current <= 0:
+            continue
+        visited.add(current)
+        seen.append(current)
+        task_dir = Path(f"/proc/{current}/task")
+        try:
+            tids = list(task_dir.iterdir()) if task_dir.is_dir() else []
+        except OSError:
+            tids = []
+        for tid_entry in tids:
+            children_file = tid_entry / "children"
+            try:
+                text = children_file.read_text()
+            except OSError:
+                continue
+            for token in text.split():
+                if token.isdigit():
+                    child = int(token)
+                    if child not in visited:
+                        queue.append(child)
+    return seen
+
+
+class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_ulong),
+        ("PageFaultCount", ctypes.c_ulong),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
+class _FILETIME(ctypes.Structure):
+    _fields_ = [
+        ("dwLowDateTime", ctypes.c_ulong),
+        ("dwHighDateTime", ctypes.c_ulong),
+    ]
+
+
+def _win_peak_rss_kb(pid: int) -> int | None:
+    if not hasattr(ctypes, "windll"):
+        return None
+    kernel32 = ctypes.windll.kernel32
+    psapi = getattr(ctypes.windll, "psapi", None)
+    if psapi is None:
+        return None
+    handle = kernel32.OpenProcess(0x0400 | 0x0010, False, int(pid))
+    if not handle:
+        return None
+    try:
+        counters = _PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(_PROCESS_MEMORY_COUNTERS)
+        if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return int(counters.PeakWorkingSetSize) // 1024
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _win_cpu_seconds(pid: int) -> float | None:
+    if not hasattr(ctypes, "windll"):
+        return None
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x0400, False, int(pid))
+    if not handle:
+        return None
+    try:
+        creation = _FILETIME()
+        exit_time = _FILETIME()
+        kernel_time = _FILETIME()
+        user_time = _FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time),
+        ):
+            return None
+        k_ticks = (int(kernel_time.dwHighDateTime) << 32) | int(kernel_time.dwLowDateTime)
+        u_ticks = (int(user_time.dwHighDateTime) << 32) | int(user_time.dwLowDateTime)
+        return (k_ticks + u_ticks) / 10_000_000.0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+KernelSession = SessionKernel
+

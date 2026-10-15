@@ -84,7 +84,7 @@ from omicsclaw.version import __version__, build_identity
 
 from .artifacts import mount_artifacts_routes
 from .catalog import mcp_servers, skill_catalog, skill_detail
-from .doctor import doctor_report, effective_model
+from .doctor import _sandbox_snapshot, doctor_report, effective_model
 from .files import (
     byte_span,
     content_disposition,
@@ -450,6 +450,7 @@ def health_payload(app: AgentApp) -> dict[str, Any]:
         "omicsclaw_dir": str(app.config.workspace),
         "launch_id": app.config.launch_id,
         "served_paths": list(SERVED_PATHS),
+        "sandbox": _sandbox_snapshot(app),
         "contracts": {
             "desktop_chat": desktop_chat_contract(
                 abandon_grace_s=(
@@ -754,6 +755,68 @@ def create_desktop_app(
         if not _authorized(request):
             return _unauthorized()
         return doctor_report(app)
+
+    @api.get("/sandbox/status")
+    @api.get("/api/sandbox/status")
+    async def get_sandbox_status(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        return _sandbox_snapshot(app)
+
+    @api.post("/sandbox/allow-domain")
+    @api.post("/api/sandbox/allow-domain")
+    async def post_sandbox_allow_domain(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        try:
+            document = await _read_json(request, CONTROL_MAX_REQUEST_BYTES)
+        except DesktopIngressError as exc:
+            return _refused(exc)
+        domain = document.get("domain")
+        persist = bool(document.get("persist", False))
+        if not isinstance(domain, str) or not domain.strip():
+            return JSONResponse(
+                {"detail": "domain must be a non-empty string", "error": "invalid_domain"},
+                status_code=400,
+            )
+        binding = getattr(app, "sandbox", None)
+        if binding is None or not hasattr(binding, "allow_domain"):
+            return JSONResponse(
+                {"detail": "sandbox binding unavailable", "error": "sandbox_unavailable"},
+                status_code=400,
+            )
+        try:
+            binding.allow_domain(domain, persist=persist)
+        except ValueError as exc:
+            return JSONResponse(
+                {"detail": str(exc), "error": "domain_denied"},
+                status_code=400,
+            )
+        return _sandbox_snapshot(app)
+
+    @api.delete("/sandbox/allow-domain")
+    @api.delete("/api/sandbox/allow-domain")
+    async def delete_sandbox_allow_domain(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        domain = request.query_params.get("domain")
+        if not domain:
+            raw_body = await _read_body(request, CONTROL_MAX_REQUEST_BYTES)
+            if raw_body.strip():
+                try:
+                    doc = parse_chat_stream_document(raw_body, max_request_bytes=CONTROL_MAX_REQUEST_BYTES)
+                    domain = doc.get("domain")
+                except Exception:  # noqa: BLE001
+                    domain = None
+        if not isinstance(domain, str) or not domain.strip():
+            return JSONResponse(
+                {"detail": "domain must be a non-empty string", "error": "invalid_domain"},
+                status_code=400,
+            )
+        binding = getattr(app, "sandbox", None)
+        if binding is not None and hasattr(binding, "revoke_domain"):
+            binding.revoke_domain(domain)
+        return _sandbox_snapshot(app)
 
     @api.get("/workspace")
     async def get_workspace(request: Request) -> Any:

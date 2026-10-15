@@ -75,3 +75,44 @@ DEFAULT_UV_PYTHON_MIRROR = (
 ``UV_PYTHON_INSTALL_MIRROR`` uv itself reads. Same reasoning as the
 package mirror; overridable through
 ``OMICSCLAW_ENV_SUPPLY_PYTHON_MIRROR``."""
+
+
+import os
+from collections.abc import Mapping
+
+CONTROL_CREDENTIAL_NAMES: frozenset[str] = frozenset({
+    "OMICSCLAW_REMOTE_AUTH_TOKEN",
+    "OMICSCLAW_API_KEY",
+    "LLM_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GOOGLE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "NVIDIA_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "VOLCENGINE_API_KEY",
+    "ZHIPU_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "FEISHU_APP_SECRET",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "DINGTALK_CLIENT_SECRET",
+    "QQ_APP_SECRET",
+    "SSH_AUTH_SOCK",
+})
+
+
+def without_control_credentials(
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return a copy of *source* (default ``os.environ``) without control credentials."""
+    env = os.environ if source is None else source
+    return {
+        name: value
+        for name, value in env.items()
+        if name.upper() not in CONTROL_CREDENTIAL_NAMES
+    }

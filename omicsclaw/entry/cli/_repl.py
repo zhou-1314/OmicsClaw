@@ -805,6 +805,9 @@ class Repl:
         if name == "/handoff":
             self._handoff(arg)
             return
+        if name == "/sandbox":
+            self._sandbox_cmd(arg)
+            return
         if name == "/sessions":
             await self._sessions()
             return
@@ -2050,7 +2053,7 @@ class Repl:
         from the configuration, which says what was asked for."""
         binding = self._app.sandbox
         if binding is not None and binding.active:
-            return "bash runs in the sandbox container."
+            return "bash runs in the native OS sandbox."
         if binding is not None and binding.degraded:
             why = f" ({inert_line(binding.unavailable)})" if binding.unavailable else ""
             return (
@@ -2058,8 +2061,84 @@ class Repl:
                 "runs on this machine."
             )
         return (
-            "bash runs directly on this machine; OMICSCLAW_SANDBOX=docker "
-            "puts it in a container."
+            "bash runs directly on this machine; OMICSCLAW_SANDBOX=auto "
+            "runs it in the OS sandbox."
+        )
+
+    def _sandbox_cmd(self, arg: str) -> None:
+        """Show sandbox status or grant outbound access to a domain."""
+        binding = self._app.sandbox
+        parts = arg.strip().split()
+        if not parts or parts[0].lower() == "status":
+            if binding is None or not (binding.active or binding.degraded):
+                self._screen.print(
+                    Text(
+                        "Sandbox: off (bash runs directly on this machine; "
+                        "set OMICSCLAW_SANDBOX=auto to enable).",
+                        style="dim",
+                    )
+                )
+                return
+            status = binding.status()
+            state_label = "active" if status.active else "degraded"
+            covers = ", ".join(status.covers) if status.covers else "none"
+            self._screen.print(
+                Text(
+                    f"Sandbox: {state_label} · backend={status.backend.value} · "
+                    f"level={status.level.value} · egress={status.egress.value} · "
+                    f"covers={covers}",
+                    style="dim" if status.active else "yellow",
+                )
+            )
+            if status.degraded_reason:
+                self._screen.print(
+                    Text(
+                        f"  Reason: {inert_line(status.degraded_reason)}",
+                        style="yellow",
+                    )
+                )
+            if status.fix_hint:
+                self._screen.print(
+                    Text(f"  Fix: {inert_line(status.fix_hint)}", style="dim")
+                )
+            return
+        if parts[0].lower() == "allow" and len(parts) >= 2:
+            domain = parts[1].strip().lower().rstrip(".")
+            persist = "--always" in [p.lower() for p in parts[2:]]
+            if binding is None or not binding.active:
+                self._screen.print(
+                    Text(
+                        "Sandbox is not active; cannot add egress rule.",
+                        style="yellow",
+                    )
+                )
+                return
+            from omicsclaw.sandbox import EGRESS_DENYLIST, domain_matches
+
+            check_host = domain[2:] if domain.startswith("*.") else domain
+            if domain_matches(check_host, EGRESS_DENYLIST):
+                self._screen.print(
+                    Text(
+                        f"Refused: '{inert_line(domain)}' is on the "
+                        "exfiltration denylist.",
+                        style="yellow",
+                    )
+                )
+                return
+            binding.allow_domain(domain, persist=persist)
+            scope = "persisted in workspace" if persist else "for this session"
+            self._screen.print(
+                Text(
+                    f"Allowed outbound egress to '{inert_line(domain)}' ({scope}).",
+                    style="dim",
+                )
+            )
+            return
+        self._screen.print(
+            Text(
+                "usage: /sandbox [status | allow <domain> [--always]]",
+                style="yellow",
+            )
         )
 
     def _save_mode(self, mode: PermissionMode) -> None:

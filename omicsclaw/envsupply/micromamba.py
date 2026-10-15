@@ -92,6 +92,7 @@ def probe_micromamba(
     location: MicromambaLocation,
     *,
     runner: Callable[[Sequence[str]], tuple[int, str]] | None = None,
+    env_provider: Callable[[], dict[str, str]] | None = None,
 ) -> str | None:
     """Probe the located binary and answer its version, or ``None``.
 
@@ -102,10 +103,17 @@ def probe_micromamba(
         return None
     if runner is None:
         import subprocess
+        from .pins import without_control_credentials
+
+        scrubber = env_provider or without_control_credentials
 
         def runner(argv: Sequence[str]) -> tuple[int, str]:  # noqa: F811
             finished = subprocess.run(
-                list(argv), capture_output=True, text=True, timeout=30.0
+                list(argv),
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+                env=scrubber(),
             )
             return finished.returncode, finished.stdout
 

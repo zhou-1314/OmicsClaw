@@ -53,13 +53,15 @@ import asyncio
 import contextlib
 import os
 import signal
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 from omicsclaw.memory import truncate_utf8
-from omicsclaw.tools.builtin.bash import spawn_group_leader
+from omicsclaw.tools.builtin.bash import _resolve_shell_argv, spawn_group_leader
+
 
 __all__ = [
     "CONTEXT_LIMIT",
@@ -205,12 +207,11 @@ async def run_shell(
         after the command and everything it started have been killed.
     """
     started = time.monotonic()
+    argv = _resolve_shell_argv(command)
     try:
         process = await spawn_group_leader(
             asyncio.create_subprocess_exec(
-                "bash",
-                "-c",
-                command,
+                *argv,
                 cwd=str(cwd),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
@@ -298,11 +299,23 @@ def _kill_the_group(process: "asyncio.subprocess.Process") -> None:
     after the shell itself has exited and been reaped, as long as
     anything it started is still in the group.
     """
-    with contextlib.suppress(OSError):
-        os.killpg(process.pid, signal.SIGKILL)
-        return
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            return
+    else:
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3.0,
+                check=False,
+            )
+            return
     with contextlib.suppress(OSError):
         process.kill()
+
 
 
 async def _collect(process: "asyncio.subprocess.Process", into: bytearray) -> None:

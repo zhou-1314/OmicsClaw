@@ -14,19 +14,23 @@ import, which is what an overlay built on it needs to know.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shlex
 import signal
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from omicsclaw.tools.builtin.bash import (
     BashEnvironment,
+    _resolve_shell_argv,
     spawn_group_leader,
     without_control_credentials,
 )
+
 
 __all__ = [
     "INVENTORY_TIMEOUT_S",
@@ -406,11 +410,10 @@ class LocalProbeRunner:
         environment = without_control_credentials()
         if env:
             environment.update(env)
+        argv = _resolve_shell_argv(command)
         process = await spawn_group_leader(
             asyncio.create_subprocess_exec(
-                "bash",
-                "-c",
-                command,
+                *argv,
                 cwd=cwd,
                 env=environment,
                 stdout=asyncio.subprocess.PIPE,
@@ -433,10 +436,24 @@ class LocalProbeRunner:
 
 
 def _kill_group(process: asyncio.subprocess.Process) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3.0,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            with contextlib.suppress(OSError):
+                process.kill()
+
 
 
 class SandboxProbeRunner:

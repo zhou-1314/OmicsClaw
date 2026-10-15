@@ -1,52 +1,80 @@
-"""``SandboxConfig``: the recalibrated defaults, and what it refuses."""
+"""``SandboxConfig``: native OS sandbox defaults, domain groups, and validation."""
 
 from __future__ import annotations
 
 import dataclasses
-import os
 from pathlib import Path
 
 import pytest
 
-from omicsclaw.sandbox import NETWORK_NONE, SandboxConfig, SandboxConfigError
+from omicsclaw.sandbox import (
+    BackendName,
+    DEFAULT_ALLOWED_DOMAINS,
+    DEFAULT_DENY_READ_PATHS,
+    DEFAULT_DENY_WRITE_GLOBS,
+    EGRESS_DENYLIST,
+    EGRESS_GROUPS,
+    EgressMode,
+    Level,
+    Mount,
+    SandboxConfig,
+    SandboxConfigError,
+    SandboxMode,
+    host_user,
+)
 
 
-def test_the_defaults_are_recalibrated_for_omics_rather_than_ported():
-    """harness9's ``ubuntu:22.04`` / 1 CPU / 512m / 256 pids / open network
-    were tuned for SWE-bench repositories. One ``sc.pp.neighbors()`` needs
-    more than 512m, BLAS threads count against the pids cgroup, and the
-    threat this project guards is data leaving the machine — so the network
-    is off and nothing is capped unless an operator caps it."""
-    config = SandboxConfig(image="omics:1")
+def test_defaults_are_calibrated_for_native_os_sandbox():
+    config = SandboxConfig()
 
-    assert config.network == NETWORK_NONE
+    assert config.mode == SandboxMode.AUTO
+    assert config.backend == BackendName.AUTO
+    assert config.egress == EgressMode.PROXY
     assert config.isolates_network
-    assert config.memory == "" and config.cpus == "" and config.gpus == ""
+    assert config.sandbox_kernels is True
+    assert config.egress_groups == ("pkg",)
     assert config.pids_limit == 65536
     assert config.tmpfs_size == "64g"
     assert config.shm_size == "128g"
     assert config.nofile == 65536
-    assert config.runtime == "docker"
     assert config.bootstrap == ""
     assert config.bootstrap_timeout_s == 600.0
+    assert config.user == host_user()
 
 
-def test_the_default_user_is_this_process():
-    """Files a command writes into the bind-mounted workspace must belong
-    to the person running the agent, not to root."""
-    assert SandboxConfig(image="x").user == f"{os.getuid()}:{os.getgid()}"
+def test_mode_syncs_concrete_backend():
+    assert SandboxConfig(mode=SandboxMode.BWRAP).backend == BackendName.BWRAP
+    assert SandboxConfig(mode=SandboxMode.NETNS).backend == BackendName.NETNS
+    assert SandboxConfig(mode=SandboxMode.SEATBELT).backend == BackendName.SEATBELT
+    assert SandboxConfig(mode=SandboxMode.APPCONTAINER).backend == BackendName.APPCONTAINER
+    assert SandboxConfig(mode="docker").mode == SandboxMode.AUTO
+    assert SandboxConfig(mode="local").mode == SandboxMode.AUTO
 
 
-@pytest.mark.parametrize("network", ["bridge", "host", "omics-egress"])
-def test_any_other_network_does_not_isolate(network: str):
-    assert not SandboxConfig(image="x", network=network).isolates_network
+def test_egress_modes_and_network_isolation():
+    assert SandboxConfig(egress=EgressMode.PROXY).isolates_network
+    assert SandboxConfig(egress=EgressMode.NONE).isolates_network
+    assert not SandboxConfig(egress=EgressMode.OPEN).isolates_network
+    assert not SandboxConfig(network="bridge").isolates_network
+
+
+def test_domain_groups_and_denylist_are_populated():
+    assert {"pkg", "bio", "git", "registries", "default"} <= set(EGRESS_GROUPS)
+    assert "pypi.org" in DEFAULT_ALLOWED_DOMAINS
+    assert "eutils.ncbi.nlm.nih.gov" in EGRESS_GROUPS["bio"]
+    assert "pastebin.com" in EGRESS_DENYLIST
+    assert "*.ngrok-free.app" in EGRESS_DENYLIST
+    assert "~/.ssh" in DEFAULT_DENY_READ_PATHS
+    assert ".git/hooks" in DEFAULT_DENY_WRITE_GLOBS
+    assert ".omicsclaw" in DEFAULT_DENY_WRITE_GLOBS
 
 
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"image": ""},
-        {"image": "   "},
+        {"mode": "invalid-mode"},
+        {"backend": "invalid-backend"},
+        {"egress": "invalid-egress"},
         {"image": "--privileged"},
         {"image": "a b"},
         {"network": "-host"},
@@ -62,32 +90,29 @@ def test_any_other_network_does_not_isolate(network: str):
         {"read_only_mounts": (Path("/data/a:b"),)},
     ],
 )
-def test_a_value_that_would_change_the_command_line_is_refused(overrides):
-    """Operator configuration, so trusted — but an image or network that
-    starts with ``-`` is read by the CLI as an option, and a ``:`` in a
-    mount path is ``-v``'s own separator. Both fail here, by name, instead
-    of turning into a different container."""
-    values = {"image": "omics:1", **overrides}
-
+def test_invalid_values_raise_sandbox_config_error(overrides):
     with pytest.raises(SandboxConfigError):
-        SandboxConfig(**values)
+        SandboxConfig(**overrides)
 
 
-def test_a_runtime_path_may_contain_spaces():
-    """It is ``argv[0]``, never parsed by a shell."""
-    config = SandboxConfig(image="x", runtime="/Applications/Docker App/docker")
+def test_mounts_and_extra_paths_are_normalised_and_frozen():
+    m_ro = Mount(source=Path("/ref/genome"), writable=False)
+    m_rw = Mount(source=Path("/scratch/work"), writable=True)
+    config = SandboxConfig(
+        read_only_mounts=("/ref/hg38",),  # type: ignore[arg-type]
+        mounts=(m_ro, m_rw),
+        egress_allow=("api.custom.org",),
+    )
 
-    assert config.runtime.endswith("docker")
-
-
-def test_mounts_are_normalised_to_paths_and_the_config_is_frozen():
-    mounts = ("/ref/genome",)
-    config = SandboxConfig(image="x", read_only_mounts=mounts)  # type: ignore[arg-type]
-
-    assert config.read_only_mounts == (Path("/ref/genome"),)
+    assert Path("/ref/hg38") in config.extra_read_paths
+    assert Path("/ref/genome") in config.extra_read_paths
+    assert Path("/scratch/work") in config.extra_write_paths
+    assert "api.custom.org" in config.effective_allowed_domains
     with pytest.raises(dataclasses.FrozenInstanceError):
-        config.image = "y"  # type: ignore[misc]
+        config.egress = EgressMode.OPEN  # type: ignore[misc]
 
 
 def test_the_error_is_a_value_error():
     assert issubclass(SandboxConfigError, ValueError)
+    assert Level.ISOLATED == Level.FULL
+    assert Level.NET_ONLY == Level.PARTIAL

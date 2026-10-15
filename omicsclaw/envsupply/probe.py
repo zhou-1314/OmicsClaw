@@ -23,7 +23,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .pins import CORE_STACK_PACKAGES, KERNEL_BASE_PACKAGES
+from .pins import CORE_STACK_PACKAGES, KERNEL_BASE_PACKAGES, without_control_credentials
 
 __all__ = [
     "DEFAULT_PROBE_PACKAGES",
@@ -99,13 +99,19 @@ ProbeRunner = Callable[[Sequence[str]], ProbeOutcome | None]
 """Spawns argv, waits, answers the outcome; ``None`` = could not run."""
 
 
-def default_probe_runner(argv: Sequence[str]) -> ProbeOutcome | None:
+def default_probe_runner(
+    argv: Sequence[str],
+    *,
+    env_provider: Callable[[], dict[str, str]] | None = None,
+) -> ProbeOutcome | None:
+    scrubber = env_provider or without_control_credentials
     try:
         finished = subprocess.run(
             list(argv),
             capture_output=True,
             text=True,
             timeout=DEFAULT_PROBE_TIMEOUT_S,
+            env=scrubber(),
         )
     except (FileNotFoundError, PermissionError, OSError):
         return None

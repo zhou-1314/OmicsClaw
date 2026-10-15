@@ -23,8 +23,10 @@ from .session import (
     CellResult,
     FigureRef,
     KernelCallbacks,
+    KernelSession,
     OutputLimits,
     SessionKernel,
+    SpawnWrapper,
 )
 
 __all__ = [
@@ -37,10 +39,12 @@ __all__ = [
     "KernelCallbacks",
     "KernelHandle",
     "KernelReaper",
+    "KernelSession",
     "OV_KERNEL_VAR",
     "OutputLimits",
     "PersistentKernelManager",
     "SessionKernel",
     "SessionState",
+    "SpawnWrapper",
     "format_cell_summary",
 ]

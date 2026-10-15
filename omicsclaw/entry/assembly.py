@@ -84,7 +84,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Sequence, runtime_checkable
 
 from omicsclaw.context import (
     AssembledPrompt,
@@ -147,7 +147,7 @@ from omicsclaw.kernel import (
     format_cell_summary,
 )
 from omicsclaw.remote import RemoteKernelRuntime, RemotePlaneBinding
-from omicsclaw.sandbox import ChangeListener
+from omicsclaw.sandbox import EgressMode
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.artifacts import kind_and_mime_for
 from omicsclaw.skills import (
@@ -171,7 +171,7 @@ from omicsclaw.tools import (
     read_tool,
 )
 from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
-from omicsclaw.tools.builtin.bash import BashEnvironment
+from omicsclaw.tools.builtin.bash import BashEnvironment, without_control_credentials
 from omicsclaw.tools.builtin.manage_env import ManageEnvironmentsTool
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
 from omicsclaw.tools.builtin.live_app import LiveAppTool
@@ -193,9 +193,13 @@ from .memory import (
 from .planning import build_plan_book
 from .project import step_runner_line
 from .sandbox import (
+    EgressMode,
+    RequestNetworkAccessTool,
     SandboxBinding,
+    append_egress_blocked_hints,
     bash_policy,
     open_sandbox,
+    python_policy,
     sandbox_section,
     unstarted_sandbox,
 )
@@ -622,6 +626,8 @@ class WorkspaceKernelBinding:
         *,
         remote_runtime: RemoteKernelStarter | None = None,
         notebook_store: NotebookStore | None = None,
+        spawn_wrapper: object = None,
+        sandbox: SandboxBinding | None = None,
     ) -> None:
         """*remote_runtime* (C3) is the remote kernel half or ``None`` —
         ``None`` is the off answer: the manager then refuses remote
@@ -633,9 +639,14 @@ class WorkspaceKernelBinding:
             else Path(workspace)
         )
         self.manager = PersistentKernelManager(
-            root, on_figure=self._register_figure, remote_runtime=remote_runtime
+            root,
+            on_figure=self._register_figure,
+            remote_runtime=remote_runtime,
+            spawn_wrapper=spawn_wrapper,
+            env_scrubber=without_control_credentials,
         )
         self._root = root
+        self._sandbox = sandbox
         self._store: ArtifactStore | None = None
         self._notebook_store = notebook_store
         self._notebooks = None
@@ -721,13 +732,16 @@ class WorkspaceKernelBinding:
         import hashlib
         import uuid
 
+        if self._sandbox is not None and self._sandbox.active:
+            self._sandbox.drain_blocked_egress_hints()
+
         if self.notebooks.binding(session_id=session_id) is not None:
             call = context_value("tool_call_id", "")
             turn = context_value("turn_id", "")
             command = hashlib.sha256(
                 json.dumps([session_id, turn, call or uuid.uuid4().hex]).encode()
             ).hexdigest()
-            return await self.notebooks.run_agent(
+            nb_summary = await self.notebooks.run_agent(
                 session_id,
                 code,
                 command,
@@ -735,6 +749,7 @@ class WorkspaceKernelBinding:
                 timeout_s=timeout_s,
                 location=location,
             )
+            return append_egress_blocked_hints(self._sandbox, nb_summary)
 
         def _stream(name: str, text: str) -> None:
             if name == "stdout":
@@ -913,7 +928,9 @@ class WorkspaceKernelBinding:
                     execution_id=execution_id,
                 )
             )
-        return format_cell_summary(result)
+        return append_egress_blocked_hints(
+            self._sandbox, format_cell_summary(result)
+        )
 
 
 def build_permission_gate(config: AppConfig) -> PermissionGate:
@@ -1956,6 +1973,8 @@ def build_app(
             notebook_store=(
                 NotebookStore(remembering.database) if remembering is not None else None
             ),
+            spawn_wrapper=binding.as_kernel_spawn_wrapper(),
+            sandbox=binding,
         )
         if tools is None:
             mounted: Sequence[Tool] = (
@@ -1994,6 +2013,11 @@ def build_app(
                 mounted = (
                     *mounted,
                     ManageEnvironmentsTool(supply=env_supply),
+                )
+            if binding.active and binding.effective_egress == EgressMode.PROXY:
+                mounted = (
+                    *mounted,
+                    RequestNetworkAccessTool(binding),
                 )
         else:
             mounted = tools
@@ -2143,45 +2167,40 @@ def _apply_bash_policy(
     binding: SandboxBinding,
     config: AppConfig,
 ) -> None:
-    """Re-register the foundation ``bash`` under :func:`bash_policy`'s answer.
-
-    **Re-registers the mounted object, which is the gated wrapper.** The
-    ``bash`` in *mounted* is a :class:`~omicsclaw.permission.GatedTool` by
-    the time this runs, so the search looks through the wrapper while the
-    ``replace`` puts the wrapper back. Handing ``replace`` the inner
-    :class:`~omicsclaw.tools.BashTool` instead would swap the one tool most
-    worth gating for an ungated one, and every test would stay green because
-    the tool still works — it would simply stop consulting the rule file and
-    the dangerous-command patterns.
-    """
+    """Re-register the foundation ``bash`` (and ``python``) under :func:`bash_policy` / :func:`python_policy`."""
     bash = next((tool for tool in mounted if _is_bash(tool)), None)
-    if bash is None:
-        return
-    current = registry.policy_for(bash.name)
-    chosen = bash_policy(binding, current, auto_approve=config.sandbox_auto_approve)
-    if chosen != current:
-        registry.replace(bash, chosen)
-        _log.info("bash runs without approval: sandbox has no network")
+    if bash is not None:
+        current = registry.policy_for(bash.name)
+        chosen = bash_policy(binding, current, auto_approve=config.sandbox_auto_approve)
+        if chosen != current:
+            registry.replace(bash, chosen)
+            _log.info("bash runs without approval: sandbox is isolated")
+
+    py_tool = next((tool for tool in mounted if _is_python_kernel(tool)), None)
+    if py_tool is not None:
+        current_py = registry.policy_for(py_tool.name)
+        chosen_py = python_policy(
+            binding, current_py, auto_approve=config.sandbox_auto_approve
+        )
+        if chosen_py != current_py:
+            registry.replace(py_tool, chosen_py)
+            _log.info("python runs without approval: sandbox is isolated")
 
 
 def _is_bash(tool: Tool) -> bool:
-    """Whether *tool* is the foundation ``bash``, however it is wrapped.
-
-    **Unwraps repeatedly, not once.** A single ``tool.inner`` was correct
-    while the gate was the only wrapper; mounting a hook chain makes
-    ``bash`` a :class:`~omicsclaw.permission.GatedTool` around a
-    :class:`~omicsclaw.hooks.HookedTool` around the
-    :class:`~omicsclaw.tools.BashTool`, and a one-level unwrap then
-    answers ``False`` — silently, so :func:`_apply_bash_policy` finds no
-    ``bash``, never calls :func:`~omicsclaw.entry.sandbox.bash_policy`,
-    and a sandboxed session asks for approval on every command with
-    nothing raised and no test failing on the tool's behaviour.
-    ``tests/entry/test_hook_wiring.py`` pins the two-wrapper case.
-    """
+    """Whether *tool* is the foundation ``bash``, however it is wrapped."""
     candidate = tool
     while isinstance(candidate, (GatedTool, HookedTool)):
         candidate = candidate.inner
     return isinstance(candidate, BashTool)
+
+
+def _is_python_kernel(tool: Tool) -> bool:
+    """Whether *tool* is the foundation ``python`` kernel tool, however wrapped."""
+    candidate = tool
+    while isinstance(candidate, (GatedTool, HookedTool)):
+        candidate = candidate.inner
+    return isinstance(candidate, PythonKernelTool)
 
 
 def _sandbox_state(binding: SandboxBinding) -> str:
@@ -2197,7 +2216,7 @@ async def open_app(
     hooks: Sequence[ToolHook] | None = None,
     sections: Sequence[Section] | None = None,
     on_mcp_change: StatusListener | None = None,
-    on_sandbox_change: ChangeListener | None = None,
+    on_sandbox_change: StatusListener | None = None,
     telemetry: Telemetry | None = None,
 ) -> AgentApp:
     """:func:`build_app`, with the MCP servers of ``.mcp.json`` connected first.

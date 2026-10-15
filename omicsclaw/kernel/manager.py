@@ -55,22 +55,32 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from .handles import HandleRegistry
 from .reaper import KernelReaper
-from .session import CellResult, FigureRef, KernelCallbacks, OutputLimits, SessionKernel
+from .session import (
+    CellResult,
+    FigureRef,
+    KernelCallbacks,
+    OutputLimits,
+    SessionKernel,
+    SpawnWrapper,
+)
 
 __all__ = [
     "CANCEL_GRACE_S",
     "PersistentKernelManager",
     "SessionState",
+    "SpawnWrapper",
     "SUMMARY_CELL_CODE",
     "format_cell_summary",
     "normalize_location",
 ]
+
 
 _log = logging.getLogger(__name__)
 
@@ -224,12 +234,16 @@ class PersistentKernelManager:
         reaper: KernelReaper | None = None,
         python: str | None = None,
         remote_runtime: Any = None,
+        spawn_wrapper: SpawnWrapper | None = None,
+        env_scrubber: Callable[[Mapping[str, str]], dict[str, str]] | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.limits = limits or OutputLimits()
         self.cell_timeout_s = float(cell_timeout_s)
         self.python = python
         self.remote_runtime = remote_runtime
+        self._spawn_wrapper = spawn_wrapper
+        self._env_scrubber = env_scrubber
         """The remote half, or ``None`` (the default — remote kernel
         locations then raise at the door). Anything with an async
         ``start(session_id, *, host, workspace, limits, on_figure,
@@ -567,6 +581,8 @@ class PersistentKernelManager:
                 limits=self.limits,
                 on_figure=_on_figure,
                 language=state.language,
+                spawn_wrapper=self._spawn_wrapper,
+                env_scrubber=self._env_scrubber,
             )
             await asyncio.to_thread(kernel.start)
         state.kernel = kernel

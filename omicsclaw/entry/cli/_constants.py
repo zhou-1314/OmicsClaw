@@ -182,6 +182,11 @@ ADDED_SLASH_COMMANDS: list[tuple[str, str]] = [
         "Print the URL that hands this session to the OmicsClaw App: "
         "/handoff [port]",
     ),
+    (
+        "/sandbox",
+        "Show sandbox status or allow a domain: "
+        "/sandbox [status|allow <domain>]",
+    ),
 ]
 """Commands this build has that the ported catalogue never listed.
 

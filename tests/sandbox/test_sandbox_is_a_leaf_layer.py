@@ -1,20 +1,16 @@
-"""Layering of ``omicsclaw/sandbox/``: a true leaf, imported only by ``entry``.
+"""``omicsclaw.sandbox`` is a leaf layer: imports only the standard library.
 
-*Down.* The package imports the standard library and nothing else — not
-even ``omicsclaw.tools``, whose ``BashEnvironment`` it satisfies
-structurally. That is the dependency direction the tool layer's seam was
-laid down for: the tool layer declares the shape, the sandbox fills it,
-and only the composition root knows both.
+Enforces three architectural boundaries:
 
-*Up.* No rebuild layer but ``entry`` imports ``omicsclaw.sandbox``: the
-engine and the tools stay ignorant that containers exist.
+*Downward.* ``omicsclaw/sandbox/`` imports only Python's standard library and
+nothing else inside ``omicsclaw``.
 
-*Sideways.* The old bubblewrap isolation under ``omicsclaw/autonomous/``
-belongs to the architecture being torn down; it is the natural thing to
-reuse and is forbidden.
+*Upward / Sideways.* Neither ``omicsclaw/tools/`` nor ``omicsclaw/kernel/`` nor
+any other lower layer imports ``omicsclaw.sandbox`` — only ``omicsclaw.entry``
+wires ``SandboxManager`` into ``BashTool`` and ``KernelManager``.
 
-The last check is behavioural: a subprocess drives the real paths through
-the fake CLI, then reports what :data:`sys.modules` holds.
+*Runtime.* Driving the sandbox layer (probing backends, starting the localhost
+egress proxy, building profiles) loads no forbidden package into ``sys.modules``.
 """
 
 from __future__ import annotations
@@ -28,7 +24,6 @@ import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _PACKAGE = _REPO_ROOT / "omicsclaw" / "sandbox"
-_SUPPORT = pathlib.Path(__file__).resolve().parent
 
 _OTHER_LAYERS = (
     "schema",
@@ -39,6 +34,7 @@ _OTHER_LAYERS = (
     "skills",
     "mcp",
     "memory",
+    "kernel",
 )
 
 _FORBIDDEN_AT_RUNTIME = (
@@ -54,6 +50,7 @@ _FORBIDDEN_AT_RUNTIME = (
     "omicsclaw.autonomous",
     "omicsclaw.memory",
     "omicsclaw.skills",
+    "omicsclaw.kernel",
     "docker",
     "pydantic",
     "requests",
@@ -155,6 +152,18 @@ def test_no_other_rebuild_layer_imports_the_sandbox(layer: str):
     assert not offenders, f"{offenders} import omicsclaw.sandbox"
 
 
+def test_kernel_layer_does_not_import_sandbox_entry_or_tools():
+    kernel_dir = _REPO_ROOT / "omicsclaw" / "kernel"
+    forbidden = ("omicsclaw.sandbox", "omicsclaw.entry", "omicsclaw.tools")
+    offenders = [
+        f"kernel/{path.name}:{name}"
+        for path in _module_paths(kernel_dir)
+        for name in _imported_modules(path)
+        if any(name == pkg or name.startswith(pkg + ".") for pkg in forbidden)
+    ]
+    assert not offenders, f"kernel layer has forbidden imports: {offenders}"
+
+
 def _probe(source: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", source],
@@ -171,22 +180,24 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, __SUPPORT_PARENT__)
-from sandbox_support_probe import install
+from omicsclaw.sandbox import (
+    EgressProxy,
+    SandboxConfig,
+    build_analysis_profile,
+    probe_sandbox_backend,
+)
 
-from omicsclaw.sandbox import SandboxManager
 
-
-async def main(root):
-    docker = install(Path(root) / "fake")
-    workspace = Path(root) / "ws"
-    workspace.mkdir()
-    manager = SandboxManager(docker.config(), start_daemon=None)
-    await manager.reap_orphans()
-    environment = await manager.create_with_retry(workspace)
-    result = await environment.run_bash("echo hi; exit 2", str(workspace), 30)
-    assert (result.output, result.exit_code) == ("hi\\n", 2), result
-    await manager.aclose()
+async def main(root: str) -> None:
+    ws = Path(root) / "ws"
+    ws.mkdir()
+    cfg = SandboxConfig()
+    _ = probe_sandbox_backend(cfg.backend)
+    _ = build_analysis_profile(ws, cfg)
+    proxy = EgressProxy(egress_groups=("pkg",))
+    await proxy.start()
+    assert proxy.port > 0
+    await proxy.stop()
 
 
 with tempfile.TemporaryDirectory() as root:
@@ -200,25 +211,8 @@ print(sorted(
 """
 
 
-def test_running_the_layer_loads_nothing_it_must_not(tmp_path):
-    """``tests/sandbox/_support.py`` imports ``omicsclaw.sandbox`` only, but
-    the test package's ``__init__`` must not be imported either, so the
-    helper is loaded as a standalone module from a copy."""
-    helper = tmp_path / "sandbox_support_probe.py"
-    helper.write_text(
-        (_SUPPORT / "_support.py")
-        .read_text(encoding="utf-8")
-        .replace(
-            '_FAKE = Path(__file__).resolve().parent / "fake_docker.py"',
-            f"_FAKE = Path({str(_SUPPORT / 'fake_docker.py')!r})",
-        )
-        + "\n\ndef install(root):\n    return FakeDocker.install(root)\n",
-        encoding="utf-8",
-    )
-    source = _BEHAVIOUR_PROBE.replace(
-        "__SUPPORT_PARENT__", repr(str(tmp_path))
-    ).replace("__FORBIDDEN__", repr(_FORBIDDEN_AT_RUNTIME))
-
+def test_running_the_layer_loads_nothing_it_must_not():
+    source = _BEHAVIOUR_PROBE.replace("__FORBIDDEN__", repr(_FORBIDDEN_AT_RUNTIME))
     result = _probe(source)
 
     assert result.returncode == 0, result.stderr
@@ -241,33 +235,70 @@ def test_the_public_surface_is_deliberate():
     assert sandbox.__all__ == sorted(sandbox.__all__), "keep the list sorted"
     assert all(hasattr(sandbox, name) for name in sandbox.__all__)
     assert set(sandbox.__all__) == {
-        "BootstrapOutcome",
-        "ChangeListener",
-        "CommandRunner",
-        "CommandTimedOut",
-        "Completed",
-        "Container",
-        "ContainerState",
-        "DaemonStarter",
-        "DockerEnvironment",
-        "EXCHANGE_DIR",
-        "ExecResult",
-        "LABEL",
-        "NAME_PREFIX",
-        "NETWORK_NONE",
-        "OWNER_LABEL",
-        "ReapReport",
+        "AnalysisProfile",
+        "AppContainerBackend",
+        "AppContainerPolicy",
+        "BackendName",
+        "BlockedEvent",
+        "BwrapBackend",
+        "CREDENTIAL_FILENAMES",
+        "CommandOutcome",
+        "DEFAULT_ALLOWED_DOMAINS",
+        "DEFAULT_DENY_READ_PATHS",
+        "DEFAULT_DENY_WRITE_GLOBS",
+        "EGRESS_DENYLIST",
+        "EGRESS_GROUPS",
+        "EgressDecision",
+        "EgressMode",
+        "EgressProxy",
+        "IsolationLevel",
+        "KernelSpawnAdapter",
+        "Level",
+        "Mount",
+        "NetnsBackend",
+        "PACKAGE_RC_FILES",
+        "ProbeReport",
+        "SandboxBackendName",
         "SandboxConfig",
         "SandboxConfigError",
         "SandboxError",
-        "SandboxInfo",
         "SandboxManager",
-        "SubprocessRunner",
-        "check_mount_path",
-        "desktop_starter",
-        "ensure_daemon_ready",
+        "SandboxMode",
+        "SandboxSession",
+        "SandboxStatus",
+        "SandboxUnavailable",
+        "SeatbeltBackend",
+        "UpstreamProxy",
+        "build_analysis_profile",
+        "build_appcontainer_policy",
+        "build_bwrap_argv",
+        "build_netns_argv",
+        "build_seatbelt_argv",
+        "domain_matches",
+        "escape_sbpl_literal",
+        "evaluate_egress",
+        "extract_blocked_host",
+        "format_egress_blocked_hint",
         "host_user",
-        "owner_is_dead",
-        "owner_token",
-        "run_arguments",
+        "is_ip_allowed",
+        "parse_upstream_proxy",
+        "probe_appcontainer",
+        "probe_bwrap",
+        "probe_netns",
+        "probe_sandbox_backend",
+        "probe_seatbelt",
+        "render_seatbelt_profile",
     }
+
+
+
+def test_envsupply_layer_does_not_import_sandbox_entry_or_tools():
+    envsupply_dir = _REPO_ROOT / "omicsclaw" / "envsupply"
+    forbidden = ("omicsclaw.sandbox", "omicsclaw.entry", "omicsclaw.tools", "omicsclaw.kernel")
+    offenders = [
+        f"envsupply/{path.name}:{name}"
+        for path in _module_paths(envsupply_dir)
+        for name in _imported_modules(path)
+        if any(name == pkg or name.startswith(pkg + ".") for pkg in forbidden)
+    ]
+    assert not offenders, f"envsupply layer has forbidden imports: {offenders}"

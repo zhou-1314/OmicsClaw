@@ -198,11 +198,15 @@ the standard library.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import os
+import shutil
 import signal
+import subprocess
+import sys
 import tempfile
-from collections.abc import Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -215,7 +219,36 @@ from ..context import report_progress, require_approval
 from ..function_tool import ToolArgumentError, decode_arguments, validate_arguments
 from .read import resolve_workspace
 
-CONTROL_CREDENTIAL_NAMES: frozenset[str] = frozenset({"OMICSCLAW_REMOTE_AUTH_TOKEN"})
+_POSIX = os.name == "posix"
+_KILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+CONTROL_CREDENTIAL_NAMES: frozenset[str] = frozenset({
+    "OMICSCLAW_REMOTE_AUTH_TOKEN",
+    "OMICSCLAW_API_KEY",
+    "LLM_API_KEY",
+    # Provider API Keys
+    "ANTHROPIC_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GOOGLE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "NVIDIA_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "VOLCENGINE_API_KEY",
+    "ZHIPU_API_KEY",
+    # Channel Secrets
+    "TELEGRAM_BOT_TOKEN",
+    "FEISHU_APP_SECRET",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "DINGTALK_CLIENT_SECRET",
+    "QQ_APP_SECRET",
+    # SSH Agent Socket
+    "SSH_AUTH_SOCK",
+})
 """Framework control-plane credentials no child process started here may inherit.
 
 Stored upper-case; :func:`without_control_credentials` compares names
@@ -234,6 +267,31 @@ def without_control_credentials(source: Mapping[str, str] | None = None) -> dict
         name: value for name, value in source.items()
         if name.upper() not in CONTROL_CREDENTIAL_NAMES
     }
+
+
+def _resolve_shell_argv(command: str) -> list[str]:
+    """Resolve the shell command line for the current host platform."""
+    if sys.platform != "win32":
+        return ["bash", "-c", command]
+    which_bash = shutil.which("bash")
+    if which_bash and "system32\\bash.exe" not in which_bash.lower():
+        return [which_bash, "-c", command]
+    local_app_data = os.environ.get("LOCALAPPDATA") or str(
+        Path.home() / "AppData" / "Local"
+    )
+    for candidate in (
+        Path(r"C:\Program Files\Git\bin\bash.exe"),
+        Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+        Path(local_app_data) / "Programs" / "Git" / "bin" / "bash.exe",
+        Path(local_app_data) / "Programs" / "Git" / "usr" / "bin" / "bash.exe",
+        Path(sys.prefix) / "Library" / "bin" / "bash.exe",
+        Path(sys.prefix) / "Library" / "usr" / "bin" / "bash.exe",
+    ):
+        if candidate.is_file():
+            return [str(candidate), "-c", command]
+    pwsh = shutil.which("powershell.exe") or "powershell.exe"
+    return [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+
 
 
 TOOL_NAME = "bash"
@@ -858,7 +916,8 @@ async def _locally(
                     _signal(process)
         output = _read_back(capture)
     finally:
-        os.unlink(capture)
+        with contextlib.suppress(OSError):
+            os.unlink(capture)
     return CommandOutcome(output=output, exit_code=_exit_status(code)), timed_out
 
 
@@ -884,11 +943,10 @@ async def _start(command: str, cwd: Path, sink: Any) -> asyncio.subprocess.Proce
     argument: no ``bash`` on ``PATH``, or a workspace root that is not
     there.
     """
+    argv = _resolve_shell_argv(command)
     try:
         return await asyncio.create_subprocess_exec(
-            "bash",
-            "-c",
-            command,
+            *argv,
             cwd=str(cwd),
             env=without_control_credentials(),
             stdout=sink,
@@ -920,10 +978,23 @@ def _signal(process: asyncio.subprocess.Process) -> None:
     :exc:`PermissionError` when none of its members may be signalled by
     this process, such as a setuid program the shell exec-ed into.
     """
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    if _POSIX:
+        try:
+            os.killpg(process.pid, _KILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3.0,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            with contextlib.suppress(OSError):
+                process.kill()
 
 
 async def _kill(process: asyncio.subprocess.Process) -> int:
@@ -942,7 +1013,8 @@ async def _kill(process: asyncio.subprocess.Process) -> int:
     try:
         return await asyncio.wait_for(process.wait(), _REAP_GRACE)
     except TimeoutError:
-        return -signal.SIGKILL
+        return -9
+
 
 
 _ABANDONED_SPAWNS: set[asyncio.Future[Any]] = set()

@@ -41,7 +41,7 @@ from typing import Any, Final
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.provider.config import resolve_config
 
-__all__ = ["DOCTOR_CHECKS", "doctor_report", "effective_model"]
+__all__ = ["DOCTOR_CHECKS", "build_doctor_report", "doctor_report", "effective_model"]
 
 DOCTOR_CHECKS: Final = (
     "provider",
@@ -104,7 +104,11 @@ def doctor_report(app: AgentApp) -> dict[str, Any]:
         "failure_count": failures,
         "warning_count": warnings,
         "checks": checks,
+        "sandbox": _sandbox_snapshot(app),
     }
+
+
+build_doctor_report = doctor_report
 
 
 def _check(name: str, status: str, summary: str, details: list[str] | None = None) -> dict[str, Any]:
@@ -189,24 +193,83 @@ def _mcp(app: AgentApp) -> dict[str, Any]:
     return _check("mcp", "ok", f"{len(statuses)} MCP server(s) configured.", details)
 
 
+def _sandbox_snapshot(app: AgentApp) -> dict[str, Any]:
+    binding = getattr(app, "sandbox", None)
+    auto_cfg = bool(getattr(getattr(app, "config", None), "sandbox_auto_approve", True))
+    if binding is not None and hasattr(binding, "snapshot"):
+        return binding.snapshot(auto_approve_configured=auto_cfg)
+    active = bool(getattr(binding, "active", False))
+    degraded = bool(getattr(binding, "degraded", False))
+    reason = str(getattr(binding, "unavailable", "") or "")
+    fix_hint = str(getattr(getattr(binding, "report", None), "fix_hint", "") or "")
+    return {
+        "backend": "none",
+        "level": "off",
+        "coverage": [],
+        "covers": [],
+        "egress": "open",
+        "active": active,
+        "degraded": degraded,
+        "reason": reason,
+        "fix_hint": fix_hint,
+        "summary": reason or "sandbox off",
+        "auto_approve_active": False,
+        "can_auto_approve": False,
+        "egress_groups": [],
+        "allowed_domains": [],
+        "persisted_domains": [],
+        "recent_blocked": [],
+    }
+
+
 def _sandbox(app: AgentApp) -> dict[str, Any]:
     binding = app.sandbox
+    snap = _sandbox_snapshot(app)
     if binding is not None and binding.active:
-        return _check("sandbox", "ok", "bash runs in the sandbox container.")
+        backend = getattr(binding, "backend", None)
+        backend_val = getattr(backend, "value", str(backend or "native"))
+        level = getattr(binding, "effective_level", getattr(binding, "level", None))
+        level_val = getattr(level, "value", str(level or "isolated"))
+        egress = getattr(binding, "effective_egress", getattr(binding, "egress", None))
+        egress_val = getattr(egress, "value", str(egress or "proxy"))
+        covers = getattr(binding, "covers", ("bash",))
+        details = [
+            f"backend: {backend_val}",
+            f"level: {level_val}",
+            f"egress: {egress_val}",
+            f"covers: {', '.join(covers) if covers else 'bash'}",
+        ]
+        if snap.get("fix_hint"):
+            details.append(f"hint: {snap['fix_hint']}")
+        res = _check(
+            "sandbox",
+            "ok",
+            f"OS sandbox active ({backend_val}, level={level_val}, egress={egress_val}).",
+            details,
+        )
+        res["sandbox"] = snap
+        return res
     if binding is not None and binding.degraded:
-        why = [binding.unavailable] if binding.unavailable else []
-        return _check(
+        why = [binding.unavailable] if getattr(binding, "unavailable", "") else []
+        fix_hint = getattr(getattr(binding, "report", None), "fix_hint", "")
+        if fix_hint:
+            why.append(f"hint: {fix_hint}")
+        res = _check(
             "sandbox",
             "warn",
             "A sandbox was requested but is not in use; bash runs on this machine.",
             why,
         )
-    return _check(
+        res["sandbox"] = snap
+        return res
+    res = _check(
         "sandbox",
         "info",
-        "No sandbox: bash runs on this machine. OMICSCLAW_SANDBOX=docker "
-        "puts it in a container.",
+        "No sandbox: bash runs on this machine. OMICSCLAW_SANDBOX=auto "
+        "enables the native OS sandbox.",
     )
+    res["sandbox"] = snap
+    return res
 
 
 def _memory(app: AgentApp) -> dict[str, Any]:

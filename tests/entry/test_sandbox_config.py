@@ -1,10 +1,4 @@
-"""Container resource settings and the code mounts of the sandbox ``bash`` runs in.
-
-The sandbox mounts this repository's ``omicsclaw/`` and ``skills/`` read-only,
-so ``bash`` runs the skill scripts of the repository this process runs from.
-Nothing else of the repository is mounted: its root holds ``.env`` and
-``.omicsclaw/``. ``sandbox_memory=auto`` leaves 20% of the machine to the host.
-"""
+"""Sandbox resource settings, native OS flags, and read-only code mounts."""
 
 from __future__ import annotations
 
@@ -12,30 +6,57 @@ from pathlib import Path
 
 import pytest
 
-from omicsclaw.entry.config import AppConfig, SandboxMode, mem_total_gib, resolve_app_config
+from omicsclaw.entry.config import (
+    AppConfig,
+    EgressMode,
+    SandboxBackendName,
+    SandboxMode,
+    mem_total_gib,
+    resolve_app_config,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 def _sandboxed(workspace: Path, **overrides) -> AppConfig:
-    return AppConfig(workspace=workspace, sandbox=SandboxMode.DOCKER, sandbox_image="omics:1", **overrides)
+    return AppConfig(workspace=workspace, sandbox=SandboxMode.AUTO, **overrides)
 
 
-def test_the_resource_settings_arrive_from_flags(tmp_path):
+def test_the_resource_and_native_settings_arrive_from_flags(tmp_path):
     config = resolve_app_config(
         [
             "--workspace", str(tmp_path),
-            "--sandbox-tmpfs-size", "8g", "--sandbox-shm-size", "16g", "--sandbox-pids-limit", "9999",
-            "--sandbox-nofile", "1024", "--sandbox-code-in-image", "true",
+            "--sandbox", "auto",
+            "--sandbox-backend", "bwrap",
+            "--sandbox-egress", "proxy",
+            "--sandbox-egress-groups", "pkg,literature",
+            "--sandbox-tmpfs-size", "8g",
+            "--sandbox-shm-size", "16g",
+            "--sandbox-pids-limit", "9999",
+            "--sandbox-nofile", "1024",
+            "--sandbox-code-in-image", "true",
         ],
         env={},
     )  # fmt: skip
+    assert config.sandbox is SandboxMode.AUTO
+    assert config.sandbox_backend is SandboxBackendName.BWRAP
+    assert config.sandbox_egress is EgressMode.PROXY
+    assert config.sandbox_egress_groups == ("pkg", "literature")
     assert (config.sandbox_tmpfs_size, config.sandbox_shm_size) == ("8g", "16g")
-    assert (config.sandbox_pids_limit, config.sandbox_nofile, config.sandbox_code_in_image) == (9999, 1024, True)
+    assert (
+        config.sandbox_pids_limit,
+        config.sandbox_nofile,
+        config.sandbox_code_in_image,
+    ) == (9999, 1024, True)
 
 
 def test_the_defaults(tmp_path):
     config = AppConfig(workspace=tmp_path)
+    assert config.sandbox is SandboxMode.OFF
+    assert config.sandbox_backend is SandboxBackendName.AUTO
+    assert config.sandbox_egress is EgressMode.PROXY
+    assert config.sandbox_egress_groups == ("pkg",)
+    assert config.sandbox_kernels is True
     assert config.sandbox_memory == "auto"
     assert (config.sandbox_tmpfs_size, config.sandbox_shm_size) == ("64g", "128g")
     assert (config.sandbox_pids_limit, config.sandbox_nofile) == (65536, 65536)
@@ -54,7 +75,12 @@ def test_auto_memory_is_eighty_percent_of_memtotal(tmp_path):
 
 def test_the_sandbox_config_carries_the_resource_settings(tmp_path):
     sandbox = _sandboxed(tmp_path, sandbox_shm_size="8g", sandbox_nofile=4096).sandbox_config()
-    assert (sandbox.shm_size, sandbox.nofile, sandbox.pids_limit, sandbox.tmpfs_size) == ("8g", 4096, 65536, "64g")
+    assert (sandbox.shm_size, sandbox.nofile, sandbox.pids_limit, sandbox.tmpfs_size) == (
+        "8g",
+        4096,
+        65536,
+        "64g",
+    )
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -92,8 +118,16 @@ def test_operator_mounts_come_first_and_are_not_repeated(tmp_path):
     repo = _repo(tmp_path)
     workspace = tmp_path / "work"
     workspace.mkdir()
-    config = _sandboxed(workspace, skills_dir=repo / "skills", sandbox_mounts=(Path("/ref"), repo / "skills"))
-    assert config.sandbox_config().read_only_mounts == (Path("/ref"), repo / "skills", repo / "omicsclaw")
+    config = _sandboxed(
+        workspace,
+        skills_dir=repo / "skills",
+        sandbox_mounts=(Path("/ref"), repo / "skills"),
+    )
+    assert config.sandbox_config().read_only_mounts == (
+        Path("/ref"),
+        repo / "skills",
+        repo / "omicsclaw",
+    )
 
 
 def test_this_repository_is_found_from_its_skills_directory(tmp_path):

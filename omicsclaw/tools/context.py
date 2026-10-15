@@ -232,6 +232,8 @@ class ApprovalDecision:
     reason: str = ""
     """Shown to the model when the answer is no, so a refusal is
     actionable rather than mysterious."""
+    scope: str | None = None
+    """Optional approval scope chosen by the user (e.g. once, session, always)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -743,7 +745,7 @@ async def require_approval(
                 reason=reason,
                 risk_level=effective.risk_level,
                 approval_mode=effective.approval_mode,
-                ask_every_time=_ASK_EVERY_TIME.get(),
+                ask_every_time=_ASK_EVERY_TIME.get() or effective.ask_every_time,
                 reason_shows_call=reason_shows_call,
             )
         )

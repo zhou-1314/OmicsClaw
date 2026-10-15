@@ -569,6 +569,7 @@ class GatedTool:
         return (
             resolution.source is not DecisionSource.POLICY
             or policy.approval_mode is ApprovalMode.DENY_UNLESS_TRUSTED
+            or policy.ask_every_time
         )
 
     @staticmethod

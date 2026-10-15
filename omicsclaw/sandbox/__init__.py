@@ -1,86 +1,125 @@
-"""``omicsclaw.sandbox`` — run the agent's shell commands in a container.
+"""Native OS sandboxing for OmicsClaw (Linux ``bwrap``/``netns``, macOS ``seatbelt``, Windows ``AppContainer``).
 
-Starts one Docker (or Docker-compatible) container per agent, with no
-network, no capabilities and the workspace bind-mounted at its own path,
-and hands back an environment whose ``run_bash`` the ``bash`` tool can be
-constructed with::
+Replaces the retired Docker container sandbox with lightweight, zero-image
+native OS isolation and a default-deny localhost HTTP/HTTPS ``CONNECT`` egress
+proxy.
 
-    from omicsclaw.sandbox import SandboxConfig, SandboxManager
-
-    manager = SandboxManager(SandboxConfig(image="omicsclaw/runtime:1"))
-    await manager.reap_orphans()
-    environment = await manager.create_with_retry(workspace)
-    bash = BashTool(workspace_boundary, environment=environment)
-    ...
-    await manager.aclose()
-
-Only ``bash`` runs inside the container. Standard library only; this
-package imports no other ``omicsclaw`` package.
+Pure standard-library leaf layer: imports only the Python standard library and
+nothing else inside ``omicsclaw``.
 """
 
+from __future__ import annotations
+
+from .appcontainer import (
+    AppContainerBackend,
+    AppContainerPolicy,
+    build_appcontainer_policy,
+    probe_appcontainer,
+)
+from .bwrap import BwrapBackend, build_bwrap_argv, probe_bwrap
 from .config import (
-    NETWORK_NONE,
+    BackendName,
+    CommandOutcome,
+    DEFAULT_ALLOWED_DOMAINS,
+    DEFAULT_DENY_READ_PATHS,
+    DEFAULT_DENY_WRITE_GLOBS,
+    EgressMode,
+    IsolationLevel,
+    Level,
+    Mount,
+    ProbeReport,
+    SandboxBackendName,
     SandboxConfig,
     SandboxConfigError,
-    check_mount_path,
+    SandboxError,
+    SandboxMode,
+    SandboxUnavailable,
     host_user,
 )
-from .container import (
-    EXCHANGE_DIR,
-    LABEL,
-    NAME_PREFIX,
-    OWNER_LABEL,
-    Container,
-    ContainerState,
-    owner_token,
-    run_arguments,
+from .egress import (
+    BlockedEvent,
+    EGRESS_DENYLIST,
+    EGRESS_GROUPS,
+    EgressDecision,
+    EgressProxy,
+    UpstreamProxy,
+    domain_matches,
+    evaluate_egress,
+    extract_blocked_host,
+    format_egress_blocked_hint,
+    is_ip_allowed,
+    parse_upstream_proxy,
 )
-from .daemon import DaemonStarter, desktop_starter, ensure_daemon_ready
-from .environment import DockerEnvironment, ExecResult
 from .manager import (
-    BootstrapOutcome,
-    ChangeListener,
-    ReapReport,
-    SandboxInfo,
+    KernelSpawnAdapter,
     SandboxManager,
-    owner_is_dead,
+    SandboxSession,
+    SandboxStatus,
+    probe_sandbox_backend,
 )
-from .runner import (
-    CommandRunner,
-    CommandTimedOut,
-    Completed,
-    SandboxError,
-    SubprocessRunner,
+from .netns import NetnsBackend, build_netns_argv, probe_netns
+from .profiles import (
+    AnalysisProfile,
+    CREDENTIAL_FILENAMES,
+    PACKAGE_RC_FILES,
+    build_analysis_profile,
+    escape_sbpl_literal,
+    render_seatbelt_profile,
 )
+from .seatbelt import SeatbeltBackend, build_seatbelt_argv, probe_seatbelt
 
 __all__ = [
-    "BootstrapOutcome",
-    "ChangeListener",
-    "CommandRunner",
-    "CommandTimedOut",
-    "Completed",
-    "Container",
-    "ContainerState",
-    "DaemonStarter",
-    "DockerEnvironment",
-    "EXCHANGE_DIR",
-    "ExecResult",
-    "LABEL",
-    "NAME_PREFIX",
-    "NETWORK_NONE",
-    "OWNER_LABEL",
-    "ReapReport",
+    "AnalysisProfile",
+    "AppContainerBackend",
+    "AppContainerPolicy",
+    "BackendName",
+    "BlockedEvent",
+    "BwrapBackend",
+    "CREDENTIAL_FILENAMES",
+    "CommandOutcome",
+    "DEFAULT_ALLOWED_DOMAINS",
+    "DEFAULT_DENY_READ_PATHS",
+    "DEFAULT_DENY_WRITE_GLOBS",
+    "EGRESS_DENYLIST",
+    "EGRESS_GROUPS",
+    "EgressDecision",
+    "EgressMode",
+    "EgressProxy",
+    "IsolationLevel",
+    "KernelSpawnAdapter",
+    "Level",
+    "Mount",
+    "NetnsBackend",
+    "PACKAGE_RC_FILES",
+    "ProbeReport",
+    "SandboxBackendName",
     "SandboxConfig",
     "SandboxConfigError",
     "SandboxError",
-    "SandboxInfo",
     "SandboxManager",
-    "SubprocessRunner",
-    "check_mount_path",
-    "desktop_starter",
-    "ensure_daemon_ready",
+    "SandboxMode",
+    "SandboxSession",
+    "SandboxStatus",
+    "SandboxUnavailable",
+    "SeatbeltBackend",
+    "UpstreamProxy",
+    "build_analysis_profile",
+    "build_appcontainer_policy",
+    "build_bwrap_argv",
+    "build_netns_argv",
+    "build_seatbelt_argv",
+    "domain_matches",
+    "escape_sbpl_literal",
+    "evaluate_egress",
+    "extract_blocked_host",
+    "format_egress_blocked_hint",
     "host_user",
-    "owner_is_dead",
-    "owner_token",
-    "run_arguments",
+    "is_ip_allowed",
+    "parse_upstream_proxy",
+    "probe_appcontainer",
+    "probe_bwrap",
+    "probe_netns",
+    "probe_sandbox_backend",
+    "probe_seatbelt",
+    "render_seatbelt_profile",
 ]

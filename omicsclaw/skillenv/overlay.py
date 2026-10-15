@@ -23,20 +23,29 @@ directory.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
-import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import subprocess
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt  # type: ignore[import-not-found]
+
 
 from omicsclaw.tools.builtin.bash import spawn_group_leader
 
@@ -468,10 +477,24 @@ class LocalCommandRunner:
 
 
 def _kill_group(process: asyncio.subprocess.Process) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3.0,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            with contextlib.suppress(OSError):
+                process.kill()
+
 
 
 # ---- building one overlay --------------------------------------------------------------------
@@ -729,7 +752,7 @@ class OverlayBuilder:
             if lock is not None:
                 if not self.finished(key) and directory.exists():
                     shutil.rmtree(directory, ignore_errors=True)
-                fcntl.flock(lock, fcntl.LOCK_UN)
+                _unlock_fd(lock)
                 os.close(lock)
             shutil.rmtree(work, ignore_errors=True)
 
@@ -926,15 +949,27 @@ async def _lock(path: Path, timeout: float) -> int:
     try:
         while True:
             try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:  # pragma: no cover - Windows
+                    msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
                 return handle
-            except BlockingIOError:
+            except (BlockingIOError, OSError):
                 if loop.time() >= deadline:
                     raise _LockTimeout() from None
                 await asyncio.sleep(0.05)
     except BaseException:
         os.close(handle)
         raise
+
+
+def _unlock_fd(handle: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    else:  # pragma: no cover - Windows
+        with contextlib.suppress(OSError):
+            msvcrt.locking(handle, msvcrt.LK_UNLCK, 1)
+
 
 
 def _verify_code(modules: Sequence[str]) -> str:

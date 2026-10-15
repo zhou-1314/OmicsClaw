@@ -36,6 +36,7 @@ reading the exchange is answered only once somebody observes it again.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import OrderedDict
@@ -65,6 +66,7 @@ __all__ = [
     "TurnUsage",
     "abort_chat",
     "answer_permission",
+    "resolve_permission",
     "change_permission_profile",
 ]
 
@@ -337,7 +339,7 @@ class DesktopInteractions:
         return DEFAULT_PERMISSION_PROFILE
 
     def _answers_without_a_card(self, session_id: str, request: ApprovalRequest) -> bool:
-        if request.ask_every_time:
+        if request.ask_every_time or request.tool_name == "request_network_access":
             return False
         if session_id in self._full_access:
             self._full_access.move_to_end(session_id)
@@ -353,6 +355,8 @@ class DesktopInteractions:
         """
         if request is None:
             return False
+        if request.tool_name == "request_network_access":
+            return True
         return bool(self._app.can_remember_approval(request))
 
     # ---- approval requests shown on the stream --------------------------
@@ -490,11 +494,15 @@ async def answer_permission(
         return {"ok": False, "request_id": request_id, "status": "resolved"}
 
     pending = interactions.pending_approval(request_id)
+    is_network_grant = (
+        pending is not None and pending.request.tool_name == "request_network_access"
+    )
     if behavior == "deny":
         decision = ApprovalDecision(approved=False, reason=message or DENIED_REASON)
         scope = "once"
+    elif is_network_grant:
+        decision = ApprovalDecision(approved=True, scope=scope)
     else:
-        decision = ApprovalDecision(approved=True)
         if scope == "session" and (
             pending is None or pending.request.ask_every_time
         ):
@@ -503,19 +511,30 @@ async def answer_permission(
             pending is None or not interactions.can_remember(pending.request)
         ):
             scope = "once"
+        decision = ApprovalDecision(approved=True, scope=scope)
 
     if not handle.approvals.settle(request_id, decision):
         interactions.forget_approval(request_id)
         return {"ok": False, "request_id": request_id, "status": "resolved"}
     interactions.forget_approval(request_id)
     remembered: str | None = None
-    if scope == "session" and pending is not None:
-        interactions.grant(handle.session_id, pending.request.tool_name)
-        interactions.settle_granted(handle.session_id, pending.request.tool_name)
-    if scope == "always" and pending is not None:
-        remembered = _remember(app, pending.request)
-        if remembered is None:
-            scope = "once"
+    if not is_network_grant:
+        if scope == "session" and pending is not None:
+            interactions.grant(handle.session_id, pending.request.tool_name)
+            interactions.settle_granted(handle.session_id, pending.request.tool_name)
+        if scope == "always" and pending is not None:
+            remembered = _remember(app, pending.request)
+            if remembered is None:
+                scope = "once"
+    elif scope == "always" and pending is not None:
+        try:
+            decoded_args = json.loads(pending.request.arguments)
+            if isinstance(decoded_args, Mapping):
+                dom = str(decoded_args.get("domain", "") or "").strip().lower().rstrip(".")
+                if dom:
+                    remembered = dom
+        except Exception:  # noqa: BLE001
+            pass
     return {
         "ok": True,
         "request_id": request_id,
@@ -524,6 +543,9 @@ async def answer_permission(
         "session_id": handle.session_id,
         "remembered_pattern": remembered,
     }
+
+
+resolve_permission = answer_permission
 
 
 def _remember(app: AgentApp, request: ApprovalRequest) -> str | None:
@@ -549,13 +571,19 @@ def _permission_decision(
     if not isinstance(decision, Mapping):
         raise DesktopIngressError("invalid_decision")
     behavior = decision.get("behavior")
+    scope = decision.get("scope")
+    if behavior in ("allow_once", "allow_session", "allow_always"):
+        if scope is None:
+            scope = "once" if behavior == "allow_once" else behavior.removeprefix("allow_")
+        behavior = "allow"
     if behavior not in PERMISSION_BEHAVIORS:
         raise DesktopIngressError("invalid_decision")
-    scope = decision.get("scope")
     if scope is None:
         scope = "once"
     if not isinstance(scope, str):
         raise DesktopIngressError("invalid_decision")
+    if scope in ("allow_once", "allow_session", "allow_always"):
+        scope = "once" if scope == "allow_once" else scope.removeprefix("allow_")
     if scope not in PERMISSION_SCOPES:
         raise DesktopIngressError("unsupported_scope")
     message = decision.get("message")

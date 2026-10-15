@@ -48,6 +48,7 @@ from .pins import (
     ENV_ROOT,
     KERNEL_BASE_PACKAGES,
     PYTHON_VERSION,
+    without_control_credentials,
 )
 
 __all__ = [
@@ -254,8 +255,9 @@ def default_install_runner(
     *,
     on_line: Callable[[str], None] | None = None,
     timeout: float = ENV_INSTALL_TIMEOUT_S,
+    env_provider: Callable[[], dict[str, str]] | None = None,
 ) -> int:
-    """Run the script under ``sh``, streaming merged output line by line.
+    r"""Run the script under ``sh``, streaming merged output line by line.
 
     stdout and stderr share one pipe on purpose: uv's useful progress
     goes to stderr, and a caller streaming phases wants both in order.
@@ -268,11 +270,13 @@ def default_install_runner(
     resumable, which is what makes killing on timeout safe: the
     script's idempotence heals the partial run on retry.
     """
+    scrubber = env_provider or without_control_credentials
     process = subprocess.Popen(
         list(argv),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=scrubber(),
     )
     lines: queue.SimpleQueue[str | None] = queue.SimpleQueue()
 

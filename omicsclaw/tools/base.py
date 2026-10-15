@@ -211,6 +211,9 @@ class ToolPolicy:
     touches_network: bool = False
     """Claims to open a network connection."""
 
+    ask_every_time: bool = False
+    """Always require explicit per-call human approval; never satisfy via session tool grant."""
+
     prompts_for_itself: bool = False
     """Claims to call :func:`~omicsclaw.tools.context.require_approval` inside
     its own ``execute``, with a prompt describing the actual effect.
