@@ -284,7 +284,7 @@ def measure(messages, tools, budget, *, counter=None) -> BudgetReport
 | `repair_tool_pairs(messages, *, placeholder=MISSING_TOOL_RESULT)` | 双向修复：丢弃找不到调用的 tool 结果；为没有结果的调用在其后插入 `Role.TOOL` 占位消息 |
 | `drop_unanswered_calls(messages)` | 去掉没被紧随其后的 tool 结果回答的调用，不补占位。一条结果回答一个调用；那一轮的文字、思考和已答调用留着；去掉之后既没有调用、文字也只剩空白（按 `str.strip()`）的一轮整条去掉 |
 | `split_head_tail(messages, *, pinned, min_tail)` | 切成 `(pinned, head, tail)`；pin 之后的消息不超过 `min_tail` 条时 head 为空 |
-| `fit_to_budget(messages, budget, *, pinned=0, min_tail, target_tokens=None)` | 从 head 最旧处逐条剥离直到放得下，然后修复工具对 |
+| `fit_to_budget(messages, budget, *, pinned=0, min_tail, target_tokens=None)` | 从 head 里最旧的一条开始逐条丢，不超过目标就停，然后修复工具对。不丢的有：head 开头的 system 消息、压缩摘要、head 里最后一条请求（tail 的第一条本身就是请求时除外），以及 tail 接着应答的那一轮工具调用。较早的请求随它最后一条 assistant 回复一起丢。不丢的这些加上 tail 就超过目标时，结果高于目标（[progressive-compactor.md](progressive-compactor.md) §5.3） |
 | `emergency_fit(messages, budget, *, pinned=0)` | 无条件保留 pin 之后第一条（任务消息），其余从新到旧贪心装入，装不下的跳过而非截短 |
 | `render_for_summary(messages)` | 把消息拍平成给摘要模型看的纯文本：`[tool_result <id>]: …` / `[<role>]: …` / `[tool_call <name>(<id>)]: <arguments>` |
 

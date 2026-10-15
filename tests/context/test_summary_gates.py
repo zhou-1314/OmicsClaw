@@ -37,7 +37,7 @@ from omicsclaw.context.compaction import compact
 from omicsclaw.context.summary import is_summary_message
 from omicsclaw.context.tokens import estimate_messages_tokens
 from omicsclaw.context.transcript import fit_to_budget
-from omicsclaw.schema import Message
+from omicsclaw.schema import Message, ToolCall
 
 
 class _Counting:
@@ -185,10 +185,11 @@ def test_the_fallback_still_keeps_the_pinned_prefix_and_the_tail():
     """The companion to the tightening: it trims, it does not truncate.
 
     A fallback aimed at a stricter target could satisfy the test above
-    by throwing the conversation away. It peels the oldest compactible
-    messages one at a time instead (``compaction.go:117-131``), so the
-    pinned prefix is the same object it went in as and ``min_tail``
-    recent messages survive verbatim.
+    by throwing the conversation away. It drops the oldest droppable
+    messages one at a time instead (the order is in the docstring of
+    :func:`~omicsclaw.context.transcript.fit_to_budget`), so the pinned
+    prefix is the same object it went in as and ``min_tail`` recent
+    messages survive verbatim.
     """
     messages = _history()
     budget = _budget_at(messages, 0.85)
@@ -199,6 +200,61 @@ def test_the_fallback_still_keeps_the_pinned_prefix_and_the_tail():
 
     assert result[0] is messages[0]
     assert result[-6:] == tuple(messages[-6:])
+
+
+def _rounds(tag: str, count: int) -> list[Message]:
+    """*count* tool rounds of one call each, with a 40-character result."""
+    out: list[Message] = []
+    for index in range(count):
+        call = ToolCall(id=f"{tag}{index}", name="bash")
+        out.append(Message.assistant("working", tool_calls=(call,)))
+        out.append(Message.tool(tool_call_id=call.id, content="o" * 40))
+    return out
+
+
+@pytest.mark.parametrize(
+    ("label", "summarizer"),
+    [
+        ("absent", None),
+        ("raises", _Raising()),
+        ("timed out", _Counting("")),
+        ("ignores the format", _Counting("Sure! Here is what happened.")),
+        (
+            "larger than the budget",
+            _Counting(
+                "## Anchors\n\n### User Intent\nx\n\n## Summary\n" + "m" * 40_000
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("ratio", [0.75, 0.88], ids=["soft", "full"])
+def test_every_degraded_compaction_keeps_the_request_in_view(
+    label: str, summarizer, ratio: float
+):
+    """Whatever made the compaction fall back, the request in flight is sent.
+
+    An earlier exchange of nine rounds, then the request with four
+    rounds of its own, at the soft tier and at the full tier.
+    """
+    request = Message.user("request two")
+    messages = [
+        Message.system("sys"),
+        Message.user("request one"),
+        *_rounds("a", 9),
+        Message.assistant("answer one"),
+        request,
+        *_rounds("b", 4),
+    ]
+    budget = _budget_at(messages, ratio)
+
+    result, record, _ = asyncio.run(
+        compact(messages, budget, summarizer=summarizer, pinned=1)
+    )
+
+    assert record.degraded and record.summarized == 0
+    assert len(result) < len(messages)
+    assert any(m is request for m in result)
+    assert not any(is_summary_message(m) for m in result)
 
 
 def test_the_emergency_tier_never_asks_a_model():

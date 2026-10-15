@@ -196,10 +196,10 @@ class PlanInjector:
         latest. A nudge sent before a question is not sent again after
         it.
 
-        A compaction that truncates without summarizing can drop the
-        request and leave no summary. That is an emergency truncation, or
-        the fallback the soft and full tiers take when the summarizer
-        fails. The count then runs on into an earlier exchange.
+        An emergency truncation drops messages without summarizing and
+        can drop the request with them. The count then runs on into an
+        earlier exchange. The fallback the soft and full tiers take when
+        the summarizer fails keeps the request.
 
         Four conditions, and the first three are all ways of saying "this
         would be noise":
