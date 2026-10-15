@@ -11,122 +11,81 @@ tags:
 - hub-genes
 ---
 
-# bulkrna-coexpression
+# Bulk RNA-seq Weighted Gene Co-expression Network Analysis (`bulkrna-coexpression`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Load when discovering bulk gene co-expression modules and hub genes with R WGCNA. Skip direct expression contrasts (use bulkrna-de), existing-gene-list PPI lookup (use bulkrna-ppi-network), or single-cell networks (use sc-grn).
+Choose the co-expression network construction strategy based on cohort size, outlier sensitivity, and regulatory directionality:
 
-## Use from a step
+| Biological Goal & Cohort Setup | Network Type & Similarity | Upstream Package | Why |
+|---|---|---|---|
+| **Discovering signed functional modules** where up- and down-regulated pathways remain separated ($N \ge 15$ samples) | Signed network ($a_{ij} = \left(\frac{1 + \text{cor}(x_i, x_j)}{2}\right)^\beta$, default $\beta \approx 12$) | `PyWGCNA` or R `WGCNA::blockwiseModules(networkType="signed")` | Preserves correlation sign so negatively correlated genes are not merged into the same module |
+| **Cohorts with occasional sample/expression outliers** | Biweight midcorrelation (`corType="bicor"`) | R `WGCNA` (`bicor`, `maxPOutliers=0.05`) | Robust median-based correlation that prevents single outlier samples from driving false co-expression |
+| **Unsupervised module-trait association & hub gene ranking** | Module Eigengene (ME) correlation + $k_{\text{ME}}$ | `PyWGCNA` / R `WGCNA::signedKME` | Summarizes each module by its first principal component (ME) and scores intramodular hubs by $\text{cor}(x_g, \text{ME}_m)$ |
+| **Small sample cohorts ($8 \le N < 15$) or rapid exploratory screening** | Soft-thresholded adjacency + hierarchical clustering | `scipy.cluster.hierarchy` / `bulkrna-coexpression` kernel | Lightweight scale-free topology selection and module eigengene hub scoring |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Idiomatic `PyWGCNA` / Scale-Free Soft-Thresholding Workflow
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill("bulkrna-coexpression")
-result = library.analyze(data, power=6, min_module_size=10)
-write_output(result, "tables/result.csv")
-write_output(library.module_sizes_figure(result), "figures/result.png")
+import numpy as np
+import pandas as pd
+import PyWGCNA
+
+# 1. Load variance-stabilized or log2(TPM + 1) expression (genes x samples -> transpose to samples x genes)
+expr = pd.read_csv("data/vst_counts.csv", index_col=0)
+# Keep top 5,000 most variable genes across samples to reduce noise and memory
+mad = (expr.sub(expr.median(axis=1), axis=0)).abs().median(axis=1)
+top_expr = expr.loc[mad.nlargest(5000).index].T  # samples x genes
+
+# 2. Initialize and run PyWGCNA (soft-thresholding, TOM, dynamic tree cut, module eigengenes)
+pywgcna = PyWGCNA.WGCNA(
+    name="bulk_cohort",
+    species="homo sapiens",
+    geneExp=top_expr,
+    outputPath="intermediate/",
+    save=False,
+)
+pywgcna.preprocess()
+pywgcna.findModules()
+
+# 3. Extract module assignments and module eigengenes
+modules_df = pywgcna.datExpr.var[["dynamicColors", "moduleColors"]]
+me_df = pywgcna.MEs
 ```
 
-Read expression and metadata with `read_input` before calling the library.
-`examples/example_step.py` constructs a small synthetic dataset and checks
-its results through the step runner and fresh-kernel replay.
+### Pattern B: Lightweight Soft-Threshold & Hub-Gene Helper via `use_skill("bulkrna-coexpression")`
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `analyze(data: pd.DataFrame, *, power: int | None=None, min_module_size: int=10, random_state: int=54321) -> pd.DataFrame`
-
-Return R WGCNA gene-module assignments, leaving expression unchanged.
-
-:param data: Nonnegative feature-by-sample expression; provide normalized data on the intended correlation scale.
-:param power: CLI default None selects the soft threshold; set a positive integer to override it.
-:param min_module_size: CLI default 10 genes per module.
-:param random_state: WGCNA blockwiseModules default seed 54321; fixes its preclustering.
-:returns: Gene/module DataFrame with diagnostics, hub genes and threshold fit in attrs.
-:raises ValueError: Input, sample count, power or module size is invalid.
-:raises ImportError: R WGCNA or Matrix is unavailable.
-:raises RuntimeError: R analysis fails.
-
-### `run_info(data: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return WGCNA method diagnostics and summary.
-
-:param data: Result from analyze.
-:param keep: Keep diagnostics by default; the CLI passes False.
-:returns: Independent diagnostics dictionary.
-:raises ValueError: No WGCNA diagnostics are present.
-
-### `threshold_fit(data: pd.DataFrame) -> pd.DataFrame`
-
-Return the signed scale-free fit for each tested soft threshold.
-
-:param data: Result from analyze.
-:returns: Table containing power, r_squared and mean_connectivity.
-:raises ValueError: No fit table is stored.
-
-### `hub_genes(data: pd.DataFrame) -> pd.DataFrame`
-
-Return the highest absolute module-membership genes per non-grey module.
-
-:param data: Result from analyze.
-:returns: Table with gene, module and kME columns.
-:raises ValueError: No hub table is stored.
-
-### `module_sizes_figure(data: pd.DataFrame)`
-
-Plot assignment counts, including grey unassigned genes.
-
-:param data: Gene/module table from analyze.
-:returns: Matplotlib Figure.
-:raises ValueError: The module column is missing.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-The function library returns DataFrames and Figures. The CLI loads the
-same library and owns reports and file writes. R runs in a temporary
-directory using Matrix Market, feature/sample identifiers and metadata.
-No R intermediate is a permanent CLI output.
-
-## Gotchas
-
-- `analyze` requires R WGCNA and Matrix, at least eight samples, and finite nonnegative expression. Cohorts with fewer than 15 samples emit a warning.
-- `analyze(power=None)` selects a soft threshold; an explicit power is honored. Integer matrices are converted to double for WGCNA.
-- `run_info()["filtered_genes"]` lists genes removed by WGCNA quality checks. Grey is unassigned; module IDs are color strings.
-- `hub_genes` ranks absolute module membership within each non-grey module. This is correlation evidence, not proof of regulation.
-- `threshold_fit` reports signed scale-free R-squared and connectivity. The correlation analysis uses the supplied expression scale; normalize upstream as needed.
-- `analyze(random_state=54321)` preserves the WGCNA default seed and uses one R thread. No Python module-detection fallback is used.
-
-## Inputs and outputs
-
-Expression CSV with genes in the first column and samples in the remaining columns. The API takes that gene column as the DataFrame index.
-
-CLI outputs:
-
-- `tables/module_assignments.csv`
-- `tables/hub_genes.csv`
-- `tables/threshold_fit.csv`
-- `figures/scale_free_fit.png`
-- `figures/module_sizes.png`
-- `figures/module_dendrogram.png` (assignment overview, not a dendrogram)
-- `report.md`, `result.json`
-- `reproducibility/commands.sh`
-
-## CLI
-
-```bash
-python skills/bulkrna/bulkrna-coexpression/bulkrna_coexpression.py --demo --output /tmp/bulkrna_coexpression_demo
+```python
+# Calling use_skill("bulkrna-coexpression") auto-injects kernel.py helpers into the python kernel:
+fit_df, best_power = select_soft_threshold(expr, powers=range(1, 16), r2_cutoff=0.85)
+modules_df = detect_coexpression_modules(expr, power=best_power, min_module_size=15)
+hubs_df = compute_kme_hubs(expr, modules_df, top_n=10)
 ```
 
-Run the script with `--help` for real-input arguments.
+## 3. Output Format & Verification Contract
 
-## See also
+- **Soft-Threshold Scale-Free Fit** (`tables/threshold_fit.csv`):
+  - Columns: `power`, `r_squared` (scale-free topology $R^2$), `mean_connectivity`.
+- **Module Assignments** (`tables/module_assignments.csv`):
+  - Columns: `gene`, `module` (color or module label; `"grey"` denotes unassigned background genes).
+- **Hub Genes Table** (`tables/hub_genes.csv`):
+  - Columns: `gene`, `module`, `kME` (correlation with module eigengene $\text{ME}_m$, sorted descending by $|k_{\text{ME}}|$ per non-grey module).
+- **Verification Invariants**:
+  - Every input gene passed to module detection is accounted for in `tables/module_assignments.csv`.
+  - All `kME` values lie strictly in $[-1, 1]$ and `r_squared` lies in $[0, 1]$.
 
-- `references/parameters.md`
-- `references/methodology.md`
-- `references/output_contract.md`
+## 4. Gotchas & Troubleshooting
+
+1. **Minimum Sample Size ($N \ge 15$ Recommended)**:
+   - Pairwise gene-gene correlations across $< 15$ bulk RNA-seq samples are noisy and prone to spurious scale-free fits. Never run WGCNA on $N < 8$ samples; for smaller cohorts, use differential expression (`bulkrna-de`) or curated PPI networks (`bulkrna-ppi-network`).
+2. **Pre-Filter Low-Expression and Low-Variance Genes**:
+   - Including 20,000+ genes with near-zero counts inflates the $G \times G$ Topological Overlap Matrix (TOM) to gigabytes of RAM and introduces zero-variance correlation `NaN`s. Always filter to expressed genes and retain the top $3,000\text{--}8,000$ genes by Median Absolute Deviation (MAD) or variance.
+3. **Normalize and Variance-Stabilize Before Co-expression**:
+   - Computing Pearson correlation on raw unnormalized counts measures library-size differences rather than biological co-regulation. Always transform counts using `DESeq2::vst`, `rlog`, or $\log_2(\text{TPM} + 1)$ first.
+4. **Grey Module Interpretation**:
+   - The `"grey"` module is a catch-all bin for genes that do not cluster into any coherent co-expression module. Always exclude `"grey"` before running downstream pathway enrichment (`bulkrna-enrichment`) or ranking `kME` hub genes.
 
 ## Dependencies
 

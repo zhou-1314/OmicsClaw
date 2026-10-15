@@ -264,11 +264,7 @@ assembly、tool registry、policy、transcript storage"），也是这份代码�
 
 **Q5 —— `StreamChunk.finish_reason` 修订：现在就收。** 见 §5。
 
-**Q6 —— `max_turns` 默认值：50。** harness9 用 500，是为长程编码任务调的。
-legacy 循环用 `OMICSCLAW_MAX_TOOL_ITERATIONS=20`，而
-`docs/evaluation/cross-agent-benchmark-guide.md` 记录了 20 太低——它会卡死
-30 轮量级的 benchmark 任务。50 越过了这个已知的失败点，又不至于在首个
-版本就放任 500 轮的失控。可配置；本层不读任何环境变量。
+**Q6：`max_turns` 默认值为 50。** 该值限制一次运行的模型调用次数，可由部署配置覆盖；本层不读环境变量。
 
 ## 5. 本步唯一收下的 schema 修订
 

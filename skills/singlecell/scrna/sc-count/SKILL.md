@@ -14,109 +14,83 @@ tags:
 - kb-python
 ---
 
-# sc-count
+# Single-Cell RNA-seq Read Counting & Matrix Import (`sc-count`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
 
-This is CLI_ONLY: counting needs external tools and reference indexes.
+Select a read-to-UMI counting backend or import path depending on library chemistry, compute budget, and whether splicing (velocyto) matrices are needed:
 
-```python
-from skills._sdk.notebook import run_cli
+| Backend (`--method` / `method=`) | Upstream Tool | Alignment Mode | Typical Runtime & RAM | Best Used When |
+|---|---|---|---|---|
+| **Cell Ranger** (`method="cellranger"`) | `cellranger count` | Splice-aware STAR alignment (`10x` official pipeline) | ~2–4 hr, 32–64 GB RAM | Official 10x Chromium clinical/production pipelines requiring web summary HTML & BAM |
+| **STARsolo** (`method="starsolo"`) | `STAR --soloType CB_UMI_Simple` | Full splice-aware genome alignment | ~15–30 min, 32 GB RAM | Fast drop-in replacement for Cell Ranger; natively emits `Gene`, `GeneFull`, and `Velocyto` (spliced/unspliced) matrices |
+| **SimpleAF / Alevin-fry** (`method="simpleaf"`) | `simpleaf quant` (`piscem` + `alevin-fry`) | Lightweight mapping (`splici` index) | ~5–10 min, 8–16 GB RAM | Rapid USA-mode (Unspliced/Spliced/Ambiguous) quantification on workstation hardware |
+| **kb-python** (`method="kb_python"`) | `kb count` (`kallisto` + `bustools`) | Pseudoalignment (`--workflow standard` or `lamanno`) | ~5–10 min, 4–16 GB RAM | High-throughput multi-sample FASTQ processing or low-memory environments |
+| **Pre-counted Import** | `scanpy.read_10x_h5` / `read_10x_mtx` | Direct matrix ingestion | < 10 sec | `filtered_feature_bc_matrix` already exists on disk and needs canonical `AnnData` packaging |
 
-run_cli("sc-count", "--input", "data/sample_R1.fastq.gz",
-        "--read2", "data/sample_R2.fastq.gz", "--method", "starsolo",
-        "--reference", "/refs/star", "--chemistry", "10xv3",
-        "--whitelist", "/refs/barcodes.tsv",
-        inputs=["data/sample_R1.fastq.gz", "data/sample_R2.fastq.gz",
-                "/refs/barcodes.tsv"])
-```
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-Record the reference index version in the module README as well. The demo
-standardizes PBMC3k raw counts; it does not align or count reads. There is
-no `_api.py` for this skill.
-
-## When to use
-
-The user has FASTQ files (or pre-existing tool output directories) and
-wants per-cell counts in OmicsClaw's canonical AnnData contract.  Four
-backends share one CLI: `cellranger`, `starsolo`, `simpleaf`,
-`kb_python`. When passed a matching already-counted directory the skill
-re-canonicalises rather than re-counts.  Pairs with `sc-fastq-qc`
-upstream (read QC) and `sc-multi-count` downstream (merging multiple
-samples).
-
-## Inputs & Outputs
-
-**Inputs**
-
-- Input kinds: `file`, `directory`
-- Modalities: scrna
-- File types: `.fastq`, `.fq`, compressed FASTQ, and backend-specific `.h5ad`
-- FASTQ structure: valid first record; `paired` layout
-- Directory layouts (any): `paired-fastq`, `tenx-matrix`, `cellranger-output`, `starsolo-output`, `pseudoalign-output`
-
-**Outputs**
-
-- `tables/backend_summary.csv`
-- `tables/barcode_metrics.csv`
-- `tables/count_summary.csv`
-- `figures/barcode_rank.png`
-- `figures/count_complexity_scatter.png`
-- `figures/count_distributions.png`
-- `processed.h5ad`
-- `standardized_input.h5ad`
-- `figures/manifest.json`, `figure_data/manifest.json`, plot-data CSV files
-- `reproducibility/commands.sh`, `reproducibility/requirements.txt`
-- Backend-specific files under `artifacts/` only when counting runs; BAM and HTML are not guaranteed.
-- `report.md`
-- `result.json`
-- Processed AnnData (`saves_h5ad`)
-
-## Flow
-
-1. Resolve `--input`; if it's an existing CellRanger / STARsolo / SimpleAF / kb-python output dir, re-canonicalise instead of running the backend.
-2. Otherwise validate backend prerequisites (chemistry, reference, t2g for kb-python, whitelist for STARsolo).
-3. Run the chosen backend against the FASTQ (and `--read2` if explicit).
-4. Load the resulting matrix into AnnData; canonicalise (`layers["counts"]`, `adata.raw`, gene-name harmonisation).
-5. Render barcode-rank + count-distribution figures.
-6. Emit `processed.h5ad` + `report.md` + `result.json`.
-
-## Gotchas
-
-- **Missing input path → hard fail.** `sc_count.py` raises `FileNotFoundError(f"Input path not found: {input_path}")`.  Common when the FASTQ dir is on a network mount that has not been resolved at run time.
-- **STARsolo requires explicit chemistry.** `sc_count.py` raises `ValueError("STARsolo runs require an explicit `--chemistry` value such as `10xv3`.")` when chemistry is left at the `auto` default.  STARsolo currently supports `10xv2`, `10xv3`, and `10xv4`; pass one of those.
-- **Backend prerequisites are validated up front.** `sc_count.py` raises `ValueError` for missing `--reference` (CellRanger/STARsolo/simpleaf), missing `--t2g` (kb-python), or unsupported `--chemistry` for STARsolo.  No silent fallback to a different backend — pick a feasible one before invoking.
-- **Choose the backend matching the existing output.** `sc_count.py:main` detects directory shape within the selected `--method`. `result.json["data"]["execution"]` is empty when no backend ran. `tables/backend_summary.csv` is always written and can be empty; imported output may already contain backend metrics.
-- `sc_count.py:_recommended_reference_dir` names suggested reference locations, not bundled indexes. Supply references yourself. The simpleaf backend needs a configured `ALEVIN_FRY_HOME`; the installed simpleaf 0.24.0 failed without it during migration preflight. The demo does not validate external-tool setup.
-- `sc_count.py:main` defaults to eight threads. A directory containing several FASTQ samples needs `--sample`.
-
-## Key CLI
+### Pattern A: Fast CLI Quantification (`STARsolo` or `kb-python`)
 
 ```bash
-# Demo (standardizes PBMC3k counts; no counting backend)
-python skills/singlecell/scrna/sc-count/sc_count.py --demo --output /tmp/sc_count_demo
+# Option 1: STARsolo (10x v3 chemistry: 16bp barcode + 12bp UMI on Read 1, cDNA on Read 2)
+STAR --genomeDir /path/to/star_index \
+     --readFilesIn sample_R2.fastq.gz sample_R1.fastq.gz \
+     --readFilesCommand zcat \
+     --soloType CB_UMI_Simple \
+     --soloCBwhitelist /path/to/3M-february-2018.txt \
+     --soloCBstart 1 --soloCBlen 16 --soloUMIstart 17 --soloUMIlen 12 \
+     --soloFeatures Gene GeneFull \
+     --runThreadN 8 \
+     --outFileNamePrefix starsolo_out/
 
-# CellRanger over FASTQ
-python skills/singlecell/scrna/sc-count/sc_count.py \
-  --input fastq_dir/ --output results/ \
-  --reference cellranger_transcriptome --threads 16
-
-# STARsolo (requires explicit chemistry)
-python skills/singlecell/scrna/sc-count/sc_count.py \
-  --input fastq_dir/ --output results/ \
-  --method starsolo --reference star_genome_dir --chemistry 10xv3 --whitelist barcodes.tsv
-
-# Re-canonicalise an existing CellRanger output directory
-python skills/singlecell/scrna/sc-count/sc_count.py \
-  --input cellranger_output_dir/ --output results/
+# Option 2: kb-python (kallisto | bustools) to h5ad
+kb count -i index.idx -g t2g.txt -x 10xv3 -o kb_out/ --h5ad -t 8 sample_R1.fastq.gz sample_R2.fastq.gz
 ```
 
-## See also
+### Pattern B: Ingesting & Canonicalizing Count Outputs in Python (`scanpy`)
 
-- `references/parameters.md` — every CLI flag and per-backend prerequisite
-- `references/methodology.md` — backend selection guide, re-canonicalise vs re-run logic
-- `references/output_contract.md` — `processed.h5ad` schema + table layouts
-- Adjacent skills: `sc-fastq-qc` (upstream — read-quality check before counting), `sc-multi-count` (downstream — merge multiple sample outputs), `sc-standardize-input` (parallel — for AnnData from outside OmicsClaw)
+```python
+import numpy as np
+import scanpy as sc
+
+# 1. Read 10x H5 or MTX directory ( filtered_feature_bc_matrix )
+adata = sc.read_10x_h5("filtered_feature_bc_matrix.h5", gex_only=True)
+adata.var_names_make_unique()
+adata.obs_names_make_unique()
+
+# 2. Enforce canonical raw count contract before any downstream normalization
+adata.layers["counts"] = adata.X.copy()
+adata.raw = adata.copy()
+```
+
+### Optional Micro-Helper (`kernel.py`)
+
+Calling `use_skill("sc-count")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `load_count_matrix(path, gex_only=True)`
+- `canonicalize_counts(adata, sample_id=None)`
+- `count_summary(adata)`
+
+## 3. Output Format & Verification Contract
+
+- **Canonical Count AnnData** (`intermediate/processed.h5ad`):
+  - `adata.X` and `adata.layers["counts"]`: sparse CSR matrix (`scipy.sparse.csr_matrix`) containing non-negative integer UMI counts.
+  - `adata.var_names` and `adata.obs_names`: unique gene symbols and cell barcodes (`adata.var_names.is_unique == True`).
+- **Count Summary Tables** (`tables/count_summary.csv`, `tables/barcode_metrics.csv`):
+  - Columns: `n_cells`, `n_genes`, `median_umis`, `median_genes` and per-barcode `total_counts`, `n_genes_by_counts`.
+- **Verification Invariants**:
+  - Verify `adata.n_obs > 0`, `adata.n_vars > 0`, `"counts" in adata.layers`, and all non-zero entries in `adata.layers["counts"].data` are non-negative integers.
+
+## 4. Gotchas & Troubleshooting
+
+1. **STARsolo Read Order (`--readFilesIn cDNA_R2 Barcode_R1`)**:
+   - Unlike `cellranger` and `kb count`, `STAR --soloType CB_UMI_Simple` expects the **biological cDNA read (`R2`) first** and the **barcode+UMI read (`R1`) second** in `--readFilesIn`. Swapping them results in $0\%$ mapped reads or invalid barcode matching.
+2. **Chemistry-Specific Barcode & UMI Geometry (`10xv2` vs. `10xv3`)**:
+   - `10xv2` uses a 16 bp cell barcode + **10 bp UMI** (`737K-august-2016.txt` whitelist), whereas `10xv3`/`10xv3.1` uses a 16 bp cell barcode + **12 bp UMI** (`3M-february-2018.txt` whitelist). Passing `10xv2` UMI length on `10xv3` libraries truncates UMIs and inflates PCR duplicate collisions.
+3. **Duplicate Gene Symbols in 10x `features.tsv.gz`**:
+   - Multiple Ensembl gene IDs often map to the same HGNC/MGI gene symbol (e.g., `TBCE`, `LINC01238`). Always call `adata.var_names_make_unique()` immediately after `sc.read_10x_mtx` / `sc.read_10x_h5` to prevent downstream indexing errors.
+4. **Intronic Reads in Single-Nucleus RNA-seq (`snRNA-seq`)**:
+   - Nuclear transcripts are enriched for unspliced pre-mRNA. Always enable `--include-introns true` in Cell Ranger (default since v7) or use `GeneFull` in `STARsolo` when counting `snRNA-seq` libraries.
 
 ## Dependencies
 

@@ -687,7 +687,7 @@ def test_the_disclaimer_is_the_one_skill_reports_write():
     forbids ``omicsclaw/**`` production code from importing
     ``skills._sdk``; a test is not bound by it.
     """
-    from skills._sdk.report import DISCLAIMER
+    from omicsclaw.common.report import DISCLAIMER
 
     assert DISCLAIMER in SAFETY_RULES
 

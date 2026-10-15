@@ -1,5 +1,7 @@
 # 文献 Gap 核查：OmicsClaw 论文选题的可辩护性
 
+> 历史选题讨论，比较对象是已退役的 skill 系统。OmicsClaw 的旧运行证据已清理，本文不作为当前能力或验收依据。
+
 > 状态：核查完成，2026-08-03。
 >
 > 目的：在投入 benchmark 工程之前，验证"组学领域 skill 与 agent 解耦、无法复用"
@@ -41,7 +43,7 @@ Reproducible. Open. Free."*
 | 规模 | 95 skills（89 带 demo） | 95 skills |
 | 调用 | `clawbio run <skill>` / Python API / agent routing | `oc run` / agent tool |
 | 成熟度阶梯 | `spec-only → scripted → tested → cli-registered → ci-validated → bench-validated` | `smoke-only → demo-validated → fixture-validated → benchmarked` |
-| 验证 | 74 benchmark tests，168/182 通过，live leaderboard | 协议驱动，4/95 声明协议 |
+| 验证 | 74 benchmark tests，168/182 通过，live leaderboard | 旧协议驱动设计（已退役） |
 | 发表 | 无同行评议论文；Zenodo DOI 10.5281/zenodo.19420648 | — |
 
 **这是最直接的威胁。** 成熟度阶梯与 OmicsClaw 的 validation level 阶梯高度同构，
@@ -49,7 +51,7 @@ Reproducible. Open. Free."*
 
 **可区分之处**（必须在 related work 显式写出）：
 - ClawBio 的 tier 是**静态标签**；OmicsClaw 的 level 由**协议证据挣得**，
-  且 protocol digest 绑定依赖版本——装包即失效（见 §9.1 的 igraph 案例）。
+  且旧设计中的 protocol digest 绑定依赖版本。
 - ClawBio README 自陈 *"The exact contents can vary by skill, and some replays still
   require the original external inputs"*，reproducibility 是 **skill-optional**；
   OmicsClaw 是 manifest 级强制 + CAS + 人工门。
@@ -108,8 +110,8 @@ capabilities across diverse scientific campaigns"*——**文献覆盖度 + 案�
 
 > 组学 agent 已经普遍配备 skill 库（omicos、ClawBio、AtomisticSkills、Biomni 系），
 > 但**没有人在多域确定性 grader 上重复测量过 skill 究竟带来了什么**。
-> 我们发现 skill 的主要收益不在准确率均值，而在**参数层面的科学可复现性**——
-> 并给出证据绑定机制，使每条结论可追溯到精确 skill revision 与其依赖版本。
+> 拟检验 skill 是否改善**参数层面的科学可复现性**，
+> 并考察能否通过证据绑定追溯到精确 skill revision 与其依赖版本。
 
 为什么这站得住：
 
@@ -130,12 +132,12 @@ capabilities across diverse scientific campaigns"*——**文献覆盖度 + 案�
 OmicsClaw 的 protocol digest 绑定**已安装依赖版本**，装个包既有验证即失效。
 可测且组学特有（软件栈迭代极快）：
 *一个科学 skill 库中，依赖漂移在多长时间内让多大比例的既有验证证据过期？*
-蓝图 §9.1 的 igraph 案例（新增声明后 `validation_state` 自动变 `stale`）是活证据。
+这属于旧协议设计的研究方向，其运行记录已清理。
 
 ### 4.3 明确放弃
 
 - ❌ "我们首创了组学 agent skill 库"——ClawBio/omicos/AtomisticSkills 在前。
-- ❌ "我们有完整 skill lifecycle"——MUSE/SkillOps/综述在前，且自身实测 0/95、4/95。
+- ❌ "我们有完整 skill lifecycle"——MUSE/SkillOps/综述在前，自身旧系统的验收结果已清理。
 - ❌ "skill 提升可复现性"作为**主**论点——bioRxiv 2026-04 已在生信域提出。
   降级为被复现并被推进的既有发现。
 - ❌ OmicsClaw vs Claude Code 作为主实验——见上一轮，模型混淆。

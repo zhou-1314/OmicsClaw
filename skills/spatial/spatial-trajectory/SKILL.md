@@ -15,109 +15,98 @@ tags:
 - lineage
 ---
 
-# spatial-trajectory
+# Spatial Trajectory & Pseudotime Inference (`spatial-trajectory`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Infer pseudotime from log-normalized spatial expression with an existing PCA and neighbors graph. DPT is the default; CellRank adds fate probabilities and Palantir adds waypoint branch probabilities.
+Use this playbook to infer continuous differentiation trajectories, pseudotime gradients, and lineage branch probabilities across tissue space (e.g., intestinal crypt-to-villus axis, cortical layer neurogenesis, or tumor invasive front EMT). When spliced/unspliced counts are available for kinetic vector fields, pair with `spatial-velocity`.
 
-## Use from a step
+| Method (`method=`) | Upstream Package | Mathematical Model | Requires Explicit Root (`iroot`)? | Best Used When |
+|---|---|---|---|---|
+| **Diffusion Pseudotime** (`dpt`) | `scanpy.tl.diffmap` + `scanpy.tl.dpt` | Random-walk transition matrix eigen-decomposition across multiscale diffusion steps | Yes (`adata.uns["iroot"]`) | Default robust ordering along a continuous developmental or spatial gradient |
+| **CellRank** (`cellrank`) | `cellrank` (`ConnectivityKernel` / `CytoTRACEKernel` + `GPCCA`) | Markov chain coarse-graining into initial/terminal macrostates & absorption probabilities | Optional (`CytoTRACEKernel` estimates potency automatically) | Resolving multiple terminal fates and lineage commitment probabilities |
+| **Palantir** (`palantir`) | `palantir` (`palantir.core.run_palantir`) | Shortest-path waypoint Markov chain over diffusion components | Yes (`early_cell` barcode) | Quantifying per-cell differentiation entropy (plasticity) and smooth branch probabilities |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Diffusion Pseudotime (`scanpy.tl.dpt`) Projected onto Spatial Coordinates
 
 ```python
-from skills._sdk.notebook import load_skill
-library = load_skill("spatial-trajectory")
-library.trajectory(adata, root_cell=str(adata.obs_names[0]))
+import numpy as np
+import scanpy as sc
+
+# 1. Select biologically grounded root cell (e.g., highest stem/progenitor marker expression inside stem niche)
+stem_mask = (adata.obs["cell_type"] == "Stem_Progenitor").to_numpy()
+candidate_indices = np.flatnonzero(stem_mask) if np.any(stem_mask) else np.arange(adata.n_obs)
+# Pick medoid of the progenitor cluster in PCA space as stable iroot
+pca_sub = adata.obsm["X_pca"][candidate_indices]
+medoid_offset = int(np.argmin(np.linalg.norm(pca_sub - pca_sub.mean(axis=0), axis=1)))
+adata.uns["iroot"] = int(candidate_indices[medoid_offset])
+
+# 2. Compute diffusion map and Diffusion Pseudotime (DPT)
+if "connectivities" not in adata.obsp:
+    sc.pp.neighbors(adata, n_neighbors=15, use_rep="X_pca", random_state=0)
+sc.tl.diffmap(adata, n_comps=15, random_state=0)
+sc.tl.dpt(adata, n_dcs=10)
 ```
 
-Run `examples/example_step.py` with the step runner for a synthetic, executable example.
+### Pattern B: Terminal Macrostates & Fate Probabilities (`cellrank`)
 
-## API
+```python
+import cellrank as cr
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `trajectory(adata, *, method: str='dpt', cluster_key: str | None=None, root_cell: str | None=None, root_cell_type: str | None=None, method_params: dict | None=None, random_state: int=0, palantir_waypoint_seed: int=20)`
-
-Infer pseudotime in place from log-normalized X and an existing PCA/graph.
-
-DPT and CellRank add dpt_pseudotime; Palantir adds palantir_pseudotime.
-CellRank fate calculations can be incomplete; inspect run_info warnings.
-
-:param adata: AnnData with X_pca and a neighbors graph from preprocessing.
-:param method: dpt (CLI default), cellrank or palantir.
-:param cluster_key: Observation annotation; None detects leiden/cell_type/cluster.
-:param root_cell: Starting barcode; None picks the maximum first diffusion component.
-:param root_cell_type: Restrict automatic root selection to this annotation value.
-:param method_params: Backend options using the CLI names with underscores;
-    None retains its defaults, such as dpt_n_dcs=10. See references/parameters.md.
-:param random_state: Seed for diffusion maps and supported backend sampling, default 0.
-:param palantir_waypoint_seed: Palantir waypoint sampling seed, 20 to preserve
-    the original CLI backend default independently from diffusion-map seed 0.
-:returns: The same AnnData with pseudotime and JSON run diagnostics.
-:raises ValueError: Missing preprocessing, root or annotation, or invalid method.
-:raises ImportError: A backend is missing; use install_skill_deps.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read the last run's root, effective parameters and method-specific results.
-
-:param adata: AnnData returned by trajectory.
-:param keep: True keeps diagnostics; False removes them for CLI serialization.
-:returns: A dictionary, including trajectory gene tables when available.
-
-### `pseudotime_table(adata) -> pd.DataFrame`
-
-Return per-spot pseudotime columns in observation order.
-
-:param adata: AnnData after trajectory inference.
-:returns: A barcode-indexed table of available DPT/Palantir pseudotime and entropy.
-
-### `trajectory_genes(adata) -> pd.DataFrame`
-
-Return genes correlated with pseudotime from the last inference.
-
-:param adata: AnnData returned by trajectory; expression was read from X.
-:returns: Gene, correlation, pvalue, fdr and direction columns, or an empty table.
-
-### `pseudotime_figure(adata, *, basis: str='spatial')`
-
-Plot inferred pseudotime over coordinates without writing a file.
-
-:param adata: AnnData returned by trajectory.
-:param basis: Coordinate key, spatial by default; X_umap is also supported.
-:returns: A matplotlib Figure owned by the caller.
-:raises KeyError: Missing coordinates or pseudotime.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-DPT uses 10 diffusion components. Pass CLI-style option names in `method_params`, such as `{'dpt_n_dcs': 5}`. CellRank and Palantir dependencies load only when selected.
-See [parameters](references/parameters.md) and [methodology](references/methodology.md).
-
-## Gotchas
-
-- `trajectory` requires both `obsm['X_pca']` and `uns['neighbors']`.
-- `run_info` identifies the root barcode and pseudotime column; `uns['iroot']` is an integer position.
-- `trajectory_genes` reads X and returns FDR-filtered Spearman correlations.
-- `palantir_branch_probs` is present only when the backend returns branches.
-
-## Inputs and outputs
-
-`trajectory` returns the same AnnData. `pseudotime_table` and `trajectory_genes` return DataFrames; `pseudotime_figure` returns a Figure. CLI output includes `processed.h5ad`, reports and conditional trajectory/fate tables and plots.
-The full file inventory and conditions are in [output contract](references/output_contract.md).
-
-## CLI
-
-```bash
-python skills/spatial/spatial-trajectory/spatial_trajectory.py --input input.h5ad --output results/
+# Combine transcriptomic connectivity kernel (or CytoTRACE / Velocity kernel)
+ck = cr.kernels.ConnectivityKernel(adata).compute_transition_matrix()
+g = cr.estimators.GPCCA(ck)
+g.compute_schur(n_components=10)
+g.compute_macrostates(n_states=3, cluster_key="cell_type")
+g.predict_terminal_states()
+g.compute_fate_probabilities()
+# Fate probabilities are stored in adata.obsm["lineages_fwd"]
 ```
 
-The CLI retains reports and the figure gallery. Function calls do not save files.
+### Pattern C: Waypoint Branch Probabilities & Differentiation Entropy (`palantir`)
 
-## See also
+```python
+import pandas as pd
+import palantir
 
-- `spatial-preprocess` supplies expression preprocessing.
-- [Output contract](references/output_contract.md) lists method-specific files and AnnData fields.
+# Run diffusion maps and Palantir from explicit early_cell barcode
+early_cell = str(adata.obs_names[adata.uns["iroot"]])
+dm_res = palantir.utils.run_diffusion_maps(pd.DataFrame(adata.obsm["X_pca"], index=adata.obs_names), n_components=10)
+ms_data = palantir.utils.determine_multiscale_space(dm_res)
+pr_res = palantir.core.run_palantir(ms_data, early_cell=early_cell, num_waypoints=min(500, adata.n_obs - 1))
+
+adata.obs["palantir_pseudotime"] = pr_res.pseudotime
+adata.obs["palantir_entropy"] = pr_res.entropy
+adata.obsm["palantir_branch_probs"] = pr_res.branch_probs
+```
+
+### Optional Micro-Helper (`kernel.py`)
+
+Calling `use_skill("spatial-trajectory")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `run_dpt_spatial(adata, root_key=None, root_val=None, root_idx=0, n_dcs=10)`
+- `pseudotime_summary(adata, groupby="leiden", pt_key="dpt_pseudotime")`
+
+## 3. Output Format & Verification Contract
+
+- **Trajectory-Annotated Spatial AnnData** (`intermediate/trajectory.h5ad`):
+  - `adata.obs["dpt_pseudotime"]` (or `palantir_pseudotime`): continuous pseudotime in $[0, 1]$.
+  - `adata.obsm["X_diffmap"]`: diffusion map eigenvectors.
+  - `adata.obsm["lineages_fwd"]` or `adata.obsm["palantir_branch_probs"]`: per-cell lineage absorption probabilities summing to $1.0$.
+- **Pseudotime Summary Table** (`tables/pseudotime_summary.csv`):
+  - Columns: `group`, `n_spots`, `mean_pseudotime`, `median_pseudotime`.
+- **Verification**:
+  - Verify `adata.obs["dpt_pseudotime"].iloc[adata.uns["iroot"]] == 0.0` and confirm that disconnected components (`np.isinf(adata.obs["dpt_pseudotime"])`) are either zero or masked out.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Unrelated Lineages in Whole-Tissue Spatial Slides (`inf` Pseudotime)**:
+   - Unlike FACS-sorted scRNA-seq, a whole-tissue spatial slide contains unrelated lineages (e.g., endothelial cells, B cells, neurons, and epithelial cells simultaneously). Running `sc.tl.dpt` across all cell types produces disconnected graph components with `dpt_pseudotime = inf`. Subset `adata` to the developmental lineage of interest (e.g., epithelial + progenitor compartments) and rebuild `sc.pp.neighbors` before computing `diffmap` and `dpt`.
+2. **Arbitrary `iroot = 0` Inverts Trajectory Direction**:
+   - `sc.tl.dpt` measures diffusion distance from `adata.uns["iroot"]`. Setting `iroot = 0` without checking whether observation `0` is a progenitor vs. terminally differentiated cell frequently inverts pseudotime ($0 \to 1$ runs backward). Always anchor `iroot` using stem markers (`LGR5`, `SOX2`, `CD34`), `CytoTRACE` gene-count potency, or anatomical crypt/basal coordinates.
+3. **Scanpy Diffusion Component 0 (`X_diffmap[:, 0]`)**:
+   - In `scanpy >= 1.8`, `adata.obsm["X_diffmap"][:, 0]` is the trivial steady-state eigenvector (constant). Meaningful trajectory axes start at `X_diffmap[:, 1]` and `X_diffmap[:, 2]`.
 
 ## Dependencies
 

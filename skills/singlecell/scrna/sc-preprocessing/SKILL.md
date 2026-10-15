@@ -17,184 +17,79 @@ tags:
 - pearson_residuals
 ---
 
-# sc-preprocessing
+# Single-Cell RNA-seq Preprocessing (`sc-preprocessing`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has a QC'd AnnData and wants the standard
-"filter → normalise → HVG → PCA" pipeline before clustering or batch
-integration. Four interchangeable backends are available: `scanpy`
-(default; CP10k log + HVG seurat flavour), `seurat` (R-backed
-LogNormalize / CLR / RC), `sctransform` (R-backed regularised NB), and
-`pearson_residuals` (raw-count HVG selection plus Pearson residual
-transformation). The skill stops at PCA — UMAP / clustering live in
-`sc-clustering`, multi-sample correction in `sc-batch-integration`.
+Use this playbook to take raw single-cell UMI count matrices (`AnnData`) through quality control, count-layer preservation, library-size normalization, highly variable gene (HVG) selection, and principal component analysis (PCA).
 
-## Use from a step
+| Workflow Stage | Standard Method | Alternative (Multi-Batch / Count Model) | Upstream Function |
+|---|---|---|---|
+| **QC Metrics** | Mitochondrial (`MT-`/`mt-`), ribosomal (`RPS`/`RPL`), `total_counts`, `n_genes_by_counts` | MAD-based adaptive outlier filtering (`scipy.stats.median_abs_deviation`) | `sc.pp.calculate_qc_metrics` |
+| **Count Preservation** | Store raw integer UMI matrix in `adata.layers["counts"]` before normalization | Keep full unsubsetted object in `adata.raw` | `adata.layers["counts"] = adata.X.copy()` |
+| **Normalization** | Shifted logarithm: `normalize_total(target_sum=1e4)` + `log1p` | Pearson residuals (`sc.experimental.pp.normalize_pearson_residuals`) | `sc.pp.normalize_total`, `sc.pp.log1p` |
+| **HVG Selection** | `flavor="seurat_v3"` on `layer="counts"` (requires `scikit-misc`) or `flavor="seurat"` on log1p | Batch-aware HVG (`batch_key="sample"`) | `sc.pp.highly_variable_genes` |
+| **Dimensionality Reduction** | Truncated SVD / PCA on HVGs (`n_comps=30..50`, `random_state=0`) | `scvi.model.SCVI` latent space (see `sc-batch-integration`) | `sc.tl.pca` |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
 
 ```python
-pre = load_skill("sc-preprocessing")
-adata = read_input("results/01_qc/intermediate/adata_qc.h5ad")
-# max_mt_pct 10: PBMC cells above 10% mitochondrial reads are mostly damaged (agreed with the user).
-adata = pre.preprocess(adata, method="scanpy", max_mt_pct=10.0)
-write_output(pre.run_info(adata)["filter_summary"], "tables/filter_summary.json")
-write_output(pre.pca_variance_table(adata), "tables/pca_variance_ratio.csv")
-write_output(adata, "intermediate/adata_preprocessed.h5ad")
+import scanpy as sc
+
+# 1. Annotate QC gene sets (human: "MT-", mouse: "mt-")
+adata.var["mt"] = adata.var_names.str.startswith(("MT-", "mt-"))
+adata.var["ribo"] = adata.var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl"))
+sc.pp.calculate_qc_metrics(adata, qc_vars=["mt", "ribo"], percent_top=None, log1p=False, inplace=True)
+
+# 2. Filter low-quality cells and uninformative genes
+sc.pp.filter_cells(adata, min_genes=200)
+sc.pp.filter_genes(adata, min_cells=3)
+adata = adata[adata.obs["pct_counts_mt"] < 20.0].copy()
+
+# 3. Preserve raw integer counts BEFORE library-size normalization
+adata.layers["counts"] = adata.X.copy()
+
+# 4. Normalize to CP10K and log1p-transform
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+
+# 5. Select Highly Variable Genes (HVGs) and compute PCA
+sc.pp.highly_variable_genes(
+    adata,
+    n_top_genes=min(2000, adata.n_vars),
+    layer="counts",
+    flavor="seurat_v3",
+    batch_key="batch" if "batch" in adata.obs else None,
+)
+sc.tl.pca(adata, n_comps=min(30, adata.n_obs - 1, adata.n_vars - 1), mask_var="highly_variable", random_state=0)
 ```
 
-A complete step that runs on demo data: `examples/example_step.py`.
+### Optional Micro-Helper (`kernel.py`)
 
-If the input already passed through `sc-filter`, use
-`preprocess(adata, apply_filters=False)`. This preserves that step's retained
-cells and genes, including its doublet decision, while normalization, HVG
-selection and PCA still run.
+Calling `use_skill("sc-preprocessing")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `preprocess(adata, min_genes=200, min_cells=3, max_mt_pct=20.0, n_top_hvg=2000, n_pcs=30, species="human")`
+- `qc_summary(adata)`
 
-## API
+## 3. Output Format & Verification Contract
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+- **Processed AnnData** (`intermediate/processed.h5ad`):
+  - `adata.X`: log1p-normalized expression matrix (`float32`/`float64`).
+  - `adata.layers["counts"]`: filtered raw integer UMI counts (same shape `(n_obs, n_vars)` as `adata.X`).
+  - `adata.obs`: contains `n_genes_by_counts`, `total_counts`, `pct_counts_mt`.
+  - `adata.var`: contains `highly_variable` boolean mask.
+  - `adata.obsm["X_pca"]`: PCA coordinates of shape `(n_obs, n_pcs)`.
+- **Summary Table** (`tables/qc_summary.csv` or `.json`): pre- and post-filter cell/gene counts and median mitochondrial percentage.
 
-### `preprocess(adata, *, method: str='scanpy', apply_filters: bool=True, min_genes: int=200, min_cells: int=3, max_mt_pct: float=20.0, n_top_hvg: int | None=None, n_pcs: int=50, normalization_target_sum: float=10000.0, scanpy_hvg_flavor: str='seurat', pearson_hvg_flavor: str='seurat_v3', pearson_theta: float=100.0, seurat_normalize_method: str='LogNormalize', seurat_scale_factor: float=10000.0, seurat_hvg_method: str='vst', sctransform_regress_mt: bool=True, remove_doublets: bool=True, doublet_score_threshold: float=0.25, preserve_var_names: bool=False)`
+## 4. Gotchas & Troubleshooting
 
-Filter cells and genes, normalise, select highly variable genes and run PCA.
-
-The input is first brought into the OmicsClaw scRNA contract (counts in
-``layers['counts']``, a counts snapshot in ``raw``) and QC metrics are added
-when missing. With apply_filters=True, cells and genes are filtered by the thresholds below,
-and doublets are dropped when ``predicted_doublet`` or ``doublet_score``
-from sc-doublet-detection are in ``obs``. Finally the chosen method
-normalises ``X``, flags ``var['highly_variable']`` and writes
-``obsm['X_pca']``. What was filtered is recorded for :func:`run_info`.
-
-:param method: ``"scanpy"`` (normalize_total, log1p, HVG, PCA; the default),
-    ``"pearson_residuals"`` (analytic Pearson residuals for HVG and PCA; ``X``
-    stays log-normalised), ``"seurat"`` (Seurat LogNormalize in R) or
-    ``"sctransform"`` (Seurat SCTransform in R).
-:param apply_filters: Apply cell, gene and doublet filtering. Default True.
-    Set False after sc-filter to preserve its retained cells and genes.
-:param min_genes: Drop cells with fewer detected genes. Default 200, the
-    scanpy and Seurat tutorial value; lower it for low-depth data.
-:param min_cells: Drop genes detected in fewer cells. Default 3, the tutorial value.
-:param max_mt_pct: Drop cells above this mitochondrial percentage. Default 20.0,
-    a permissive threshold; PBMC data usually uses 5 to 10. Agree it with the user.
-:param n_top_hvg: Number of highly variable genes. Default ``None``: 3000 for
-    ``sctransform``, 2000 for the other methods (their tutorials' values).
-:param n_pcs: Principal components to compute. Default 50.
-:param normalization_target_sum: Counts per cell after ``normalize_total``
-    (``scanpy`` only). Default 10000.
-:param scanpy_hvg_flavor: HVG flavor for ``scanpy``: ``"seurat"`` (default),
-    ``"cell_ranger"`` or ``"seurat_v3"``.
-:param pearson_hvg_flavor: HVG flavor for ``pearson_residuals``. Default ``"seurat_v3"``.
-:param pearson_theta: Overdispersion for Pearson residuals. Default 100, scanpy's default.
-:param seurat_normalize_method: Seurat ``NormalizeData`` method. Default ``"LogNormalize"``.
-:param seurat_scale_factor: Seurat scale factor. Default 10000.
-:param seurat_hvg_method: Seurat ``FindVariableFeatures`` method. Default ``"vst"``.
-:param sctransform_regress_mt: Regress out mitochondrial percentage in SCTransform. Default ``True``.
-:param remove_doublets: Drop cells flagged as doublets when the flags are present. Default ``True``.
-:param doublet_score_threshold: Score above which a cell counts as a doublet when only
-    ``doublet_score`` is present. Default 0.25.
-:param preserve_var_names: Keep the input's gene identifiers instead of the
-    symbols chosen during standardisation. Default ``False``.
-:returns: A new AnnData with normalised ``X``, ``layers['counts']``, ``raw``
-    counts snapshot, ``var['highly_variable']``, ``obsm['X_pca']``, ``uns['pca']``.
-:raises ValueError: an unknown method, or input with no count-like matrix.
-:raises RuntimeError: the R methods fail, or their R packages are missing.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-What :func:`preprocess` recorded about its run.
-
-Keys: ``method``; ``filter_summary`` (cells and genes before and after
-filtering, cells removed by each threshold under ``filter_stats``, whether QC
-metrics were reused, and ``input_preparation``: the matrix used as counts,
-gene-name source, warnings and inferred species); ``input_contract``;
-``matrix_contract``.
-
-:param keep: Leave the record in ``adata.uns``; ``False`` removes it.
-:returns: The record, or an empty dict when ``preprocess`` has not run on *adata*.
-
-### `hvg_table(adata, *, n_top: int=50) -> pd.DataFrame`
-
-The most variable genes with their mean and dispersion statistics.
-
-:param n_top: How many genes to return, most variable first. Default 50.
-:returns: Column ``gene`` plus whichever of ``means``, ``variances``,
-    ``variances_norm``, ``dispersions``, ``dispersions_norm`` the method wrote.
-
-### `pca_variance_table(adata) -> pd.DataFrame`
-
-Variance explained by each principal component, to choose how many to keep downstream.
-
-:returns: Columns ``pc``, ``variance_ratio`` and ``cumulative_variance_ratio``.
-
-### `pca_embedding_table(adata, *, n_components: int=5) -> pd.DataFrame`
-
-The first principal-component coordinates of every cell.
-
-:param n_components: How many components to include. Default 5.
-:returns: Column ``cell_id`` followed by ``PC1``, ``PC2``, ...
-
-### `qc_metrics_table(adata) -> pd.DataFrame`
-
-The QC metrics of the cells that passed filtering.
-
-:returns: Column ``cell_id`` followed by whichever of ``n_genes_by_counts``,
-    ``total_counts`` and ``pct_counts_mt`` are in ``obs``.
-
-### `pca_variance_figure(adata, *, n_pcs: int=50)`
-
-An elbow plot of the variance ratio per principal component.
-
-:param n_pcs: How many components to show. Default 50.
-:returns: A matplotlib Figure.
-:raises KeyError: ``uns['pca']`` is missing; run :func:`preprocess` first.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-| Method | Use when | Notes |
-|---|---|---|
-| `scanpy` (default) | most 10x data | `normalize_total` to 10,000, `log1p`, HVG (`seurat` flavor), PCA with `arpack` |
-| `pearson_residuals` | very sparse or heterogeneous data | HVG and PCA on analytic Pearson residuals (Lause et al. 2021); `X` stays log-normalised for plotting and DE |
-| `seurat` | the user wants Seurat's LogNormalize numbers | runs `Rscript`; needs Seurat, SingleCellExperiment, zellkonverter, rhdf5 |
-| `sctransform` | the user wants SCTransform | runs `Rscript`; also needs sctransform; 3,000 HVGs by default |
-
-Defaults and where they come from:
-
-- `min_genes=200`, `min_cells=3`: the scanpy and Seurat PBMC tutorials. Lower `min_genes` for low-depth or nuclei data.
-- `max_mt_pct=20.0`: a permissive ceiling, not a recommendation. Read sc-qc's `pct_counts_mt` distribution and agree the value with the user; PBMC usually uses 5 to 10, tissues with high metabolic activity more.
-- `n_top_hvg`: 2,000 (3,000 for `sctransform`), the tutorials' values. Raise it for very heterogeneous data.
-- `n_pcs=50`: scanpy's default upper bound; later steps choose how many to use from `pca_variance_table`.
-- `remove_doublets=True`, `doublet_score_threshold=0.25`: only act when sc-doublet-detection columns are in `obs`.
-
-Every threshold you change goes into the step with its reason.
-
-## Gotchas
-
-- **`preprocess` returns a new, filtered object.** Keep the return value; cells and genes below the thresholds are gone from it, and `run_info(adata)["filter_summary"]` says how many each threshold removed.
-- **Fewer PCs than requested.** Small matrices cap `obsm["X_pca"]` below `n_pcs`; use `adata.obsm["X_pca"].shape[1]` when you pass `n_pcs` to sc-clustering.
-- **R methods need a working `Rscript` stack.** `preprocess(method="seurat")` raises `RuntimeError` when the R packages are missing or when the R round-trip returns no overlapping cells or genes. Check `Rscript` before choosing them.
-- **Doublets are dropped whenever sc-doublet-detection ran.** Pass `remove_doublets=False` to keep the called doublets.
-- **`X` is normalised, not counts.** Raw counts stay in `layers["counts"]` and `raw`; methods that need counts (pseudobulk DE) read them from there.
-
-## Inputs and outputs
-
-- Reads the count matrix from `layers['counts']`, `raw` or `X` (as sc-qc does) and the QC columns of `obs` when present.
-- Writes a new AnnData: normalised `X`; `layers['counts']`; `raw` (counts snapshot); `obs` QC columns; `var['highly_variable']` and the HVG statistics; `obsm['X_pca']`; `uns['pca']`; `layers['pearson_residuals']` for that method; contract entries in `uns`.
-- The table functions return DataFrames; `pca_variance_figure` returns a matplotlib Figure.
-
-## CLI
-
-`sc_preprocess.py` runs the same functions outside a project and writes a
-report, figures, tables and `processed.h5ad`:
-`python <skill directory>/sc_preprocess.py --help`. `--demo` runs it on PBMC3k.
-
-## See also
-
-- `references/parameters.md` — every CLI flag and per-method tuning hint
-- `references/methodology.md` — when each backend wins; canonicalisation contract
-- `references/output_contract.md` — `obs` / `obsm` / `layers` / `uns` schema + the CLI's table layouts
-- Adjacent skills: `sc-qc` / `sc-filter` (upstream — produce the input), `sc-batch-integration` (parallel — multi-sample alternative path; consumes `obsm["X_pca"]`), `sc-clustering` (downstream — consumes `obsm["X_pca"]` for neighbour-graph + UMAP + Leiden)
+1. **Species Case Sensitivity for Mitochondrial Genes**:
+   - Human Ensembl/HGNC symbols use uppercase `MT-` (`MT-CO1`, `MT-ND1`), whereas mouse MGI symbols use title-case `mt-` (`mt-Co1`). If `adata.obs["pct_counts_mt"].max() == 0.0`, inspect `adata.var_names[:20]`—you may have Ensembl IDs (`ENSG...`) or the wrong species prefix.
+2. **Preserving `layers["counts"]` After Cell/Gene Filtering**:
+   - Always assign `adata.layers["counts"] = adata.X.copy()` **after** `filter_cells` / `filter_genes` (or slice `adata` so both `.X` and `.layers["counts"]` are subsetted together) and **before** `normalize_total`. Downstream tools (`scvi-tools`, `pydeseq2`, `cell2location`) fail if `layers["counts"]` is missing or log-transformed.
+3. **`seurat_v3` HVG Requires Raw Counts**:
+   - `sc.pp.highly_variable_genes(..., flavor="seurat_v3")` models mean-variance on integer counts (`layer="counts"`). Passing log-normalized data to `seurat_v3` or omitting `scikit-misc` raises an error; if `scikit-misc` is unavailable, use `flavor="seurat"` on log1p-normalized `adata.X`.
+4. **Do Not Subset `adata` to HVGs In-Place**:
+   - Keep all filtered genes in `adata` and pass `mask_var="highly_variable"` to `sc.tl.pca`. Dropping non-HVG genes (`adata = adata[:, adata.var.highly_variable]`) strips canonical cell-type markers needed later in `sc-cell-annotation` and `sc-de`.
 
 ## Dependencies
 

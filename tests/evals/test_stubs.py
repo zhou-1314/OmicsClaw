@@ -24,9 +24,9 @@ SKILLS = REPO_ROOT / "skills"
 @pytest.mark.parametrize(
     ("script", "skill", "domain"),
     [
-        ("spatial/spatial-preprocess/spatial_preprocess.py", "spatial-preprocess", "spatial"),
-        ("singlecell/scrna/sc-clustering/sc_cluster.py", "sc-clustering", "singlecell"),
-        ("literature/literature_parse.py", "literature", "literature"),
+        ("spatial/spatial-preprocess/kernel.py", "spatial-preprocess", "spatial"),
+        ("singlecell/scrna/sc-clustering/kernel.py", "sc-clustering", "singlecell"),
+        ("literature/kernel.py", "literature", "literature"),
     ],
 )
 def test_all_three_directory_depths_are_recognised(tmp_path, script, skill, domain):
@@ -46,7 +46,7 @@ def test_reading_or_listing_a_skill_is_not_a_run(tmp_path):
 
 def test_output_flag_spellings(tmp_path):
     index = skill_index()
-    script = SKILLS / "bulkrna" / "bulkrna-de" / "bulkrna_de.py"
+    script = SKILLS / "bulkrna" / "bulkrna-de" / "kernel.py"
     assert find_skill_run(f"python {script} -o a", tmp_path, index).output == "a"
     assert find_skill_run(f"python {script} --output=b", tmp_path, index).output == "b"
     assert find_skill_run(f"python {script} --demo", tmp_path, index).output is None
@@ -62,7 +62,7 @@ def _bash(tmp_path: Path, command: str) -> str:
 def test_a_stubbed_run_writes_the_files_and_returns_the_output(tmp_path):
     stub = StubResult(stdout="QC done in {output}", files={"result.json": '{"n_spots": 3}'}, binary_files=("fig.png",))
     runs, failures = [], []
-    script = SKILLS / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
+    script = SKILLS / "spatial" / "spatial-preprocess" / "kernel.py"
     with stubbed_skill_runs({"spatial-preprocess": stub}, skill_index(), runs, failures):
         output = _bash(tmp_path, f"python {script} --input missing.h5ad --output out/pp")
     assert output == f"QC done in {tmp_path / 'out' / 'pp'}"
@@ -74,7 +74,7 @@ def test_a_stubbed_run_writes_the_files_and_returns_the_output(tmp_path):
 
 def test_other_commands_and_help_run_for_real(tmp_path):
     runs, failures = [], []
-    script = SKILLS / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
+    script = SKILLS / "spatial" / "spatial-preprocess" / "kernel.py"
     stub = StubResult(stdout="STUB")
     with stubbed_skill_runs({"spatial-preprocess": stub}, skill_index(), runs, failures):
         assert _bash(tmp_path, "echo real").strip() == "real"
@@ -85,7 +85,7 @@ def test_other_commands_and_help_run_for_real(tmp_path):
 
 def test_an_unstubbed_skill_run_is_recorded_as_such(tmp_path):
     runs = []
-    script = SKILLS / "bulkrna" / "bulkrna-de" / "bulkrna_de.py"
+    script = SKILLS / "bulkrna" / "bulkrna-de" / "kernel.py"
     with stubbed_skill_runs({}, skill_index(), runs):
         _bash(tmp_path, f"python {script} --input missing.csv --output out || true")
     assert [(r.skill, r.stubbed) for r in runs] == [("bulkrna-de", False)]
@@ -97,7 +97,7 @@ def test_a_missing_script_or_output_is_a_hard_failure(tmp_path):
     directory = SKILLS / "spatial" / "spatial-preprocess"
     with stubbed_skill_runs({"spatial-preprocess": stub}, skill_index(), [], failures):
         gone = _bash(tmp_path, f"python {directory}/renamed.py --output out")
-        bare = _bash(tmp_path, f"python {directory}/spatial_preprocess.py --demo")
+        bare = _bash(tmp_path, f"python {directory}/kernel.py --demo")
     assert "does not exist" in gone and "no --output" in bare
     assert [f.assertion for f in failures] == ["stub_target_missing", "stub_target_missing"]
     assert all(not f.is_soft for f in failures)
@@ -145,7 +145,7 @@ def test_the_fallback_answers_a_skill_without_a_stub_and_nothing_runs(tmp_path):
     """With a fallback, no skill script runs for real; what follows it on the line does not run either."""
     runs, failures = [], []
     fallback = StubResult(stdout="[eval] {skill} ran into {output}", files={"result.json": "{}"})
-    script = SKILLS / "bulkrna" / "bulkrna-de" / "bulkrna_de.py"
+    script = SKILLS / "bulkrna" / "bulkrna-de" / "kernel.py"
     with stubbed_skill_runs({}, skill_index(), runs, failures, fallback=fallback):
         output = _bash(tmp_path, f"python {script} --input c.csv --output o; touch ran.txt")
     assert output == f"[eval] bulkrna-de ran into {tmp_path / 'o;'}"
@@ -159,7 +159,7 @@ def test_the_fallback_refuses_a_run_without_output_with_exit_2(tmp_path):
     runs, failures = [], []
     directory = SKILLS / "bulkrna" / "bulkrna-de"
     with stubbed_skill_runs({}, skill_index(), runs, failures, fallback=StubResult(stdout="X")):
-        bare = _bash(tmp_path, f"python {directory}/bulkrna_de.py --demo; touch ran.txt")
+        bare = _bash(tmp_path, f"python {directory}/kernel.py --demo; touch ran.txt")
         gone = _bash(tmp_path, f"python {directory}/renamed.py --output out")
     assert "--output is required" in bare and "[exit status 2]" in bare
     assert "No such file" in gone
@@ -169,7 +169,7 @@ def test_the_fallback_refuses_a_run_without_output_with_exit_2(tmp_path):
 
 def test_a_recorded_stub_still_wins_over_the_fallback(tmp_path):
     runs = []
-    script = SKILLS / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
+    script = SKILLS / "spatial" / "spatial-preprocess" / "kernel.py"
     with stubbed_skill_runs(
         {"spatial-preprocess": StubResult(stdout="RECORDED")}, skill_index(), runs, fallback=StubResult(stdout="FALLBACK")
     ):

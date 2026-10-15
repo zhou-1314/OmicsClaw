@@ -930,6 +930,7 @@ class RemoteSessionKernel(SessionKernel):
         *,
         timeout_s: float = 1800.0,
         callbacks: KernelCallbacks | None = None,
+        store_history: bool = True,
     ) -> CellResult:
         """One cell, with the tunnel kept alive around it.
 
@@ -956,7 +957,7 @@ class RemoteSessionKernel(SessionKernel):
         watcher.start()
         result = None
         try:
-            result = super().execute(code, timeout_s=timeout_s, callbacks=callbacks)
+            result = super().execute(code, timeout_s=timeout_s, callbacks=callbacks, store_history=store_history)
         finally:
             stop.set()
             watcher.join(2.0)
@@ -972,7 +973,7 @@ class RemoteSessionKernel(SessionKernel):
                 self.host,
             )
             self._reattach()
-            result = super().execute(code, timeout_s=timeout_s, callbacks=callbacks)
+            result = super().execute(code, timeout_s=timeout_s, callbacks=callbacks, store_history=store_history)
             if result.status != "dead":
                 result.notice = (
                     "note: the ssh tunnel to the remote kernel dropped"

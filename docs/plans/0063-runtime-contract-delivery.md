@@ -50,7 +50,7 @@ token（本仓库 `estimate_text_tokens`）：
 
 ### 2.2 前置检查（§12.2 第 6 步）
 
-- **0057 未冻结**：`docs/plans/0057-validation/` 下只有 `frozen_settings.json`（`freeze.py write` 的手写输入），没有 `freeze.json`；仓库、`/tmp/0057_dev`、`/tmp/0057_holdout` 下都找不到 `freeze.json`；`0057-dev-report.md` 第 4、99 行写明冻结等协调方通知。阶段 2 开始前复查一次，结果相同。
+- **0057 未冻结**：`docs/plans/0057-validation/` 下只有 `frozen_settings.json`（`freeze.py write` 的手写输入），没有 `freeze.json`；仓库、`/tmp/0057_dev`、`/tmp/0057_holdout` 下都找不到 `freeze.json`。阶段 2 开始前复查一次，结果相同。
 - **A3 已钉住前置段**：`run_arms.py` 的 `a3_config()`（:307）写出 `base/empty_front_matter.txt`（内容为空），并传 `system_prompt_files=(empty,)`（:325）；A3 驱动在 :255 调用它。
 
 ### 2.3 测试基线

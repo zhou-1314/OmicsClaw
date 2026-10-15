@@ -14,116 +14,67 @@ tags:
 - indel
 ---
 
-# genomics-vcf-operations
+# VCF Normalization, Filtering & Set Operations (`genomics-vcf-operations`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Load this skill for the file-based analysis named in the description.
-The function library and CLI share the same calculations; no external
-aligner, assembler, caller or annotation service is started.
+Select the `bcftools` / `htslib` operation according to the VCF manipulation task:
 
-## Use from a step
+| VCF Task | Upstream Command (`bcftools` / `htslib`) | Why |
+|---|---|---|
+| **Multi-allelic splitting & indel left-alignment** | `bcftools norm -m -any -f ref.fa in.vcf.gz -Oz -o norm.vcf.gz` | Decomposes `A,G` sites and left-aligns indels so identical variants match across callsets and ClinVar/gnomAD |
+| **Site & genotype expression filtering** | `bcftools view -i 'QUAL>=30 && INFO/DP>=10 && FILTER="PASS"'` or `bcftools filter -s LowQual` | Streams bgzipped VCF/BCF at C speed while preserving all `FORMAT` sample genotypes |
+| **Multi-sample cohort merging vs. intersection** | `bcftools merge` (non-overlapping samples) vs. `bcftools isec -p dir/` (concordance) | `merge` combines distinct samples into a multi-sample VCF; `isec` finds shared/private sites across callers |
+| **Chromosome renaming (`1` $\leftrightarrow$ `chr1`)** | `bcftools annotate --rename-chrs chr_map.txt in.vcf.gz` | Safely updates both `##contig=` header lines and body `#CHROM` records simultaneously |
 
-```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("genomics-vcf-operations")
-data = read_input("input.vcf", reader=library.read_records)
-result = library.analyze(data)
-write_output(result, "tables/result.csv")
-write_output(library.distribution_figure(result), "figures/distribution.png")
-```
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-Run `examples/example_step.py` through the step runner for a small,
-hand-worked synthetic fixture. It asserts known summary values.
-The reader materializes the input in memory; use bounded FASTQ reads or
-pre-filter large genomic files before loading them.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `read_records(path: str | Path) -> pd.DataFrame`
-
-Read records through read_input(path, reader=library.read_records).
-
-:param path: Input file in the format documented under Inputs and outputs.
-
-:returns: Parsed records as a DataFrame.
-:raises ValueError: Input values or file structure cannot be parsed.
-
-### `analyze(data: pd.DataFrame, *, min_qual: float=0.0, min_dp: int=0) -> pd.DataFrame`
-
-Compute vcf-operations summaries and return a new table, leaving data unchanged.
-
-:param data: Records containing chrom, pos, ref, alt, qual, filter, dp, type.
-:param min_qual: CLI default 0 keeps all QUAL values; raise to filter.
-:param min_dp: CLI default 0 keeps all INFO/DP values; FORMAT/DP is ignored.
-:returns: Result table with diagnostics and summary in attrs['run_info'].
-:raises ValueError: Required columns are absent or records are empty or invalid.
-
-### `run_info(data: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return analysis diagnostics and summary.
-
-:param data: Result returned by analyze.
-:param keep: Keep diagnostics by default; the CLI passes False.
-:returns: Independent diagnostics dictionary.
-:raises ValueError: analyze has not populated diagnostics.
-
-### `distribution_figure(data: pd.DataFrame)`
-
-Plot qual values without writing files.
-
-:param data: Result table containing qual.
-:returns: Matplotlib Figure.
-:raises ValueError: The value column is absent or table is empty.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-`analyze` returns a new DataFrame and leaves the input unchanged.
-`run_info(result)` returns the summary and method diagnostics.
-The CLI passes `keep=False` so diagnostics do not enter output tables.
-All calculations are deterministic; synthetic CLI demos retain seed 42.
-
-## Gotchas
-
-- `analyze` filters INFO/DP, not per-sample FORMAT/DP. Missing INFO/DP is treated as zero; each ALT becomes one row.
-- `read_records` preserves VCF header lines in attrs["vcf_headers"]. The legacy CLI filtered.vcf retains DP only and replaces sample genotypes with missing values; do not use it for genotype-preserving filtering.
-- `analyze` raises ValueError when no records pass filters, instead of the old CLI failing later with a missing summary key.
-
-## Inputs and outputs
-
-Input files:
-
-- File types: `.vcf`
-- VCF structure: `##fileformat`; columns: `#CHROM`, `POS`, `ID`, `REF`, `ALT`, `QUAL`, `FILTER`, `INFO`
-
-CLI output files:
-
-- `tables/variants.csv`
-- `filtered.vcf`
-- `report.md`
-- `result.json`
-- Produces artifact `genomics.filtered_variants` as `filtered.vcf` (`vcf`)
-
-The library writes no files. Steps use `write_output`; the CLI owns the
-listed artifacts. Public figure functions return matplotlib Figures and
-do not add new CLI outputs.
-
-## CLI
+### Pattern A: `bcftools` Normalization, Soft/Hard Filtering & `cyvcf2`/`pysam` Streaming
 
 ```bash
-python skills/genomics/genomics-vcf-operations/genomics_vcf_operations.py --input input_file --output results/
-python skills/genomics/genomics-vcf-operations/genomics_vcf_operations.py --demo --output /tmp/genomics_vcf_operations_demo
+# 1. Left-align indels, split multi-allelic records, and filter by QUAL and depth (preserving genotypes)
+bcftools norm -m -any -f ref.fa raw.vcf.gz -Ou \
+  | bcftools view -i 'QUAL >= 30 && INFO/DP >= 10' -Oz -o filtered.vcf.gz
+bcftools index -t filtered.vcf.gz
 ```
 
-## See also
+```python
+import pysam
 
-- `references/parameters.md`
-- `references/methodology.md`
-- `references/output_contract.md`
+# 2. Stream bgzipped VCF records with pysam.VariantFile
+with pysam.VariantFile("filtered.vcf.gz") as vcf:
+    for rec in vcf.fetch():
+        dp = rec.info.get("DP", 0)
+        gt = rec.samples[0]["GT"] if len(rec.samples) else (None, None)
+```
+
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("genomics-vcf-operations")`)
+
+```python
+# Calling use_skill("genomics-vcf-operations") auto-injects kernel.py helpers into the python kernel:
+records = read_records("data/variants.vcf")
+filtered_df = analyze(records, min_qual=30.0, min_dp=10)
+summary = vcf_summary(filtered_df)
+```
+
+## 3. Output Format & Verification Contract
+
+- **Filtered Variant Table** (`tables/variants.csv`):
+  - Contains `chrom`, `pos`, `id`, `ref`, `alt`, `qual`, `filter`, `dp` (`INFO/DP`), and `type` (`SNP`, `INDEL`, `MNP`), retaining only records satisfying `qual >= min_qual` and `dp >= min_dp`.
+- **VCF Header Preservation**:
+  - `read_records` stores original `##` metadata and `#CHROM` header lines in `df.attrs["vcf_headers"]`.
+- **Verification Invariants**:
+  - All retained rows satisfy `qual >= min_qual` and `dp >= min_dp`.
+  - VCF coordinates are 1-based inclusive (`pos >= 1`), and multi-allelic `ALT` records are decomposed consistently.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Standard `gzip` vs. `bgzip` Block Compression**:
+   - Standard `gzip` files cannot be indexed by `tabix` or `bcftools index`. Always compress VCFs with `bgzip` (or `bcftools view -Oz`) before indexing with `bcftools index -t`.
+2. **`INFO/DP` (Site-Level Combined Depth) vs. `FORMAT/DP` (Per-Sample Depth)**:
+   - In multi-sample VCFs, `INFO/DP` is the sum of read depths across all samples (so 100 samples at $1\times$ depth give `INFO/DP=100`), whereas `FORMAT/DP` is the depth in each individual sample. Use `FMT/DP >= 10` in `bcftools view -i` when filtering per-sample genotype support.
+3. **`bcftools isec` Without Prior `bcftools norm` Misses Equivalent Indels**:
+   - Two callers may represent the same 2-bp dinucleotide deletion at different positions in a tandem repeat or pack it inside a multi-allelic site. Always run `bcftools norm -m -any -f ref.fa` on both VCFs before computing intersections.
 
 ## Dependencies
 

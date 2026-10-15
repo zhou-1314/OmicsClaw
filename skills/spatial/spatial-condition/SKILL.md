@@ -9,120 +9,84 @@ tags:
 - differential-expression
 ---
 
-# spatial-condition
+# Multi-Sample Spatial Condition Comparison (`spatial-condition`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
+
+Use this playbook to test differential expression **between biological conditions** (e.g., Treated vs. Untreated, Disease vs. Healthy) across multi-slide / multi-patient spatial transcriptomics cohorts. For comparing spatial clusters on a single slide, use `spatial-de`.
+
+| Experimental Design | Replicates per Condition | Recommended Method | Upstream Library | Statistical Unit |
+|---|---|---|---|---|
+| **Multi-Patient / Multi-Slide Cohort** (overall or within each spatial domain) | $\ge 3$ biological samples (`sample_key`) | **Pseudobulk NB-GLM** (`method="pydeseq2"`) | `pydeseq2` (`DeseqDataSet` + `DeseqStats`) | Biological sample $(N = \text{slides/patients})$ |
+| **Multi-Slide with Batch Covariates** (e.g., paired patient or sequencing batch) | $\ge 3$ biological samples | **Multi-Factor Pseudobulk** (`design_factors=["batch", "condition"]`) | `pydeseq2` | Biological sample adjusted for batch |
+| **Exploratory / Low-Replicate Screen** | $< 3$ biological samples | **Within-Domain Wilcoxon** (`method="wilcoxon"`) | `scanpy.tl.rank_genes_groups` | Spot/cell (descriptive ranking only; $p$-values inflated) |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Domain-Stratified Sample Pseudobulk DE (`pydeseq2`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("spatial-condition")
-adata = library.compare_conditions(read_input("data/samples.h5ad"))
-write_output(library.results(adata), "tables/pseudobulk_de.csv")
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+# 1. Aggregate raw integer counts in adata.layers["counts"] per (sample_id, spatial_domain)
+raw_mat = adata.layers["counts"] if "counts" in adata.layers else adata.X
+all_results = []
+
+for domain, dom_obs in adata.obs.groupby("spatial_domain", observed=True):
+    rows, meta = {}, {}
+    for (sample_id, cond), idx in dom_obs.groupby(["sample_id", "condition"], observed=True).groups.items():
+        if len(idx) < 10:  # Require >=10 spots per (sample, domain)
+            continue
+        sub = raw_mat[adata.obs.index.get_indexer(idx)]
+        rows[str(sample_id)] = np.asarray(sub.sum(axis=0)).ravel().astype(int)
+        meta[str(sample_id)] = {"condition": str(cond), "n_spots": int(len(idx))}
+
+    meta_df = pd.DataFrame.from_dict(meta, orient="index")
+    if meta_df["condition"].nunique() < 2 or meta_df["condition"].value_counts().min() < 2:
+        continue
+
+    counts_df = pd.DataFrame.from_dict(rows, orient="index", columns=adata.var_names)
+    counts_df = counts_df.loc[:, counts_df.sum(axis=0) >= 10]
+
+    dds = DeseqDataSet(counts=counts_df, metadata=meta_df, design_factors="condition", quiet=True)
+    dds.deseq2()
+    stats_res = DeseqStats(dds, contrast=["condition", "treated", "control"], quiet=True)
+    stats_res.summary()
+    res = stats_res.results_df.reset_index().rename(columns={"index": "gene"})
+    res["spatial_domain"] = str(domain)
+    all_results.append(res)
+
+cond_de_df = pd.concat(all_results, ignore_index=True)
 ```
 
-## When to use
+### Optional Micro-Helper (`kernel.py`)
 
-Compare conditions within each expression cluster using independent biological
-samples. Both PyDESeq2 and Wilcoxon operate on sample-level pseudobulk counts.
-Splitting spots from one sample does not create biological replicates.
-For per-cluster marker genes use spatial-de.
+Calling `use_skill("spatial-condition")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `pseudobulk_aggregate(adata, sample_key="sample_id", condition_key="condition", cluster_key=None, layer="counts", min_cells=10)`
+- `condition_de_summary(df, fdr=0.05, lfc_thresh=0.5)`
 
-## Inputs & Outputs
+## 3. Output Format & Verification Contract
 
-Input: AnnData with raw integer counts and sample/condition columns.
-Counts are read from `layers["counts"]`, then `raw`, then `X`.
-Nonfinite, negative or fractional counts are rejected, not rounded.
-Missing default `leiden` labels trigger expression clustering; other missing
-cluster columns raise.
+- **Condition DE Results Table** (`tables/condition_de_results.csv`):
+  - Columns: `spatial_domain` (or `cluster`), `gene`, `baseMean`, `log2FoldChange`, `lfcSE`, `stat`, `pvalue`, `padj`.
+- **Pseudobulk Count Matrix** (`tables/pseudobulk_counts.csv`):
+  - Sample-by-gene summed integer count table used for NB-GLM fitting.
+- **Verification**:
+  - Verify that the degrees of freedom correspond to the number of biological replicates (`n_samples`), not total spots (`adata.n_obs`), and that `counts_df` contains strictly non-negative integers.
 
-Functions return the same AnnData plus accessible result tables and a figure.
-CLI writes `processed.h5ad`, `report.md`, `result.json`,
-`tables/pseudobulk_de.csv`, per-cluster and skipped-contrast tables,
-and a diagnostic gallery. See [references/output_contract.md](references/output_contract.md)
-for file names and generation conditions.
+## 4. Gotchas & Troubleshooting
 
-## Key CLI
-
-```bash
-python skills/spatial/spatial-condition/spatial_condition.py --input samples.h5ad --output results/condition --condition-key condition --sample-key sample_id --reference-condition control
-python skills/spatial/spatial-condition/spatial_condition.py --demo --output /tmp/spatial_condition
-```
-
-`examples/example_step.py` checks sample-level counts on simulated data.
-[references/parameters.md](references/parameters.md) lists all backend flags.
-
-## Gotchas
-
-- `tables/skipped_contrasts.csv` explains missing comparisons; absence is not
-  evidence of no differential expression.
-- `pseudobulk_de.csv` includes per-row method and sample counts. PyDESeq2 fit
-  failures can use Wilcoxon; `run_info()["fallbacks"]` records the reason and
-  requested/executed methods. Missing PyDESeq2 raises with an installer hint.
-- `layers["counts"]` must be real counts, not rounded log-normalized expression.
-- `condition_key` and `sample_key` must differ, and each sample must belong
-  to exactly one condition.
-- `n_samples_reference` and `n_samples_other` count samples, never spots.
-  Two replicates per condition are the default minimum, not a power guarantee.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `compare_conditions(adata, *, condition_key: str='condition', sample_key: str='sample_id', cluster_key: str='leiden', method: str='pydeseq2', reference_condition: str | None=None, min_counts_per_gene: int=10, min_samples_per_condition: int=2, fdr_threshold: float=0.05, log2fc_threshold: float=1.0, random_state: int=0, **parameters)`
-
-Aggregate counts per sample and cluster, then test conditions in place.
-
-Both methods use biological-sample pseudobulk, not individual spots.
-PyDESeq2 fitting failures may fall back to Wilcoxon, with warnings and a
-per-contrast fallback record. Missing packages do not trigger fallback.
-
-:param adata: AnnData with integer counts in layers['counts'], raw, or X,
-    in that preference order; each sample belongs to exactly one condition.
-:param condition_key: Condition column, default condition.
-:param sample_key: Biological replicate column, default sample_id.
-:param cluster_key: Cluster column, default leiden; missing leiden is computed.
-:param method: pydeseq2 (default) or pseudobulk wilcoxon.
-:param reference_condition: Reference label; None uses the first sorted condition.
-:param min_counts_per_gene: Minimum total pseudobulk count, default 10.
-:param min_samples_per_condition: Minimum independent replicates, default 2.
-:param fdr_threshold: Adjusted p-value threshold, default 0.05.
-:param log2fc_threshold: Absolute effect threshold for hit summaries, default 1.
-:param random_state: Seed for clustering only if leiden is absent, default 0.
-:param parameters: Backend options retain CLI defaults: pydeseq2_fit_type='parametric',
-    pydeseq2_size_factors_fit_type='ratio', pydeseq2_refit_cooks=True,
-    pydeseq2_alpha=0.05, pydeseq2_cooks_filter=True,
-    pydeseq2_independent_filter=True, pydeseq2_n_cpus=1,
-    wilcoxon_alternative='two-sided'.
-:returns: The same AnnData with JSON-encoded tables and diagnostics; results
-    returns the DE table and run_info includes skipped contrasts.
-:raises ValueError: Invalid counts, design, cluster column or parameters.
-:raises ImportError: Missing PyDESeq2; use install_skill_deps.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read comparison diagnostics and result tables.
-
-:param adata: AnnData returned by compare_conditions.
-:param keep: True retains diagnostics; False removes them for CLI serialization.
-:returns: Summary including global_de, per_cluster_de and skipped contrasts.
-
-### `results(adata) -> pd.DataFrame`
-
-Return all tested genes across clusters and condition contrasts.
-
-:param adata: Compared AnnData.
-:returns: DataFrame with gene, log2fc, pvalue_adj, cluster, contrast and sample counts.
-    Empty if every contrast was skipped or diagnostics were removed.
-
-### `volcano_figure(adata, *, contrast: str | None=None)`
-
-Plot log2 fold changes against adjusted p-values.
-
-:param adata: Compared AnnData.
-:param contrast: Optional exact contrast label; None shows all tested entries.
-:returns: A matplotlib Figure; the caller saves and closes it.
-
-<!-- api:end -->
+1. **Pseudoreplication from Spot-Level Condition Testing**:
+   - Running `sc.tl.rank_genes_groups(adata, groupby="condition")` directly on $20,000$ Visium spots from 2 slides treats spots as independent biological replicates, yielding thousands of false-positive $p < 10^{-50}$ driven by slide batch effects and spatial autocorrelation. Always aggregate to `(sample_key, cluster_key)` pseudobulks first.
+2. **PyDESeq2 Requires Unnormalized Integer Counts**:
+   - Passing log1p-normalized floats from `adata.X` into `DeseqDataSet` raises a `ValueError` or corrupts dispersion estimation. Always sum `adata.layers["counts"]` (or `adata.raw.X` if raw counts were stored there).
+3. **Sparse `(sample, domain)` Combinations (`min_cells < 10`)**:
+   - A spatial niche that appears in only 2 spots on a slide produces an ultra-noisy pseudobulk vector that distorts size factors (`median-of-ratios`). Filter out `(sample, domain)` pairs with fewer than 10 spots before fitting `DeseqDataSet`.
+4. **Hyphens or Spaces in Condition Labels**:
+   - `pydeseq2` formula parsing checks factor levels in `design_factors`. Avoid underscores/hyphens that clash with contrast strings; sanitize `meta_df["condition"]` to clean tokens (e.g., `"treated"` vs `"control"`).
 
 ## Dependencies
 

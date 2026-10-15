@@ -54,23 +54,16 @@ def test_file_marker_refuses_a_workspace_escape_before_loading(tmp_path):
 
 
 def make_skill(root):
-    import shutil
-
-    shutil.copytree(
-        Path(__file__).parents[2] / "skills/_sdk",
-        root / "skills/_sdk",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        dirs_exist_ok=True,
-    )
     directory = root / "skills" / "fixture" / "resource"
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
         "---\nname: resource\ndescription: Read a declared resource\nentry: run\n---\n"
     )
     (directory / "table.txt").write_text("resource-value")
-    (directory / "_api.py").write_text(
-        "from pathlib import Path\nimport os,json\n__all__=['run']\n"
+    (directory / "kernel.py").write_text(
+        "__all__=['run']\n"
         "def run(output='results/value.json'):\n"
+        " '''Read the payload resource.'''\n from pathlib import Path\n import os,json\n"
         " p=Path(output);p.parent.mkdir(parents=True,exist_ok=True)\n"
         " p.write_text(json.dumps({'value':Path(__file__).with_name('table.txt').read_text(),'pid':os.getpid()}))\n"
         " return {'output':str(p)}\n"
@@ -169,25 +162,16 @@ def test_worker_calls_original_api_in_selected_process_with_payload_resource(tmp
     ]
 
 
-def test_explicit_managed_r_library_never_creates_a_library_in_user_prefix(
-    tmp_path, monkeypatch
-):
-    from skills._sdk.r_script_runner import RScriptRunner
+def test_scientific_result_writer_keeps_named_indexes_and_plain_json(tmp_path):
+    import numpy as np
+    import pandas as pd
+    from omicsclaw.entry.ssh.science_worker import write_result
 
-    prefix = tmp_path / "readonly-prefix"
-    rscript = prefix / "bin" / "Rscript"
-    rscript.parent.mkdir(parents=True)
-    rscript.write_text("")
-    managed = tmp_path / "owned-r-library"
-    managed.mkdir()
-    monkeypatch.setenv("OMICSCLAW_R_LIBS", str(managed))
-    monkeypatch.setenv("OMICSCLAW_RSCRIPT", str(rscript))
-    monkeypatch.setenv("CONDA_PREFIX", str(prefix))
-    environment = RScriptRunner(verbose=False)._build_r_env()
-    assert (environment["R_LIBS_USER"], (prefix / "lib").exists()) == (
-        str(managed),
-        False,
-    )
+    table = pd.DataFrame({"value": [1]}, index=pd.Index(["gene"], name="id"))
+    write_result(table, tmp_path / "table.csv", ".csv")
+    assert (tmp_path / "table.csv").read_text() == "id,value\ngene,1\n"
+    write_result({"values": np.array([1, 2]), "path": Path("data.csv")}, tmp_path / "value.json", ".json")
+    assert json.loads((tmp_path / "value.json").read_text()) == {"values": [1, 2], "path": "data.csv"}
 
 
 @pytest.mark.parametrize("entry", ["form", "agent"])
@@ -306,8 +290,8 @@ def test_form_job_uses_canonical_science_worker_and_original_approval(tmp_path, 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("branch", ["sdk", "forced_r"])
-def test_worker_reuses_public_scientific_sdk_and_real_r_in_owned_library(
+@pytest.mark.parametrize("branch", ["kernel", "forced_r"])
+def test_worker_uses_sidecar_and_real_r_in_owned_library(
     tmp_path, branch
 ):
     import shutil
@@ -316,27 +300,16 @@ def test_worker_reuses_public_scientific_sdk_and_real_r_in_owned_library(
 
     source = tmp_path / "source"
     directory = make_skill(source)
-    original = Path(__file__).parents[2] / "skills" / "_sdk"
-    sdk = source / "skills" / "_sdk"
-    sdk.mkdir(exist_ok=True)
-    for name in ("__init__.py", "result.py", "r_script_runner.py"):
-        shutil.copyfile(original / name, sdk / name)
-    body = "from skills._sdk.result import write_result_json\nfrom pathlib import Path\n__all__=['run']\ndef run():\n"
+    body = "__all__=['run']\ndef run():\n from pathlib import Path\n"
     if branch == "forced_r":
-        rscript = Path(sys.prefix) / "bin" / "Rscript"
-        assert rscript.is_file(), (
-            "actual forced R gate needs the selected environment's Rscript"
-        )
+        rscript = Path(shutil.which("Rscript") or "")
+        assert rscript.is_file(), "the real R worker test needs Rscript"
         (directory / "fixture.R").write_text(
             "args <- commandArgs(trailingOnly=TRUE)\ndir.create('results',showWarnings=FALSE)\nwriteLines(readLines(args[1]), 'results/r-value.txt')\n"
         )
-        body += " from skills._sdk.r_script_runner import RScriptRunner\n runner=RScriptRunner(scripts_dir=Path(__file__).parent,verbose=False)\n result=runner.run_script('fixture.R',args=[str(Path(__file__).with_name('table.txt'))],expected_outputs=['r-value.txt'],output_dir=Path('results'))\n if not result.success: raise RuntimeError('actual R failed')\n"
-    body += (
-        " return write_result_json('results','resource','1',{'branch':'"
-        + branch
-        + "'},{'resource':Path(__file__).with_name('table.txt').read_text()})\n"
-    )
-    (directory / "_api.py").write_text(body)
+        body += " import os,subprocess\n subprocess.run([os.environ['OMICSCLAW_RSCRIPT'],str(Path(__file__).with_name('fixture.R')),str(Path(__file__).with_name('table.txt'))],check=True)\n"
+    body += " return {'summary':{'branch':" + repr(branch) + "},'data':{'resource':Path(__file__).with_name('table.txt').read_text()}}\n"
+    (directory / "kernel.py").write_text(body)
     payload = tmp_path / "supplied"
     manifest = build_payload(source, payload)
     work = tmp_path / "work"
@@ -386,9 +359,10 @@ def test_worker_reuses_public_scientific_sdk_and_real_r_in_owned_library(
     )
     assert result.returncode == 0, result.stderr
     assert (
-        json.loads((work / "results" / "result.json").read_text())["summary"]["branch"]
+        json.loads((work / "tables" / "omicsclaw-result.json").read_text())["summary"]["branch"]
         == branch
     )
+    assert not (work / "lib").exists()
     if branch == "forced_r":
         assert (
             work / "results" / "r-value.txt"

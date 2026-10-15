@@ -18,117 +18,109 @@ tags:
 - flashdeconv
 ---
 
-# spatial-deconv
+# Spatial Multi-Cell Spot Deconvolution (`spatial-deconv`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Estimate cell-type proportions for spatial spots using a labelled single-cell
-reference. Use spatial-annotate for discrete labels and spatial-domains for
-tissue regions. Every method requires a reference; the CLI default is cell2location.
+Use this playbook to estimate per-spot cell-type proportions or cell abundances on multi-cell-per-spot spatial platforms (10x Visium, Slide-seqV2, ST arrays) using an annotated single-cell RNA-seq (`scRNA-seq`) reference. For single-cell resolution spatial technologies (Xenium, MERFISH, CosMx), use `spatial-annotate` instead.
 
-## Use from a step
+| Method (`method=`) | Upstream Package | Count Model & Input | Speed / Hardware | Best Used When |
+|---|---|---|---|---|
+| **Cell2location** (`cell2location`) | `cell2location` (`scvi-tools`) | Hierarchical Negative Binomial on raw integer counts | GPU recommended (2-stage VI) | Gold-standard sensitivity for fine-grained subtypes and absolute cell abundance estimation |
+| **FlashDeconv** (`flashdeconv`) | `flashdeconv` | Sketch-regularized linear / NNLS on normalized or count matrices | Fast CPU ($<10\text{ s}$) | Rapid baseline deconvolution on large cohorts without GPU training overhead |
+| **Tangram Clusters** (`tangram`) | `tangram` (`mode="clusters"`) | Cosine similarity + density prior on shared markers | Fast CPU / GPU | Projecting reference cluster profiles onto spatial spots with minimal hyperparameter tuning |
+| **DestVI** (`destvi`) | `scvi.external.DestVI` (`CondSCVI` + `DestVI`) | Conditional VAE continuous state + discrete proportion | GPU / CPU | Capturing continuous intra-cell-type activation gradients inside spatial spots |
+| **RCTD** (`rctd`) | R `spacexr` | Poisson-lognormal mixture (`doublet` or `full` mode) | Multi-core CPU (R) | Slide-seq beads (`doublet` mode) or Visium (`full` mode) with platform-effect normalization |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Two-Stage Bayesian Deconvolution (`cell2location`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-spatial = read_input("spatial.h5ad")
-reference = read_input("reference.h5ad")
-library = load_skill("spatial-deconv")
-library.deconvolve(spatial, reference=reference, method="flashdeconv", random_state=0)
-write_output(library.proportions(spatial), "tables/proportions.csv")
+import numpy as np
+import pandas as pd
+import cell2location as c2l
+from cell2location.models import RegressionModel, Cell2location
+
+# 1. Fit reference cell-type signatures on raw scRNA-seq counts
+adata_ref = adata_sc.copy()
+adata_ref.X = adata_ref.layers["counts"].copy() if "counts" in adata_ref.layers else adata_ref.X
+RegressionModel.setup_anndata(adata_ref, labels_key="cell_type")
+mod_ref = RegressionModel(adata_ref)
+mod_ref.train(max_epochs=250, use_gpu=False)
+adata_ref = mod_ref.export_posterior(adata_ref, sample_kwargs={"num_samples": 1000, "batch_size": 2500})
+inf_aver = adata_ref.varm["means_per_cluster_mu_fg"][
+    [f"means_per_cluster_mu_fg_{c}" for c in adata_ref.uns["mod"]["factor_names"]]
+].copy()
+inf_aver.columns = adata_ref.uns["mod"]["factor_names"]
+
+# 2. Intersect genes and map cell types onto raw spatial spot counts
+shared_genes = np.intersect1d(adata_sp.var_names, inf_aver.index)
+adata_sp_sub = adata_sp[:, shared_genes].copy()
+adata_sp_sub.X = adata_sp_sub.layers["counts"].copy() if "counts" in adata_sp_sub.layers else adata_sp_sub.X
+inf_aver = inf_aver.loc[shared_genes]
+
+Cell2location.setup_anndata(adata_sp_sub)
+mod_sp = Cell2location(adata_sp_sub, cell_state_df=inf_aver, N_cells_per_location=8, detection_alpha=20)
+mod_sp.train(max_epochs=5000, batch_size=None, train_size=1.0, use_gpu=False)
+adata_sp_sub = mod_sp.export_posterior(adata_sp_sub)
+
+# 3. Normalize 5% quantile posterior abundances to spot proportions summing to 1.0
+abund = adata_sp_sub.obsm["q05_cell_abundance_w_sf"].copy()
+abund.columns = adata_sp_sub.uns["mod"]["factor_names"]
+prop_df = abund.div(abund.sum(axis=1).replace(0, 1.0), axis=0)
+adata_sp.obsm["deconv_proportions"] = prop_df
 ```
 
-[examples/example_step.py](examples/example_step.py) uses an explicit synthetic
-reference and verifies known stripe identities; it is not a real-tissue benchmark.
-It sets lambda_spatial=10 for the small grid; the CLI default remains 5000.
+### Pattern B: Fast Cluster-Level Deconvolution (`tangram`)
 
-## API
+```python
+import numpy as np
+import tangram as tg
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `deconvolve(adata, *, reference, method: str='cell2location', cell_type_key: str='cell_type', random_state: int=0, **parameters)`
-
-Estimate proportions in place and return the same spatial AnnData.
-
-Count models read layers['counts'], raw or X in that order. FlashDeconv,
-Tangram and SPOTlight read nonnegative X. Reference data are copied.
-RCTD, SPOTlight and CARD retain their temporary R bridges; their wrappers
-do not expose a seed and results vary between runs.
-
-:param adata: Spatial AnnData; input expression is retained.
-:param reference: Required labelled reference AnnData; load it with read_input.
-:param method: CLI default cell2location; flashdeconv, rctd, destvi,
-    stereoscope, tangram, spotlight and card are also supported.
-:param cell_type_key: Reference label column, CLI default cell_type.
-:param random_state: Seed for FlashDeconv/Tangram and scvi training, default 0.
-:param parameters: Method options in references/parameters.md, with CLI
-    prefixes removed; omitted options keep their CLI defaults.
-:returns: The same AnnData with deconvolution_<method>, labels and JSON diagnostics.
-:raises ValueError: Invalid method, expression, reference labels or backend proportions.
-:raises TypeError: Reference is not AnnData or a method option is unknown.
-:raises ImportError: A backend is missing; use install_skill_deps for its named package.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read method settings, reference overlap and result diagnostics.
-
-:param adata: AnnData returned by deconvolve.
-:param keep: True retains diagnostics; False removes them before CLI serialization.
-:returns: Diagnostic dict with matrix_sources, seed (None for R wrappers)
-    and optional CARD refinement tables.
-
-### `proportions(adata, *, method: str | None=None)`
-
-Return stored proportions with observation and cell-type identifiers.
-
-:param adata: AnnData returned by deconvolve; expression values are not read.
-:param method: None infers a sole stored method; specify it after multiple analyses.
-:returns: A DataFrame indexed by observation, with one column per reference label.
-:raises ValueError: No unique method can be inferred or label metadata are missing.
-
-### `proportions_figure(adata, *, method: str | None=None)`
-
-Plot mean proportions per reference cell type.
-
-:param adata: AnnData returned by deconvolve; reads the stored proportion matrix.
-:param method: None infers a sole method; specify it for multiple results.
-:returns: A matplotlib Figure without writing files.
-:raises ValueError: No unique stored method is available.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-FlashDeconv, cell2location, RCTD, DestVI, Stereoscope, Tangram, SPOTlight and CARD
-remain available. Python method options omit CLI prefixes; see
-[parameters](references/parameters.md) and [matrix conventions](references/methodology.md).
-The default cell2location budget is 30,000 epochs; select a method explicitly
-for a quick exploratory run.
-
-## Gotchas
-
-- `deconvolve` requires a labelled reference AnnData for every backend.
-- `deconvolve` validates finite nonnegative expression and integer counts for count models.
-- `proportions` needs a method when more than one result is stored; missing cell-type metadata raises an error.
-- `run_info` reports method parameters and seed. RCTD, SPOTlight and CARD retain unseeded R wrappers, so results vary between runs.
-- `--demo` exits with a reference-data requirement; use the executable synthetic step for demonstration.
-
-## Inputs and outputs
-
-Functions return AnnData, DataFrames and Figures. CLI output includes
-processed.h5ad, tables/proportions.csv, reports and conditional gallery files.
-See the complete [output contract](references/output_contract.md).
-
-## CLI
-
-```bash
-python skills/spatial/spatial-deconv/spatial_deconv.py --input spatial.h5ad --reference reference.h5ad --method flashdeconv --output results/deconv
+shared = list(np.intersect1d(adata_sc.var_names, adata_sp.var_names))
+tg.pp_adatas(adata_sc, adata_sp, genes=shared)
+ad_map = tg.map_cells_to_space(
+    adata_sc,
+    adata_sp,
+    mode="clusters",
+    cluster_label="cell_type",
+    density_prior="rna_count_based",
+    num_epochs=500,
+    device="cpu",
+)
+tg.project_cell_annotations(ad_map, adata_sp, annotation="cell_type")
+prop_df = adata_sp.obsm["tangram_ct_pred"].copy()
+prop_df = prop_df.div(prop_df.sum(axis=1).replace(0, 1.0), axis=0)
+adata_sp.obsm["deconv_proportions"] = prop_df
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- [Parameters](references/parameters.md)
-- [Methodology](references/methodology.md)
-- [Output contract](references/output_contract.md)
+Calling `use_skill("spatial-deconv")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `attach_proportions(adata, prop_df, key_added="deconv_proportions", dominant_key="dominant_cell_type")`
+- `deconv_summary(adata, key="deconv_proportions")`
+
+## 3. Output Format & Verification Contract
+
+- **Deconvolved Spatial AnnData** (`intermediate/deconvolved.h5ad`):
+  - `adata.obsm["deconv_proportions"]`: `pd.DataFrame` or array of shape `(n_spots, n_cell_types)` where each row is non-negative and sums to $1.0$.
+  - `adata.obs["dominant_cell_type"]`: top-proportion cell type per spot.
+- **Proportions Table** (`tables/proportions.csv`):
+  - Spot-by-cell-type proportion matrix indexed by `adata.obs_names`.
+- **Verification**:
+  - Assert `np.allclose(prop_df.sum(axis=1), 1.0, atol=1e-3)` and verify zero `NaN` entries.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Count-Based Models Require Unnormalized Integer Counts**:
+   - `cell2location`, `DestVI`, `Stereoscope`, and `RCTD` model raw UMI counts via Negative Binomial or Poisson distributions. Passing log-normalized expression causes posterior collapse. Always restore raw counts from `adata.layers["counts"]` before calling `setup_anndata`.
+2. **Remove Mitochondrial & High-Abundance Housekeeping Genes Before Deconvolution**:
+   - Mitochondrial (`MT-`) and ribosomal (`RPS`/`RPL`) genes account for 15–30% of spot UMIs but carry weak lineage specificity. Exclude them from the shared gene set so cell-type marker genes drive the likelihood.
+3. **Setting `N_cells_per_location` and `detection_alpha` in `cell2location`**:
+   - Use `N_cells_per_location=8` (5–15 cells) for $55\ \mu\text{m}$ 10x Visium spots and `N_cells_per_location=1`–`2` for $10\ \mu\text{m}$ Slide-seq beads. Set `detection_alpha=20` when within-slide technical sensitivity varies strongly across tissue regions.
+4. **Abundance vs. Relative Proportion**:
+   - `cell2location` outputs estimated cell counts (`q05_cell_abundance_w_sf`) whose row sums vary by spot cellularity. Divide each row by its row sum when downstream analyses expect relative proportions summing to $1.0$.
 
 ## Dependencies
 

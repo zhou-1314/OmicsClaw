@@ -12,155 +12,99 @@ tags:
 - deseq2
 ---
 
-# sc-de
+# Single-Cell Differential Expression & Marker Discovery (`sc-de`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has a preprocessed scRNA-seq AnnData and wants to know either
-(a) which genes mark each cluster (Wilcoxon / t-test / logreg ranking) or
-(b) which genes change between conditions in a replicate-aware way
-(`pseudobulk_de`, DESeq2 in R).  Mixing normalized expression and raw
-counts across these paths is the most common silent-wrong-answer failure
-mode, so each path reads the matrix it needs.
+Select the statistical paradigm based on experimental design and biological replication before writing code:
 
-## Use from a step
+| Experimental Scenario | Biological Replicates (`sample_key`) | Recommended Method | Upstream Library | Statistical Unit |
+|---|---|---|---|---|
+| **Multi-sample two-condition DE** (e.g., disease vs. control across patients/donors) | $\ge 3$ per condition | **Pseudobulk Negative Binomial GLM** | `pydeseq2` (`DeseqDataSet` + `DeseqStats`) | **Sample / Donor** (prevents pseudoreplication) |
+| **Cluster marker discovery** (1-vs-rest or exploratory cell-type signatures) | $1$ or Exploratory | **Wilcoxon Rank-Sum** (`method="wilcoxon"`) | `scanpy.tl.rank_genes_groups` | **Cell** (fast, non-parametric rank test) |
+| **Continuous covariate / nested random effects** | $\ge 2$ per condition with covariates | **Linear Mixed / GLM Hurdle** (`MAST` / `statsmodels`) | `statsmodels` or R `MAST` | **Cell + Donor random effect** |
+
+> **Decision Rule**: Never report cell-level Wilcoxon $p$-values as condition-level differential expression across multi-donor cohorts; cell-level tests treat thousands of cells from the same donor as independent observations and inflate false positives by orders of magnitude.
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Exploratory Cluster Marker Ranking (`scanpy`)
 
 ```python
-de = load_skill("sc-de")
-adata = read_input("results/04_annotation/intermediate/adata_annotated.h5ad")
-table = de.rank_genes(adata, groupby="cell_type", method="wilcoxon")
-write_output(table, "tables/de_full.csv")
-write_output(de.top_genes(table, n_top=10), "tables/markers_top.csv")
-write_output(de.volcano_figure(table, group="B cell"), "figures/volcano_b_cell.png")
+import scanpy as sc
+import pandas as pd
+
+# Ensure log-normalized expression is in adata.X (or specify layer="log1p")
+sc.tl.rank_genes_groups(
+    adata,
+    groupby="leiden",
+    method="wilcoxon",
+    pts=True,          # Record fraction of cells expressing each gene (pct_nz_group / pct_nz_reference)
+    use_raw=False,
+)
+markers_df = sc.get.rank_genes_groups_df(adata, group=None)
+# Standardized columns: group, names, scores, logfoldchanges, pvals, pvals_adj, pct_nz_group, pct_nz_reference
 ```
 
-A complete step that runs on demo data: `examples/example_step.py`.
+### Pattern B: Multi-Sample Condition DE via Pseudobulk (`pydeseq2`)
 
-## API
+```python
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+# 1. Aggregate raw integer counts from adata.layers["counts"] per (donor, cell_type)
+raw_mat = adata.layers["counts"] if "counts" in adata.layers else adata.X
+pb_rows, pb_meta = {}, {}
+for (sample, cond), idx in adata.obs.groupby(["sample_id", "condition"], observed=True).groups.items():
+    if len(idx) < 10:  # Drop pseudobulk profiles with < 10 cells
+        continue
+    sub = raw_mat[adata.obs.index.get_indexer(idx)]
+    pb_rows[str(sample)] = np.asarray(sub.sum(axis=0)).ravel().astype(int)
+    pb_meta[str(sample)] = {"condition": str(cond), "n_cells": int(len(idx))}
 
-### `rank_genes(adata, *, groupby: str='leiden', method: str='wilcoxon', group1: str | None=None, group2: str | None=None, logreg_solver: str='lbfgs') -> pd.DataFrame`
+counts_df = pd.DataFrame.from_dict(pb_rows, orient="index", columns=adata.var_names)
+meta_df = pd.DataFrame.from_dict(pb_meta, orient="index")
 
-Rank genes per group of cells: every group against the rest, or ``group1`` against ``group2``.
+# 2. Filter lowly expressed genes (>= 10 total reads across pseudobulk samples)
+counts_df = counts_df.loc[:, counts_df.sum(axis=0) >= 10]
 
-``wilcoxon``, ``t-test`` and ``logreg`` run scanpy's ``rank_genes_groups`` on
-``X`` (``use_raw=False``, with the fraction of expressing cells) and also leave
-its result in ``uns['rank_genes_groups']``; ``mast`` runs the MAST hurdle model
-in R. Cells are the units here, so p-values overstate the evidence for a
-difference between conditions; use :func:`pseudobulk_de` for that.
+# 3. Fit Negative Binomial GLM and extract Wald test statistics
+dds = DeseqDataSet(counts=counts_df, metadata=meta_df, design_factors="condition", quiet=True)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=["condition", "stimulated", "control"], quiet=True)
+stat_res.summary()
+de_df = stat_res.results_df.reset_index().rename(columns={"index": "gene"})
+```
 
-:param groupby: The ``obs`` column defining the groups. Default ``"leiden"``; when it
-    is missing and ``louvain`` exists, ``louvain`` is used and recorded.
-:param method: ``"wilcoxon"`` (default; scanpy's recommended test), ``"t-test"``,
-    ``"logreg"`` or ``"mast"``.
-:param group1: Compare only this group ...
-:param group2: ... against this one. Default: each group against the rest.
-:param logreg_solver: The scikit-learn solver for ``logreg``. Default ``"lbfgs"``.
-:returns: One row per gene and group. scanpy methods: ``names``, ``scores``,
-    ``logfoldchanges``, ``pvals``, ``pvals_adj``, ``pct_nz_group``,
-    ``pct_nz_reference``, ``group``; ``mast``: ``gene``, ``group``, ``pvalue``,
-    ``padj`` and effect columns.
-:raises ValueError: an unknown method, or the group column is missing.
-:raises RuntimeError: ``mast`` and R or MAST is missing.
+### Optional Micro-Helper (`kernel.py`)
 
-### `pseudobulk_de(adata, *, condition_key: str, group1: str, group2: str, sample_key: str='sample_id', celltype_key: str='cell_type', min_cells: int=10, min_counts: int=1000) -> pd.DataFrame`
+Calling `use_skill("sc-de")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `rank_genes(adata, groupby="leiden", method="wilcoxon")`
+- `pseudobulk_aggregate(adata, sample_key="sample_id", group_key="condition", layer="counts")`
+- `de_summary(df)`
 
-DESeq2 on pseudobulk counts: one test of ``group1`` against ``group2`` per cell type, run in R.
+## 3. Output Format & Verification Contract
 
-Counts are summed per sample and cell type from ``layers['counts']``, ``raw``
-or a count-like ``X``; bins below the thresholds are dropped. Samples, not
-cells, are the units, so this is the test for condition effects.
+- **Primary DE Table** (`tables/de_results.csv` or `tables/markers_all.csv`):
+  - For Scanpy marker ranking: `group`, `names` (or `gene`), `scores`, `logfoldchanges`, `pvals`, `pvals_adj`.
+  - For Pseudobulk `pydeseq2`: `gene`, `baseMean`, `log2FoldChange`, `lfcSE`, `stat`, `pvalue`, `padj`.
+- **Verification Checks**:
+  - Confirm `pvals_adj` / `padj` are bounded in $[0, 1]$ with `NaN` handled explicitly before thresholding (`padj < 0.05` and `|log2FoldChange| >= 1.0`).
+  - Confirm `n_tested > 0` and verify top upregulated genes match expected biology or cluster expression dotplots.
 
-:param condition_key: The ``obs`` column holding the condition.
-:param group1: The condition of interest (numerator of the fold change).
-:param group2: The reference condition.
-:param sample_key: The ``obs`` column naming biological replicates. Default ``"sample_id"``.
-:param celltype_key: The ``obs`` column with cell types. Default ``"cell_type"``.
-:param min_cells: Minimum cells per sample and cell type bin. Default 10.
-:param min_counts: Minimum total counts per bin. Default 1000.
-:returns: Columns ``gene``, ``log2FoldChange``, ``pvalue``, ``padj`` (and DESeq2's
-    others) plus ``cell_type``.
-:raises ValueError: a missing column, missing groups, or no count-like matrix.
-:raises RuntimeError: R or DESeq2 is missing, or no bin passes the thresholds.
+## 4. Gotchas & Troubleshooting
 
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-What the last :func:`rank_genes` or :func:`pseudobulk_de` call recorded under ``summary``.
-
-``summary`` has ``method``, ``groupby`` (the column actually used), ``n_groups``,
-``n_genes_tested`` and ``expression_source``.
-
-:param keep: Leave the record in ``adata.uns``; ``False`` removes it.
-:returns: The record, or an empty dict when neither has run on *adata*.
-
-### `top_genes(table: pd.DataFrame, *, n_top: int=10) -> pd.DataFrame`
-
-The first *n_top* genes of each group.
-
-A scanpy table is already ranked within each group. A table with ``padj``
-(MAST) is sorted by ``padj`` then ``pvalue`` first.
-
-:param table: What :func:`rank_genes` returned.
-:param n_top: Genes per group. Default 10, the CLI's default.
-:returns: The selected rows, in the table's columns.
-
-### `volcano_figure(table: pd.DataFrame, *, padj_threshold: float=0.05, log2fc_threshold: float=1.0, group: str | None=None)`
-
-A volcano plot of a DE table, significant genes coloured.
-
-:param table: What :func:`rank_genes` or :func:`pseudobulk_de` returned.
-:param padj_threshold: Adjusted p-value cut. Default 0.05.
-:param log2fc_threshold: Absolute log2 fold-change cut. Default 1.0.
-:param group: Plot only this group (or cell type). Default: all rows.
-:returns: A matplotlib Figure.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-| Question | Function | Units | Needs |
-|---|---|---|---|
-| Which genes mark each cluster or cell type | `rank_genes(method="wilcoxon")` (default) | cells | normalised `X` |
-| Same, other tests | `rank_genes(method="t-test" / "logreg")` | cells | normalised `X` |
-| Same, hurdle model | `rank_genes(method="mast")` | cells | log-normalised `X`; R with MAST |
-| Which genes change between conditions | `pseudobulk_de(...)` | samples | raw counts; a replicate column; R with DESeq2 |
-
-Defaults and their sources: `method="wilcoxon"` is scanpy's recommended
-marker test; `n_top=10` and the volcano cuts (`padj_threshold=0.05`,
-`log2fc_threshold=1.0`) are the CLI's defaults; `min_cells=10` and
-`min_counts=1000` per pseudobulk bin are the CLI's defaults, a common
-choice for 10x data. A comparison between conditions with biological
-replicates is a pseudobulk question; ask the user for the replicate column
-when it is not obvious.
-
-## Gotchas
-
-- **Cell-level tests are not replicate-aware.** Wilcoxon, t-test, logreg and MAST treat each cell as independent, which inflates false positives for treated-versus-control comparisons. Use `pseudobulk_de` whenever there are biological replicates and the question is about the condition.
-- **`pseudobulk_de` needs raw counts.** It takes `layers["counts"]`, then `raw`, then `X`, each only if it looks count-like; check `run_info(adata)["summary"]["expression_source"]` after the run: `layers.counts` or `adata.raw`, not `adata.X`.
-- **`pseudobulk_de` needs `group1` and `group2`.** The cell-level tests compare each group with the rest when they are absent.
-- **Small bins drop whole cell types.** Sample-by-cell-type bins under `min_cells` cells are skipped without a note; check the per-sample cell counts before reading "no DEGs" as a biological null.
-- **`sample_key` is the statistical design.** It must name biological replicates with at least two per condition; a non-replicate column gives nonsense and is not caught.
-- **`groupby="leiden"` falls back to `louvain`** when only `louvain` exists; `run_info(adata)["summary"]["groupby"]` says which column was used.
-
-## Inputs and outputs
-
-- `rank_genes` reads `X` and `obs[groupby]`, writes `uns['rank_genes_groups']` (scanpy methods) and returns the full table. `pseudobulk_de` reads the count matrix and `obs[condition_key]`, `obs[sample_key]`, `obs[celltype_key]`, and returns one table for all cell types.
-- `top_genes` returns a DataFrame; `volcano_figure` returns a matplotlib Figure.
-
-## CLI
-
-`sc_de.py` runs the same functions outside a project and writes a report,
-figures, tables and `processed.h5ad`: `python <skill directory>/sc_de.py --help`.
-`--demo` ranks PBMC3k's louvain clusters.
-
-## See also
-
-- `references/parameters.md` — every CLI flag and per-method tuning hint
-- `references/methodology.md` — the DE paths, scope boundary, input expectations, workflow
-- `references/output_contract.md` — the CLI's output directory layout + visualization contract
-- `references/r_visualization.md` — five R-enhanced renderers
-- Adjacent skills: `sc-clustering` (upstream cluster discovery), `sc-cell-annotation` (upstream cell type labels for `celltype_key`), `sc-markers` (lighter cluster-marker-only path), `sc-enrichment` (downstream pathway enrichment of DEG lists), `bulkrna-de` / `spatial-de` (sibling DE skills for the other two data modalities)
+1. **Matrix Layer Mismatch**:
+   - `sc.tl.rank_genes_groups` expects **log-normalized** values (`log1p(CP10K)`). Passing raw counts distorts fold-change calculation in Scanpy.
+   - `pydeseq2` strictly requires **unnormalized non-negative integer counts** (`adata.layers["counts"]`). Never sum log-normalized values for pseudobulk.
+2. **Scanpy `use_raw` Default Trap**:
+   - In `scanpy`, `use_raw=None` defaults to `True` whenever `adata.raw` exists, which may silently run DE on an outdated gene subset or unnormalized `.raw.X`. Always pass `use_raw=False` and specify `layer=` explicitly.
+3. **Sparse Matrix Summation**:
+   - Summing a `scipy.sparse.csr_matrix` along `axis=0` returns a 2D `np.matrix` of shape `(1, n_genes)`. Always flatten with `np.asarray(sub.sum(axis=0)).ravel()`.
+4. **Low-Cell Pseudobulk Groups**:
+   - Pseudobulk replicates formed from $<10$ cells exhibit extreme dispersion and destabilize `pydeseq2` size factors (`median-of-ratios`). Filter out sample-celltype combinations with fewer than 10 cells prior to `DeseqDataSet`.
 
 ## Dependencies
 

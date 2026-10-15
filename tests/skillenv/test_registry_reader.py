@@ -80,7 +80,7 @@ def test_reading_imports_nothing_from_skills():
 
 def test_what_is_read_equals_what_the_module_defines(real):
     """Tests may import both sides (plan 0062 §3.6); the framework may not."""
-    from skills._sdk.deps import DEPENDENCIES
+    from omicsclaw.skillenv.deps_registry import DEPENDENCIES
 
     assert real == DEPENDENCIES
 

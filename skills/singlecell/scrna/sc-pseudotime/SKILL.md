@@ -17,139 +17,103 @@ tags:
 - monocle3
 ---
 
-# sc-pseudotime
+# Single-Cell Trajectory & Pseudotime Ordering (`sc-pseudotime`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
+
+Use this skill to order single cells along a continuous differentiation or state-transition manifold and identify trajectory-correlated driver genes via Diffusion Pseudotime (`DPT`), `Palantir`, `VIA`, `CellRank`, `Slingshot` (R), or `Monocle3` (R).
+
+| Biological Scenario | Recommended Method | Upstream Library | Root Requirement & Key Outputs |
+|---|---|---|---|
+| **Single or branching lineage with known root** (fast, deterministic default) | **Diffusion Pseudotime (`dpt`)** | `scanpy.tl.diffmap` + `scanpy.tl.dpt` | Requires `adata.uns["iroot"]`; outputs `adata.obs["dpt_pseudotime"]` |
+| **Probabilistic fate commitment & entropy** | **Palantir (`palantir`)** | `palantir.core.run_palantir` | Requires root cell ID; outputs pseudotime, branch probabilities, and differentiation entropy |
+| **Complex/disconnected topologies & cyclic trajectories** | **VIA (`via`)** | `pyVIA.core.VIA` | Root cluster or cell; parcel-graph random walk pseudotime + terminal state prediction |
+| **Directed Markov fate probabilities** (with CytoTRACE or Velocity kernel) | **CellRank (`cellrank`)** | `cellrank.estimators.GPCCA` | Infers macrostates, initial/terminal states, and per-cell absorption probabilities |
+| **Principal curves on low-D embeddings (R)** | **Slingshot / Monocle3** | R `slingshot` / `monocle3` | Cluster-level MST + simultaneous principal curves (`slingshot_r`) or principal graph (`monocle3_r`) |
+
+> **Decision Rule**: Pseudotime measures **manifold geodesic distance** from a user-defined root (`iroot`), **not** physical time or causal directionality. Always justify the choice of `root_cluster` / `root_cell` using canonical progenitor markers or `sc-cytotrace` before running `sc-pseudotime`.
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Diffusion Map + PAGA + Diffusion Pseudotime (`scanpy.tl.dpt`)
 
 ```python
-trajectory = load_skill("sc-pseudotime")
-result = trajectory.pseudotime(read_input("clustered.h5ad"), cluster_key="leiden",
-                                use_rep="X_pca", root_cluster="0")
-write_output(trajectory.pseudotime_table(result), "tables/pseudotime.csv")
-write_output(trajectory.trajectory_genes(result), "tables/trajectory_genes.csv")
-write_output(trajectory.pseudotime_figure(result), "figures/pseudotime.png")
-write_output(result, "intermediate/adata_pseudotime.h5ad")
+import numpy as np
+import pandas as pd
+import scanpy as sc
+from scipy import sparse
+from scipy.stats import spearmanr
+
+# 1. Build kNN graph on X_pca (never build inference graph on 2D UMAP)
+if "X_pca" not in adata.obsm:
+    sc.tl.pca(adata, n_comps=50)
+sc.pp.neighbors(adata, n_neighbors=15, n_pcs=min(50, adata.obsm["X_pca"].shape[1]), use_rep="X_pca")
+
+# 2. Compute PAGA connectivity and Diffusion Map
+sc.tl.paga(adata, groups="leiden")
+sc.tl.diffmap(adata, n_comps=10)
+
+# 3. Anchor root cell (iroot) at the medoid of the progenitor cluster in diffusion space
+root_cluster = "0"  # Replace with biologically validated stem/progenitor cluster
+root_indices = np.flatnonzero(adata.obs["leiden"].astype(str) == str(root_cluster))
+dm = adata.obsm["X_diffmap"][root_indices]
+adata.uns["iroot"] = int(root_indices[np.argmin(np.linalg.norm(dm - dm.mean(axis=0), axis=1))])
+
+# 4. Run Diffusion Pseudotime and rank trajectory-correlated genes
+sc.tl.dpt(adata, n_dcs=10)
+adata.obs["pseudotime"] = adata.obs["dpt_pseudotime"]
 ```
 
-The input is not changed. The PBMC example in `examples/example_step.py`
-demonstrates the API; PBMC labels do not validate a differentiation trajectory.
+### Pattern B: Probabilistic Fate Branching (`palantir`)
 
-## API
+```python
+import palantir
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `pseudotime(adata, *, method: str='dpt', cluster_key: str='leiden', use_rep: str | None=None, root_cluster: str | None=None, root_cell: str | int | None=None, end_clusters: list[str] | None=None, n_neighbors: int=15, n_pcs: int=50, n_dcs: int=10, palantir_knn: int=30, palantir_n_components: int=10, palantir_num_waypoints: int=1200, palantir_max_iterations: int=25, palantir_seed: int | None=None, via_knn: int=30, via_seed: int | None=None, cellrank_n_states: int=3, cellrank_schur_components: int=20, cellrank_frac_to_keep: float=0.3, cellrank_use_velocity: bool=False, random_state: int=20)`
-
-Return a copy with pseudotime and backend diagnostics.
-
-The default representation prefers X_pca; UMAP remains the preferred
-display embedding, not the default inference graph. This function does
-not disable numba JIT. Roots express an analysis assumption, not a
-direction inferred from the pseudotime values.
-
-:param method: dpt, palantir, via, cellrank, slingshot_r or monocle3_r.
-:param cluster_key: Existing obs grouping column; default leiden.
-:param use_rep: Existing obsm representation; None prefers X_pca.
-:param root_cluster: Optional root group for the selected backend.
-:param root_cell: Optional obs name or integer position.
-:param end_clusters: Optional Slingshot terminal groups.
-:param n_neighbors: DPT/CellRank neighbors; default 15.
-:param n_pcs: PCs for those neighbors; default 50.
-:param n_dcs: Diffusion components used for DPT; default 10.
-:param palantir_knn: Palantir neighbors, default 30.
-:param palantir_n_components: Palantir diffusion components, default 10.
-:param palantir_num_waypoints: Palantir waypoints, default 1200.
-:param palantir_max_iterations: Palantir iterations, default 25.
-:param palantir_seed: Overrides random_state for Palantir; default None.
-:param via_knn: VIA neighbors, default 30.
-:param via_seed: Overrides random_state for VIA; default None.
-:param cellrank_n_states: CellRank states, default 3.
-:param cellrank_schur_components: CellRank Schur components, default 20.
-:param cellrank_frac_to_keep: CellRank state-cell fraction, default 0.3.
-:param cellrank_use_velocity: Couple CellRank to existing velocity; default False.
-:param random_state: Palantir/VIA seed, default 20. DPT retains Scanpy's
-    deterministic defaults; R wrappers do not expose a seed.
-:returns: New AnnData with obs['pseudotime']; run_info names the backend
-    and original pseudotime column. R curves remain available separately.
-:raises ValueError: The method, grouping, expression contract or embedding is invalid.
-:raises ImportError: An optional backend is missing.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read method, root and representation diagnostics; keep=False removes the record.
-
-### `trajectory_genes(adata, *, n_genes: int=50, method: str='pearson') -> pd.DataFrame`
-
-Rank genes by correlation with pseudotime; method is pearson or spearman.
-
-### `pseudotime_table(adata) -> pd.DataFrame`
-
-Return cell, display coordinates, group and pseudotime columns.
-
-### `fate_probability_table(adata) -> pd.DataFrame`
-
-Return backend fate probabilities averaged by group, or an empty table.
-
-### `trajectory_curves(adata) -> pd.DataFrame`
-
-Return retained R trajectory curves, or an empty table for Python methods.
-
-### `pseudotime_figure(adata)`
-
-Return a matplotlib Figure colored by pseudotime on the display embedding.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Six methods remain available: DPT, Palantir, VIA, CellRank, Slingshot R and
-Monocle3 R. DPT uses Scanpy. Other methods require their named backend;
-missing packages raise errors rather than selecting a different method.
-
-`use_rep=None` now prefers X_pca, consistent with preflight. UMAP is still
-preferred for display, not the inference graph. Root cells accept obs names
-or integer positions. Root and terminal choices are biological assumptions
-the caller must justify.
-
-Neighbor/component defaults retain the CLI behavior: 15 neighbors,
-50 PCs and 10 DPT components. Palantir defaults to 30 neighbors, 10 diffusion
-components, 1200 waypoints and 25 iterations; VIA uses 30 neighbors.
-`random_state=20` supplies the Palantir/VIA seed unless their explicit
-overrides are given. DPT retains Scanpy's deterministic defaults.
-
-## Gotchas
-
-- The API does not set `NUMBA_DISABLE_JIT`; the compatibility CLI retains
-  its existing setting (`sc_pseudotime.py:15`).
-- `run_info` reports the chosen representation and root. Check finite
-  `obs["pseudotime"]` values; disconnected graphs can produce infinity (`_api.py:183`).
-- Existing matrix contracts must identify normalized expression. Root choice
-  does not prove direction or causality (`_api.py:28`).
-- R wrappers still exchange temporary H5AD, requiring zellkonverter and its
-  R/Python setup. This migration does not convert them to MTX. Slingshot and
-  Monocle3 have separate explicit package checks (`_api.py:482`, `_api.py:556`).
-- VIA applies its existing NumPy compatibility aliases only when invoked (`_api.py:230`).
-- `fate_probability_table` is a group mean, not per-cell fate probabilities;
-  the per-cell matrix is `obsm["trajectory_fate_probabilities"]` (`_api.py:204`).
-
-## Inputs & Outputs
-
-The API needs normalized expression, an obs grouping and an obsm representation.
-It returns an annotated copy plus table/Figure helpers. R curves can be read
-through `trajectory_curves`.
-
-CLI files include `processed.h5ad`, `tables/pseudotime_cells.csv`,
-`tables/trajectory_genes.csv`, `tables/trajectory_summary.csv`,
-`report.md` and `result.json`. Fate-probability and curve tables are
-conditional on backend output. Figures and figure-data manifests describe
-the plots actually produced.
-
-## Key CLI
-
-```bash
-python skills/singlecell/scrna/sc-pseudotime/sc_pseudotime.py --demo --use-rep X_pca --output /tmp/sc_pt_demo
-python skills/singlecell/scrna/sc-pseudotime/sc_pseudotime.py --input clustered.h5ad --cluster-key leiden --root-cluster 0 --use-rep X_pca --output results/
+# Run diffusion maps and multiscale Palantir trajectory from an explicit start cell barcode
+dm_res = palantir.utils.run_diffusion_maps(adata, n_components=10, knn=30, seed=20)
+ms_data = palantir.utils.determine_multiscale_space(adata)
+pr_res = palantir.core.run_palantir(
+    adata,
+    early_cell=start_cell_barcode,
+    num_waypoints=1200,
+    max_iterations=25,
+    seed=20,
+)
+adata.obs["pseudotime"] = pr_res.pseudotime
+adata.obsm["trajectory_fate_probabilities"] = pr_res.branch_probs
 ```
+
+### Optional Micro-Helper (`kernel.py`)
+
+Calling `use_skill("sc-pseudotime")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `pseudotime(adata, method="dpt", cluster_key="leiden", root_cluster=None, root_cell=None, n_neighbors=15, n_dcs=10)`
+- `trajectory_genes(adata, n_genes=50, method="pearson")`
+- `pseudotime_table(adata, cluster_key="leiden")`
+
+## 3. Output Format & Verification Contract
+
+- **Annotated AnnData** (`intermediate/pseudotime.h5ad` or `processed.h5ad`):
+  - `adata.obs["pseudotime"]` (and `adata.obs["dpt_pseudotime"]` for DPT): finite float values in $[0.0, 1.0]$.
+  - `adata.uns["iroot"]`: integer positional index of the selected root cell.
+  - `adata.obsm["X_diffmap"]`: diffusion components used for trajectory inference.
+  - Optional `adata.obsm["trajectory_fate_probabilities"]`: per-cell lineage absorption probabilities (`Palantir` / `CellRank`).
+- **Tabular Outputs**:
+  - `tables/pseudotime_cells.csv`: `cell`, `group`, `pseudotime`, and 2D embedding coordinates.
+  - `tables/trajectory_genes.csv`: `gene`, `correlation`, `pval` ranked by absolute correlation with `pseudotime`.
+- **Verification Invariants**:
+  - Assert `np.isfinite(adata.obs["pseudotime"]).all()` (any `inf` or `NaN` indicates disconnected graph components).
+  - Verify `adata.obs.groupby(cluster_key)["pseudotime"].median()` orders root $\to$ intermediate $\to$ terminal states as expected.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Root Cell Selection (`adata.uns["iroot"]`) Trap**:
+   - `sc.tl.dpt` requires `adata.uns["iroot"]` as an **integer positional index** in `0 .. adata.n_obs - 1`, not a cell barcode string! Selecting an outlier cell at the periphery of a cluster distorts DPT; select the cluster medoid in `X_diffmap` or the cell with peak stemness (`sc-cytotrace`).
+2. **Disconnected $k$NN Graph Components Yield `inf` Pseudotime**:
+   - Cells belonging to a disconnected island (e.g., erythrocytes or platelets in a myeloid trajectory) are unreachable from `iroot` and receive `dpt_pseudotime = inf`. Either subset to the connected lineage of interest or increase `n_neighbors`.
+3. **Never Build the Inference Graph on 2D `X_umap`**:
+   - UMAP non-linearly compresses and tears global distances. Always construct the $k$NN graph on `X_pca` (or `X_scVI` / `X_pca_harmony`) and reserve `X_umap` strictly for 2D plotting.
+4. **Reversed Pseudotime Polarity**:
+   - Diffusion eigenvectors have arbitrary sign; only `adata.uns["iroot"]` anchors $t = 0$. If pseudotime decreases along known differentiation markers, your `root_cluster` / `root_cell` was placed at the differentiated terminus instead of the progenitor state.
 
 ## Dependencies
 

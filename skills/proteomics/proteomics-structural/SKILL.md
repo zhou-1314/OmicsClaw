@@ -16,107 +16,63 @@ tags:
 - edc
 ---
 
-# proteomics-structural
+# Cross-Linking Mass Spectrometry (XL-MS) & Distance Constraint Validation (`proteomics-structural`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The CLI defaults are DSS and fdr_threshold=0.05. DSS/BS3/DSSO/DSBU use 30 angstrom; EDC uses 20 angstrom.
-Use existing search-engine tables; this skill does not search raw spectra.
+Select the crosslinker spacer arm ceiling ($C_\alpha - C_\alpha$ Euclidean distance limit) and search engine according to experimental chemistry:
 
-## Use from a step
+| Crosslinker Chemistry | Reactive Residues | Spacer Arm Length | Max $C_\alpha - C_\alpha$ Distance Cutoff | Upstream XL-MS Search Engine |
+|---|---|---|---|---|
+| **DSS / BS3** (non-cleavable NHS-ester) | Lys–Lys (`K-K`), Ser/Thr/Tyr, N-term | $11.4\text{ \AA}$ | **$30.0\text{ \AA}$** (spacer + $2 \times$ Lys side chains + backbone flexibility) | `pLink 2`, `xiSEARCH` + `xiFDR`, `OpenPepXL` |
+| **DSSO / DSBU** (MS-cleavable sulfoxide/urea) | Lys–Lys (`K-K`), Ser/Thr/Tyr | $10.3 - 12.5\text{ \AA}$ | **$30.0\text{ \AA}$** | `XlinkX` (Proteome Discoverer), `MeroX`, `Scout` |
+| **EDC** (zero-length carbodiimide) | Lys (`K`) to Asp/Glu (`D/E`) salt bridges | $0.0\text{ \AA}$ (direct amide bond) | **$20.0\text{ \AA}$** | `pLink 2`, `xiSEARCH` |
+| **Photo-leucine / SDA** (diazirine photo-XL) | Any residue (non-specific) | $3.9\text{ \AA}$ (SDA) | **$20.0 - 25.0\text{ \AA}$** | `xiSEARCH` + `xiFDR` |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Separate Intra/Inter-Protein FDR Filtering & PDB/AlphaFold $C_\alpha - C_\alpha$ Validation
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('proteomics-structural')
-data = library.demo_data(random_state=42)
-result = library.analyse_crosslinks(data)
-write_output(result, 'tables/crosslinks.csv')
+import numpy as np
+import pandas as pd
+
+# 1. Load residue-pair (CSM/URP) table and classify intra- vs. inter-protein crosslinks
+xl = pd.read_csv("crosslinks.csv")
+xl["link_type"] = np.where(xl["protein_a"] == xl["protein_b"], "intra-protein", "inter-protein")
+
+# 2. Validate 3D C-alpha Euclidean distances against DSS/BS3 30.0 Angstrom constraint
+max_dist = 30.0  # 20.0 for zero-length EDC
+xl["within_constraint"] = xl["distance_angstrom"] <= max_dist
+violation_rate = 1.0 - xl["within_constraint"].mean()
 ```
 
-For real data, use `read_input` and pass any `read_table` helper as `reader=`.
-The executable `examples/example_step.py` also checks the result and writes a Figure.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("proteomics-structural")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `analyse_crosslinks(data: pd.DataFrame, *, fdr_threshold: float=0.05, crosslinker: str='DSS') -> pd.DataFrame`
-
-Return filtered crosslinks with protein-pair and optional distance classifications.
-
-:param data: Crosslink rows with protein_a and protein_b, optional fdr and distance_angstrom.
-:param fdr_threshold: CLI default 0.05; filters only when an fdr column is present.
-:param crosslinker: CLI default DSS; BS3, DSSO and DSBU use 30 A, EDC uses 20 A.
-:returns: New crosslink table; absent distance evidence remains unchecked in run_info.
-:raises ValueError: Protein identifiers, crosslinker or confidence threshold are invalid.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read crosslink analysis diagnostics.
-
-:param table: Output of analyse_crosslinks.
-:param keep: True preserves attrs; False removes diagnostics.
-:returns: A separate dictionary stating which optional checks ran.
-:raises TypeError: The input is not a DataFrame.
-
-### `distance_figure(table: pd.DataFrame)`
-
-Plot measured crosslink distances.
-
-:param table: Crosslinks containing distance_angstrom.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: distance_angstrom is absent.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Generate synthetic crosslink records in memory.
-
-:param random_state: CLI seed 42; change for another simulation.
-:returns: Two hundred crosslinks with simulated distances and confidence.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-The CLI defaults are DSS and fdr_threshold=0.05. DSS/BS3/DSSO/DSBU use 30 angstrom; EDC uses 20 angstrom.
-Functions return new DataFrames. `run_info(result)` reads diagnostic attrs;
-use `keep=False` before serialization when those attrs are not needed.
-
-## Gotchas
-
-- analyse_crosslinks requires protein_a and protein_b. run_info records missing distance evidence as unchecked with null satisfaction counts, never 100% passed. FDR filtering requires an fdr column.
-- `demo_data` uses seed 42, matching the CLI; every demo is synthetic.
-- `run_info` lives in DataFrame attrs and is not preserved by CSV serialization.
-
-## Inputs and outputs
-
-The CLI reads CSV tables and writes:
-
-- tables/crosslinks.csv
-- tables/inter_protein_crosslinks.csv (when link_type exists; can be empty)
-- report.md
-- result.json
-- `demo_crosslinks.csv` is written only with `--demo`.
-
-Functions return data and Figures without writing files. Steps own their outputs.
-Demo mode also writes its synthetic input when the original CLI used a file.
-
-## CLI
-
-```bash
-python skills/proteomics/proteomics-structural/struct_proteomics.py --demo --output /tmp/proteomics_structural
+```python
+# Calling use_skill("proteomics-structural") auto-injects kernel.py helpers into the python kernel:
+res_df = analyse_crosslinks(xl, fdr_threshold=0.05, crosslinker="DSS")
+inter_df = inter_protein_links(res_df)
 ```
 
-For real input replace `--demo` with `--input <table>`.
+## 3. Output Format & Verification Contract
 
+- **Classified Crosslinks Table** (`tables/crosslinks.csv`):
+  - Contains `protein_a`, `protein_b`, `link_type` (`"intra-protein"` or `"inter-protein"`), optional `fdr`, `distance_angstrom`, and `constraint_status` (`"satisfied"`, `"violated"`, or `"unchecked"`).
+- **Inter-Protein Subset** (`tables/inter_protein_crosslinks.csv`):
+  - Subset of heteromeric/inter-protein crosslinks (`link_type == "inter-protein"`).
+- **Verification Invariants**:
+  - Crosslinker max distance ceilings are `30.0` Å for `DSS`, `BS3`, `DSSO`, `DSBU` and `20.0` Å for `EDC`.
+  - When `fdr` is present, all retained rows satisfy `fdr <= fdr_threshold`.
 
-## See also
+## 4. Gotchas & Troubleshooting
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
-- `proteomics-data-import` for protein-table normalization; `proteomics-de` for comparisons.
+1. **Inter-Protein vs. Intra-Protein Crosslinks Require Separate Target-Decoy FDR Estimation (`xiFDR`)**:
+   - The search space for inter-protein pairs scales quadratically ($O(N_{\text{proteins}}^2)$), whereas intra-protein links scale linearly ($O(N_{\text{proteins}})$). Pooling intra- and inter-protein links into a single global 5% FDR list results in **20–50% actual false positives among the inter-protein (PPI) links**. Always compute FDR separately for self-links vs. heteromeric links (`xiFDR`).
+2. **Over-LengthViolations ($>30\text{ \AA}$ for DSS/BS3) Can Reflect Homodimer Symmetry or Conformational Dynamics**:
+   - When mapping crosslinks onto a monomeric PDB/AlphaFold structure, an apparent $45\text{ \AA}$ "intra-protein" violation (`protein_a == protein_b`) frequently spans across the symmetric interface of a homodimer or reflects an open/closed conformational transition rather than a false identification.
+3. **Ambiguous Peptide-Level vs. Residue-Pair (URP) Reporting**:
+   - Ensure FDR is controlled at the **Unique Residue Pair (URP)** level rather than raw cross-linked spectrum matches (CSMs) before counting structural restraints for `HADDOCK` / `AlphaLink2` integrative modeling.
 
 ## Dependencies
 

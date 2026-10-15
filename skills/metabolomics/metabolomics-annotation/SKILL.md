@@ -12,96 +12,71 @@ tags:
 - mz-match
 ---
 
-# metabolomics-annotation
+# Metabolomics MS1 Adduct & Exact-Mass Annotation (`metabolomics-annotation`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Match m/z to adduct masses in an explicit reference or the bundled 15-metabolite demo. Use external SIRIUS/GNPS for spectral or database-scale identification.
+Select the metabolite annotation tier (Schymanski et al., *Environ. Sci. Technol.* 2014 / MSI Levels 1–4) and mass tolerance according to MS instrumentation:
 
-## Use from a step
+| Evidence Available | MSI / Schymanski Level | Recommended Tool / Library | Mass Tolerance (`ppm`) |
+|---|---|---|---|
+| **MS1 + MS2 + Authentic Chemical Standard RT** | **Level 1** (Confirmed structure) | In-house RT/MS2 library + `matchms` / `MZmine` | Orbitrap: $\le 3 - 5$ ppm; Q-TOF: $\le 10$ ppm; RT $\Delta \le 0.2$ min |
+| **MS1 + Diagnostic MS2 Spectral Library Match** | **Level 2a** (Probable structure) | `matchms` (Modified Cosine / Spec2Vec) against GNPS / MassBank / MoNA / HMDB | Precursor $\le 5 - 10$ ppm + Cosine $\ge 0.7$ ($\ge 3$ matched fragments) |
+| **MS1 + In-Silico Fragmentation Tree** | **Level 3** (Tentative candidate class) | `SIRIUS` + `CSI:FingerID` + `CANOPUS` | Precursor + isotope pattern + fragmentation tree |
+| **MS1 Exact $m/z$ Adduct Lookup Only** (this skill) | **Level 4 / Putative MS1 match** | Exact neutral mass + electrospray adduct table (`[M+H]+`, `[M+Na]+`, `[M-H]-`, etc.) | $\text{ppm} = \frac{|m/z_{\text{obs}} - m/z_{\text{theo}}|}{m/z_{\text{theo}}} \times 10^6 \le 5 - 10$ ppm |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Electrospray Adduct Theoretical $m/z$ Calculation & `ppm` Window Matching
 
 ```python
+import numpy as np
 import pandas as pd
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("metabolomics-annotation")
-data = read_input('features.csv', reader=pd.read_csv)
-reference = read_input('reference.csv', reader=pd.read_csv)
-result = library.annotate(data, reference=reference)
-write_output(result, 'tables/result.csv')
+
+# Exact monoisotopic adduct mass shifts (Da) for single-charged ESI ions
+ADDUCT_SHIFTS = {
+    "[M+H]+": 1.007276,
+    "[M+Na]+": 22.989218,
+    "[M+NH4]+": 18.033823,
+    "[M+K]+": 38.963158,
+    "[M-H]-": -1.007276,
+    "[M+Cl]-": 34.969402,
+    "[M+FA-H]-": 44.998201,
+}
+
+# Match observed m/z features against reference neutral monoisotopic masses within 10 ppm
+obs_mz = features_df["mz"].to_numpy()[:, None]
+neutral = reference_df["neutral_mass"].to_numpy()[None, :]
+for adduct, shift in ADDUCT_SHIFTS.items():
+    theo_mz = neutral + shift
+    ppm_err = np.abs(obs_mz - theo_mz) / theo_mz * 1e6
 ```
 
-[examples/example_step.py](examples/example_step.py) runs a seeded synthetic
-example through the step runner and writes a table and Figure. Computations
-return new DataFrames, leave the input unchanged and expose diagnostics through
-`run_info(result)`. Plotting functions write no files.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("metabolomics-annotation")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `annotate(data, *, database='hmdb', ppm=10.0, adducts=None, reference=None)`
-
-Match every observed m/z to all reference adducts within tolerance.
-
-:param data: Feature DataFrame with a numeric mz column.
-:param database: CLI default hmdb; label for the supplied reference, not a database fetch.
-:param ppm: CLI default 10; nonnegative mass error tolerance in parts per million.
-:param adducts: CLI default None resolves to [M+H]+ and [M-H]-.
-:param reference: Required DataFrame with name, neutral_mass, database_id and formula; demo_reference() is for demonstrations only.
-:returns: A new annotations DataFrame; attrs['run_info'] names the reference scope.
-:raises ValueError: Reference, observed masses, tolerance or adducts are invalid.
-
-### `demo_reference()`
-
-Return the 15 bundled metabolites for explicit demonstrations.
-
-:returns: An independent reference DataFrame marked as demo in its attrs.
-
-### `run_info(data, *, keep=True)`
-
-Read diagnostics attached to a returned table.
-
-:param data: DataFrame returned by this library.
-:param keep: Default True; use False in the CLI to remove diagnostics.
-:returns: An independent dictionary describing the run.
-:raises ValueError: The table carries no run_info.
-
-### `mass_error_figure(data)`
-
-Plot the ppm error of matched metabolite candidates.
-
-:param data: Annotation table returned by annotate.
-:returns: A matplotlib Figure.
-:raises KeyError: ppm_error is absent.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Pass `reference=` with name, neutral_mass, database_id and formula for local reference mass matching. The CLI requires `--reference-file reference.csv` for real input. No network lookup runs; `database` labels the supplied reference. `demo_reference()` explicitly selects 15 illustrative HMDB entries, also used by `--demo`.
-
-## Gotchas
-
-- `annotate` rejects missing reference data; demo references cannot be relabelled as another database. Each query can have multiple candidate rows in `tables/annotations.csv`; Unknown rows retain unmatched queries. Confidence labels describe ppm bins, not identification probability.
-- `result.json` preserves the reference scope in `data.run_info.reference_scope`; demo matches are not biological identification evidence.
-
-## Inputs and outputs
-
-CSV input; `tables/annotations.csv`, `report.md` and `result.json`. The CLI writes `reproducibility/commands.sh`.
-The function library returns objects; the CLI and step own file writes.
-
-## CLI
-
-```bash
-python skills/metabolomics/metabolomics-annotation/metabolomics_annotation.py --demo --output /tmp/metabolomics_annotation
-python skills/metabolomics/metabolomics-annotation/metabolomics_annotation.py --input features.csv --reference-file reference.csv --output /tmp/metabolomics_annotation_real
+```python
+# Calling use_skill("metabolomics-annotation") auto-injects kernel.py helpers into the python kernel:
+ref_df = pd.read_csv("data/hmdb_reference.csv")  # columns: name, neutral_mass, database_id, formula
+matches = annotate(features_df, reference=ref_df, database="hmdb", ppm=10.0, adducts=["[M+H]+", "[M-H]-"])
+summary = annotation_summary(matches)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- [Parameters](references/parameters.md)
-- [Methodology](references/methodology.md)
-- [Output contract](references/output_contract.md)
+- **Putative MS1 Annotations Table** (`tables/annotations.csv`):
+  - Contains `feature_id`, `query_mz`, `matched_name` (`"Unknown"` when unmatched), `database_id`, `formula`, `adduct`, `theoretical_mz`, `ppm_error`, and `confidence_tier` (`"high_ppm_le_3"`, `"medium_ppm_le_10"`, `"low"`, or `"unmatched"`).
+- **Verification Invariants**:
+  - Every matched row satisfies `0.0 <= ppm_error <= ppm`.
+  - Unmatched query features are preserved with `matched_name == "Unknown"` so feature row counts are never silently dropped.
+
+## 4. Gotchas & Troubleshooting
+
+1. **MS1 Exact Mass Alone Cannot Distinguish Structural Isomers or Isobars**:
+   - Glucose, fructose, galactose, and inositol share the exact same chemical formula ($\text{C}_6\text{H}_{12}\text{O}_6$, neutral monoisotopic mass $180.063388$ Da) and have `0.00 ppm` difference across all adducts. Always report MS1-only hits as **MSI Level 3/4 putative annotations** unless confirmed by orthogonal retention time (RT) and MS2 fragmentation.
+2. **In-Source Fragmentation & Multiple Adducts Inflate Feature Counts (`1 metabolite -> 10 peaks`)**:
+   - A single metabolite frequently generates `[M+H]+`, `[M+Na]+`, `[M+NH4]+`, `[2M+H]+` dimers, and `[M+H-H2O]+` neutral-loss ions at the exact same chromatographic retention time. Group co-eluting features by RT and peak-shape correlation (`CAMERA`, `RAMClustR`, `MZmine IIMN`) before biological interpretation.
+3. **Average Molecular Weight vs. Monoisotopic Neutral Mass**:
+   - High-resolution Orbitrap/Q-TOF mass spectrometers resolve the $^{12}\text{C}$ monoisotopic peak (`180.0634` Da for glucose), not the periodic-table natural-abundance average molecular weight (`180.156` Da). Using average molecular weight shifts $m/z$ by $>500$ ppm and results in zero matches.
 
 ## Dependencies
 

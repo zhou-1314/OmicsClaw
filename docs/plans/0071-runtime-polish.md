@@ -265,7 +265,7 @@ P1 与 P2 互不依赖；P3 依赖 P1（契约里要写 `reference` 和 `checks`
 | P1 检查函数与参考 | `checks.py`；`_io.py`、`_skills.py` 的 docstring 按 §3.2 补全；`run.py reference`；`test_public_surface.py` 按 §3.3；新测试 `tests/sdk/notebook/test_checks.py`、`test_reference.py` | 1.5 天 |
 | P2 审查摘要与提示 | `_brief.py`；`_replay_locked` 的调用与失败时删除；`LAYOUT["review_brief"]` 与 `project.REVIEW_BRIEF_FILE`；`MODULE_REVIEWER_PROMPT`；新测试 `tests/sdk/notebook/test_brief.py`，`test_replay.py`、`test_contract.py`、`tests/entry/test_subagent_wiring.py` 各加几条 | 1.5 天 |
 | P3 契约与文档 | §3.4 的两处措辞、契约测试、token 记录、文档、`CHANGELOG.md` | 0.5 天 |
-| P4 真实会话验收 | §5.2 的 A/B 审查与缩短端到端；实施记录 `docs/plans/0071-runtime-polish-delivery.md` | 1.5 天（主要是墙钟时间） |
+| P4 真实会话验收 | §5.2 的 A/B 审查与缩短端到端 | 1.5 天（主要是墙钟时间） |
 | 合计 | | 约 5 天 |
 
 ---

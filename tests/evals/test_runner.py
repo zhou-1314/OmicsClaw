@@ -361,7 +361,7 @@ def test_a_skill_fallback_answers_skills_without_a_fixture(tmp_path):
     from omicsclaw.evals import StubResult
     from omicsclaw.evals.stubs import REPO_ROOT
 
-    script = REPO_ROOT / "skills" / "bulkrna" / "bulkrna-de" / "bulkrna_de.py"
+    script = REPO_ROOT / "skills" / "bulkrna" / "bulkrna-de" / "kernel.py"
     turns = (
         ScriptedTurn(tool_calls=(tool_call("bash", {"command": f"python {script} --input c.csv --output out"}),)),
         ScriptedTurn(text="done"),
@@ -441,7 +441,7 @@ def test_a_real_library_loaded_while_stubs_are_set_is_a_soft_warning(tmp_path):
 import importlib.util  # noqa: E402
 
 needs_kernel = pytest.mark.skipif(
-    importlib.util.find_spec("nbclient") is None or importlib.util.find_spec("ipykernel") is None,
+    not _RUNNER.is_file() or importlib.util.find_spec("nbclient") is None or importlib.util.find_spec("ipykernel") is None,
     reason="the step runner needs nbclient and ipykernel",
 )
 

@@ -8,108 +8,98 @@ tags:
 - batch-correction
 ---
 
-# spatial-integrate
+# Multi-Sample Spatial Expression Integration & Batch Correction (`spatial-integrate`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
+
+Use this playbook to remove technical slide/batch effects from multi-sample spatial transcriptomics embeddings (`X_pca` or neighbor graph) before joint clustering (`spatial-domains`) or UMAP visualization. For aligning 2D physical tissue coordinates across serial sections, use `spatial-register` instead.
+
+| Method (`method=`) | Upstream Package | Corrected Output | Preserves Continuous Latent Space | Best Used When |
+|---|---|---|---|---|
+| **Harmony** (`harmony`) | `harmonypy` (`hm.run_harmony`) | `adata.obsm["X_pca_harmony"]` + rebuilt `obsp["connectivities"]` | Yes (`(n_obs, n_pcs)` embedding) | Default fast, scalable multi-slide integration; compatible with `cellcharter` and `sc.pp.neighbors` |
+| **BBKNN** (`bbknn`) | `bbknn` (`bbknn.bbknn`) | Batch-balanced `adata.obsp["connectivities"]` & `distances` | No (graph-only; no corrected PCA matrix) | Lightweight graph-level integration directly feeding `sc.tl.umap` and `sc.tl.leiden` |
+| **Scanorama** (`scanorama`) | `scanorama` (`scanorama.integrate_scanpy`) | `adata.obsm["X_scanorama"]` | Yes (`(n_obs, 100)` embedding) | Stitching partially overlapping tissue types or heterogeneous FOVs across slides |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Harmony PCA Integration (`harmonypy` + `scanpy`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("spatial-integrate")
-adata = read_input("data/multi_sample.h5ad")
-adata = library.integrate(adata, batch_key="sample")
-write_output(adata, "intermediate/integrated.h5ad")
+import numpy as np
+import harmonypy as hm
+import scanpy as sc
+
+# 1. Select batch-aware HVGs and compute PCA if not already present
+adata.obs["batch"] = adata.obs["batch"].astype(str).astype("category")
+if "X_pca" not in adata.obsm:
+    sc.pp.highly_variable_genes(adata, n_top_genes=min(2000, adata.n_vars), batch_key="batch")
+    sc.tl.pca(adata, n_comps=30, random_state=0)
+
+# 2. Run Harmony on X_pca
+ho = hm.run_harmony(adata.obsm["X_pca"], adata.obs, "batch", random_state=0, verbose=False)
+Z = np.asarray(ho.Z_corr)
+adata.obsm["X_pca_harmony"] = Z.T if Z.shape[0] != adata.n_obs else Z
+
+# 3. Rebuild neighbor graph, UMAP, and joint Leiden clusters from X_pca_harmony
+sc.pp.neighbors(adata, use_rep="X_pca_harmony", n_neighbors=15, random_state=0)
+sc.tl.umap(adata, random_state=0)
+sc.tl.leiden(adata, resolution=0.8, key_added="leiden_integrated", flavor="igraph", n_iterations=2, random_state=0)
 ```
 
-## When to use
+### Pattern B: Batch-Balanced KNN Graph (`bbknn`)
 
-Correct expression-space batch effects after spatial-preprocess. Harmony and
-Scanorama add corrected PCA-based embeddings; BBKNN replaces the neighbor graph.
-None aligns tissue coordinates or changes the expression matrix.
+```python
+import bbknn
+import scanpy as sc
 
-## Inputs & Outputs
-
-Input: preprocessed AnnData with `obsm["X_pca"]` and at least two labels in
-`obs["batch"]` (or the chosen batch_key). Functions return AnnData, tables and
-figures without writing files; see API below.
-
-CLI writes `processed.h5ad`, `report.md`, `result.json`, batch-size and
-integration tables, and the comparison gallery. The complete file inventory
-and generation conditions are in [references/output_contract.md](references/output_contract.md).
-Harmony adds `X_pca_harmony`; Scanorama adds `X_scanorama`;
-BBKNN changes `obsp["distances"]` and `obsp["connectivities"]`.
-
-## Key CLI
-
-```bash
-python skills/spatial/spatial-integrate/spatial_integrate.py \
-  --input multi_sample.h5ad --output results/integration --method harmony --batch-key sample
-python skills/spatial/spatial-integrate/spatial_integrate.py --demo --output /tmp/spatial_integrate
+# BBKNN directly replaces adata.obsp["connectivities"] and adata.obsp["distances"]
+bbknn.bbknn(adata, batch_key="batch", use_rep="X_pca", neighbors_within_batch=3)
+sc.tl.umap(adata, random_state=0)
+sc.tl.leiden(adata, resolution=0.8, key_added="leiden_integrated", flavor="igraph", n_iterations=2, random_state=0)
 ```
 
-Use `examples/example_step.py` for load_skill, saved objects and replay.
-[references/parameters.md](references/parameters.md) lists the CLI method flags.
+### Pattern C: Mutual Nearest Neighbor Integration (`scanorama`)
 
-## Gotchas
+```python
+import scanorama
+import scanpy as sc
 
-- `X_pca` must exist before integration; no normalization is performed here.
-- `X_scanorama` is a corrected PCA-based embedding, not corrected gene expression.
-- `batch_entropy_after` measures local mixing, not biological preservation;
-  inspect condition and cell-type structure before choosing a correction.
-- The function's seed controls Harmony, neighbors, UMAP and Leiden.
-  BBKNN's default Annoy matching and Scanorama's wrapper expose no seed here;
-  cross-version matching can vary. The installed versions passed repeat CLI checks.
-- `run_info(adata, keep=False)` removes only library diagnostics. The CLI keeps
-  its existing `uns["spatial_integration"]` summary.
-- `X_umap_before_integration` and `X_umap_after_integration` preserve both views.
+# Split AnnData into per-batch list (Scanorama requires observations ordered by batch)
+batches = [adata[adata.obs["batch"] == b].copy() for b in adata.obs["batch"].unique()]
+scanorama.integrate_scanpy(batches, dimred=50)
+adata_int = sc.concat(batches, index_unique=None)
+adata.obsm["X_scanorama"] = adata_int.loc[adata.obs_names].obsm["X_scanorama"]
+sc.pp.neighbors(adata, use_rep="X_scanorama", n_neighbors=15, random_state=0)
+sc.tl.umap(adata, random_state=0)
+```
 
-## API
+### Optional Micro-Helper (`kernel.py`)
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+Calling `use_skill("spatial-integrate")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `integrate_harmony(adata, batch_key="batch", use_rep="X_pca", key_added="X_pca_harmony", n_neighbors=15, random_state=0)`
+- `batch_mixing_summary(adata, batch_key="batch", cluster_key="leiden")`
 
-### `integrate(adata, *, method: str='harmony', batch_key: str='batch', random_state: int=0, **parameters)`
+## 3. Output Format & Verification Contract
 
-Integrate a multi-batch PCA representation in place, preserving expression.
+- **Integrated Spatial AnnData** (`intermediate/integrated.h5ad`):
+  - `adata.obsm["X_pca_harmony"]` (or `adata.obsm["X_scanorama"]`): batch-corrected embedding.
+  - `adata.obsp["connectivities"]` and `adata.obsm["X_umap"]`: integrated graph and UMAP coordinates.
+  - `adata.obsm["spatial"]`: original per-slide physical coordinates preserved intact.
+- **Batch Mixing Summary Table** (`tables/batch_mixing.csv`):
+  - Columns: `cluster`, `n_spots`, `n_batches_present`, `batch_entropy_norm`.
+- **Verification**:
+  - Verify `adata.n_obs` is unchanged and most shared anatomical clusters exhibit `n_batches_present > 1` with improved normalized Shannon batch entropy.
 
-:param adata: Preprocessed AnnData with X_pca and batch labels.
-:param method: harmony (default), bbknn (graph only), or scanorama.
-:param batch_key: Batch column in obs, default batch.
-:param random_state: Seed for Harmony, neighbors, UMAP and Leiden, default 0.
-    BBKNN's default Annoy backend and Scanorama expose no seed here;
-    their matching can vary across backend versions.
-:param parameters: Method keywords with original CLI defaults: Harmony
-    theta=2, lamb=1, max_iter_harmony=10; BBKNN neighbors_within_batch=3,
-    n_pcs=50, trim=None; Scanorama knn=20, sigma=15, alpha=0.1, batch_size=5000.
-:returns: The same AnnData with corrected embedding or graph, UMAP snapshots,
-    per-spot batch entropy, and JSON run diagnostics. X is unchanged.
-:raises ValueError: Unknown method, missing batches/PCA, or invalid parameters.
-:raises ImportError: Missing backend; use install_skill_deps for that method.
+## 4. Gotchas & Troubleshooting
 
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read the last integration summary.
-
-:param adata: AnnData returned by integrate.
-:param keep: True retains diagnostics; False removes them for CLI serialization.
-:returns: Summary including seed and effective method parameters, or an empty dict.
-
-### `mixing_table(adata) -> pd.DataFrame`
-
-Return per-spot entropy before and after correction.
-
-:param adata: Integrated AnnData.
-:returns: observation, batch_entropy_before, batch_entropy_after and batch_entropy_delta.
-:raises KeyError: Integration entropy columns are absent.
-
-### `embedding_figure(adata, *, batch_key: str='batch')`
-
-Compare the pre- and post-integration UMAP coordinates.
-
-:param adata: Integrated AnnData with both UMAP snapshots.
-:param batch_key: Batch labels used for color, default batch.
-:returns: A matplotlib Figure; the caller saves and closes it.
-:raises KeyError: Batch labels or UMAP snapshots are absent.
-
-<!-- api:end -->
+1. **`harmonypy` `Z_corr` Transpose Orientation Across Versions**:
+   - Depending on `harmonypy` version (`<=0.0.9` vs `>=0.0.10`), `ho.Z_corr` has shape `(n_pcs, n_obs)` or `(n_obs, n_pcs)`. Always check `Z.T if Z.shape[0] != adata.n_obs else Z` before assigning `adata.obsm["X_pca_harmony"]`.
+2. **Do Not Call `sc.pp.neighbors` After `bbknn.bbknn`**:
+   - `bbknn.bbknn` writes the batch-balanced graph directly into `adata.obsp["connectivities"]`. Calling `sc.pp.neighbors(adata)` afterward overwrites BBKNN's graph with an uncorrected PCA graph!
+3. **Scanorama Requires Contiguous Batch Ordering**:
+   - Calling `scanorama.integrate_scanpy` on an `adata` with interleaved batch rows raises an error or misaligns cells. Split `adata` by `batch_key` in a deterministic order and re-index back to `adata.obs_names`.
+4. **Never Run Differential Expression on Batch-Corrected Embeddings**:
+   - Use `X_pca_harmony` / `X_scanorama` strictly for clustering, neighborhood aggregation (`CellCharter`), and visualization. Always run `spatial-de` and `spatial-condition` on `adata.layers["counts"]` or uncorrected log1p `adata.X`.
 
 ## Dependencies
 

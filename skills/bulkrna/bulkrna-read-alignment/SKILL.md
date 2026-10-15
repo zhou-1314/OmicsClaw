@@ -14,137 +14,69 @@ tags:
 - strandedness
 ---
 
-# bulkrna-read-alignment
+# Bulk RNA-seq Read Alignment & Log QC (`bulkrna-read-alignment`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Summarize existing STAR, paired-end HISAT2 or Salmon logs. This does not run
-an aligner. Use `bulkrna-read-qc` for FASTQ and `bulkrna-qc` for counts.
+Choose the aligner or pseudo-aligner according to downstream requirements (splice-junction discovery vs. rapid transcript quantification) and parse its summary log:
 
-## Use from a step
+| Upstream Aligner | Log File Format | Primary Use Case | Key Metrics Extracted |
+|---|---|---|---|
+| **STAR** (`STAR --runMode alignReads`) | `Log.final.out` (key-value text) | Gold-standard splice-aware genome alignment for DE (`featureCounts`/`HTSeq`) and splicing (`rMATS`) | `total_reads`, `uniquely_mapped`, `multi_mapped`, `unmapped`, `unique_rate` |
+| **HISAT2** (`hisat2 --new-summary`) | Standard error alignment summary text | Low-memory FM-index splice-aware genome alignment | Concordant unique pairs, concordant multi-mapped pairs, overall alignment rate |
+| **Salmon** (`salmon quant --validateMappings`) | `aux_info/meta_info.json` (JSON) | Fast selective-alignment transcript quantification (`tximport` $\rightarrow$ `DESeq2` / `SUPPA2`) | `num_processed`, `num_mapped`, `percent_mapped` (total transcriptome mapping rate) |
 
-```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('bulkrna-read-alignment')
-data = library.demo_data(random_state=42)
-result = library.summarize(data)
-write_output(result, 'tables/alignment_stats.csv')
-```
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-For real files, pass `read_fastq`, `read_log` or `read_reference` as appropriate
-to `read_input(..., reader=...)`. `examples/example_step.py` is executable.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `read_log(path: str | Path) -> str`
-
-Read log text; pass this function as reader= to read_input.
-
-:param path: STAR, HISAT2 or Salmon text/JSON log.
-:returns: File contents without interpreting its filename.
-:raises OSError: The file cannot be read.
-
-### `summarize(data: str | pd.DataFrame, *, method: str='star') -> pd.DataFrame`
-
-Parse alignment counts and return a new mapping summary.
-
-:param data: Log text or a one-row parsed table, including demo_data output.
-:param method: CLI default star; select hisat2 for paired-end summaries or salmon for meta_info JSON.
-:returns: Mapping counts/rates with quality heuristics in run_info; Salmon reports total mapped, not unique mapped.
-:raises ValueError: Required counts are missing, inconsistent or the method is unsupported.
-
-### `run_info(result: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read mapping assessment and unavailable-evidence diagnostics.
-
-:param result: Output of summarize.
-:param keep: True preserves attrs; False removes diagnostics before serialization.
-:returns: A separate quality/provenance dictionary.
-:raises TypeError: The result is not a DataFrame.
-
-### `mapping_figure(result: pd.DataFrame)`
-
-Plot observed mapping counts as percentages.
-
-:param result: Output of summarize.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: Mapping counts are absent.
-
-### `composition_figure(result: pd.DataFrame)`
-
-Plot observed mapping composition.
-
-:param result: Output of summarize.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: Mapping counts are absent.
-
-### `coverage_figure(coverage: pd.DataFrame)`
-
-Plot an explicitly supplied gene-body coverage profile.
-
-:param coverage: position and coverage columns; alignment logs cannot supply these observations.
-:returns: A matplotlib Figure without synthesizing missing measurements.
-:raises KeyError: Coverage columns are absent.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Generate the synthetic STAR summary used by the CLI demo.
-
-:param random_state: CLI seed 42; change for another simulation.
-:returns: One simulated alignment summary row.
-:raises ValueError: The seed is invalid.
-
-### `demo_coverage(*, random_state: int=42) -> pd.DataFrame`
-
-Generate an illustrative coverage profile, not inferred from an alignment log.
-
-:param random_state: CLI demo seed 42; change for another simulation.
-:returns: One hundred simulated percentile/coverage rows.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-`summarize` defaults to STAR, matching the CLI. Choose `hisat2` or `salmon`
-explicitly; filenames do not override that choice. STAR/HISAT2 include unique
-and multimapped counts. Salmon meta_info reports total mapped counts only.
-
-## Gotchas
-
-- `summarize` rejects absent or inconsistent read counts.
-- `run_info` states that logs provide neither gene-body coverage nor inferred strandedness.
-- `coverage_figure` needs an explicit measured profile. `demo_coverage` is synthetic and is only used by `--demo`.
-- `mapped_rate` for Salmon does not mean uniquely mapped rate.
-- HISAT2 `unmapped` is the residual after concordant pairs and includes discordant/unpaired mappings; `run_info` records this limitation.
-
-## Inputs and outputs
-
-The CLI writes these artifacts; functions return DataFrames and Figures without writing them:
-
-- `tables/alignment_stats.csv`
-- `figures/mapping_summary.png`
-- `figures/alignment_composition.png`
-- `figures/gene_body_coverage.png (demo only)`
-- `report.md`
-- `result.json`
-- `reproducibility/commands.sh`
-
-## CLI
+### Pattern A: Idiomatic CLI Execution & Python Log Parsing for STAR / Salmon
 
 ```bash
-python skills/bulkrna/bulkrna-read-alignment/bulkrna_read_alignment.py --demo --output /tmp/bulkrna_read_alignment
+# 1A. Splice-aware genome alignment with STAR (2-pass mode for novel junctions)
+STAR --genomeDir /ref/star_grch38 \
+     --readFilesIn sample_R1.fastq.gz sample_R2.fastq.gz \
+     --readFilesCommand zcat \
+     --twopassMode Basic \
+     --outSAMtype BAM SortedByCoordinate \
+     --quantMode GeneCounts \
+     --runThreadN 8 \
+     --outFileNamePrefix star_out/sample_
+
+# 1B. Selective alignment transcript quantification with Salmon
+salmon quant -i /ref/salmon_gencode_v44 -l A \
+             -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
+             --validateMappings --gcBias -p 8 -o salmon_out/sample
 ```
 
-For real files use `--input <file>`; trajectory placement also needs `--reference <file>`.
+### Pattern B: Parse `STAR` / `HISAT2` / `Salmon` Logs via `use_skill("bulkrna-read-alignment")`
 
-## See also
+```python
+from pathlib import Path
+# Calling use_skill("bulkrna-read-alignment") auto-injects kernel.py helpers into the python kernel:
+log_text = Path("star_out/sample_Log.final.out").read_text()
+stats_df = parse_alignment_log(log_text, method="star")
+qc_verdict = evaluate_mapping_qc(stats_df)
+```
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
+## 3. Output Format & Verification Contract
+
+- **Alignment Summary Table** (`tables/alignment_stats.csv`):
+  - Columns: `aligner`, `total_reads`, `uniquely_mapped`, `multi_mapped`, `unmapped`, `unique_rate`, `mapped_rate`, `qc_status`.
+- **Diagnostic Figures**:
+  - `figures/mapping_summary.png` and `figures/alignment_composition.png`.
+- **Verification Invariants**:
+  - Read conservation: `uniquely_mapped + multi_mapped + unmapped == total_reads` (within rounding of reported log counts).
+  - Rate bounds: $0.0 \le \text{unique\_rate} \le \text{mapped\_rate} \le 100.0$.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Salmon `percent_mapped` vs. STAR `Uniquely mapped reads %`**:
+   - Salmon quantifies isoform expectations via an EM algorithm over multi-mapping equivalence classes, so `meta_info.json` reports **total mapped reads** (`num_mapped`), not uniquely mapped reads. Never compare Salmon's `mapped_rate` directly to STAR's `unique_rate` without accounting for multi-isoform reads.
+2. **Low Unique Mapping Rate ($< 60\%$) Diagnostics**:
+   - In STAR, if `Uniquely mapped reads %` is low while `% of reads mapped to multiple loci` is high ($> 20\%$), suspect ribosomal RNA (rRNA) depletion failure. If `% of reads unmapped: too short` dominates, check for adapter dimers, over-trimming, or reference genome species mismatch.
+3. **Library Strandedness Verification (`ReadsPerGene.out.tab`)**:
+   - STAR's `--quantMode GeneCounts` outputs 4 columns: `gene_id`, `unstranded`, `stranded_first`, `stranded_second`. For standard Illumina TruSeq dUTP / Watchmaker reverse-stranded kits (`ISR`), column 4 (`stranded_second`) should have $\sim 5\text{--}10\times$ more counts than column 3. Selecting the wrong column discards $> 85\%$ of valid reads.
+4. **Gene-Body $5'\rightarrow 3'$ Coverage Bias Requires BAM Inspection**:
+   - Alignment summary logs (`Log.final.out` / `meta_info.json`) do not contain $5'\rightarrow 3'$ transcript coverage profiles. Run `RSeQC` (`geneBody_coverage.py`) on the coordinate-sorted BAM to detect $3'$ poly(A)-capture degradation.
 
 ## Dependencies
 

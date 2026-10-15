@@ -13,65 +13,79 @@ tags:
 - fold-change
 ---
 
-# Bulk differential expression
+# Bulk RNA-seq Differential Expression (`bulkrna-de`)
 
-## Purpose
+## 1. Method Decision Matrix & When to Use
 
-Compare two prefix-selected groups in a raw count matrix. The default backend is R DESeq2; `--method ttest` selects Welch tests. The R bridge applies apeglm or ashr shrinkage when installed, otherwise raw estimates. This is not a single-cell or splicing analysis.
+Select the statistical test according to the input matrix type and sample size per condition:
 
-## Inputs & Outputs
+| Input Matrix & Replicate Structure | Method (`--method` / `method=`) | Upstream Package | Why |
+|---|---|---|---|
+| **Raw integer gene counts**, $\ge 2$ biological replicates per condition | `method="deseq2"` (`--method deseq2`) | `pydeseq2` (`DeseqDataSet` + `DeseqStats`) or R `DESeq2` | Median-of-ratios size factor normalization, empirical Bayes dispersion shrinkage, and Negative Binomial Wald test |
+| **Pre-normalized expression** (TPM / FPKM / log2-CPM) or exploratory screen | `method="ttest"` (`--method ttest`) | `scipy.stats.ttest_ind(..., equal_var=False)` + BH-FDR | Welch's $t$-test on $\log_2(	ext{expr} + 1)$ when raw integer read counts are unavailable |
+| **Paired / multi-factor cohort design** (e.g., `~ patient + condition`) | Multi-factor NB-GLM | `pydeseq2` (`design_factors=["patient", "condition"]`) | Controls for baseline inter-individual variation before testing treatment effect |
 
-CLI input is a gene-first CSV. The library takes a gene-indexed DataFrame. Both require nonnegative integer counts. Outputs include `tables/de_results.csv`, `tables/de_significant.csv`, four diagnostic figures, `report.md` and `result.json`; DESeq2 intermediate tables are backend-dependent.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-## API
+### Pattern A: Idiomatic `pydeseq2` on Raw Integer Counts (`method="deseq2"`)
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+```python
+import numpy as np
+import pandas as pd
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
 
-### `differential_expression(counts, *, method='deseq2', control_prefix='ctrl', treat_prefix='treat', padj_cutoff=0.05, lfc_cutoff=1.0, min_count=10)`
+# 1. Load raw count matrix (genes x samples in CSV -> transpose to samples x genes for PyDESeq2)
+raw_counts = pd.read_csv("data/counts.csv", index_col=0)
+ctrl_cols = [c for c in raw_counts.columns if c.startswith("ctrl")]
+treat_cols = [c for c in raw_counts.columns if c.startswith("treat")]
+sample_cols = ctrl_cols + treat_cols
 
-Compare treatment against control without changing the count matrix.
+# Filter lowly expressed genes (>= 10 total reads across selected samples)
+filtered = raw_counts[sample_cols]
+filtered = filtered.loc[filtered.sum(axis=1) >= 10].round().astype(int)
 
-:param counts: Gene-indexed DataFrame of nonnegative integer raw counts.
-:param method: CLI default deseq2 (R); ttest selects Welch tests.
-:param control_prefix: CLI default ctrl selects control columns.
-:param treat_prefix: CLI default treat selects treatment columns.
-:param padj_cutoff: CLI default 0.05; significance requires a smaller adjusted p.
-:param lfc_cutoff: CLI default 1.0; absolute log2 effect must exceed it.
-:param min_count: Legacy filtering default 10 for total counts across selected samples.
-:returns: DE DataFrame with effect estimates, p values and run diagnostics in attrs.
-:raises ValueError: Counts, method, groups or thresholds are invalid.
-:raises ImportError: R DESeq2 is missing; use install_skill_deps for DESeq2.
+# 2. Build sample metadata DataFrame (indexed by sample ID)
+metadata = pd.DataFrame(
+    {"condition": ["ctrl"] * len(ctrl_cols) + ["treat"] * len(treat_cols)},
+    index=sample_cols,
+)
 
-### `run_info(result, *, keep=True)`
+# 3. Fit Negative Binomial GLM and run Wald test (treat vs. ctrl)
+dds = DeseqDataSet(counts=filtered.T, metadata=metadata, design_factors="condition", quiet=True)
+dds.deseq2()
+stat_res = DeseqStats(dds, contrast=["condition", "treat", "ctrl"], quiet=True)
+stat_res.summary()
 
-Read filtering, group and executed-method diagnostics.
-
-:param result: DataFrame returned by differential_expression.
-:param keep: Default True; False removes diagnostics from attrs.
-:returns: Diagnostic dictionary, empty after removal.
-
-### `volcano_figure(result)`
-
-Plot reported log2 effects and adjusted significance.
-
-:param result: DE DataFrame with log2FoldChange and padj.
-:returns: A matplotlib Figure without saving files.
-:raises KeyError: Required columns are absent.
-
-<!-- api:end -->
-
-## Key CLI
-
-```bash
-python skills/bulkrna/bulkrna-de/bulkrna_de.py --demo --output /tmp/bulkrna-de
-python skills/bulkrna/bulkrna-de/bulkrna_de.py --input counts.csv --output results/de --method ttest
+de_results = stat_res.results_df.sort_values("padj")
+de_sig = de_results[(de_results["padj"] < 0.05) & (de_results["log2FoldChange"].abs() >= 1.0)]
 ```
 
-## Gotchas
+### Pattern B: Welch Two-Group Test with BH-FDR (`method="ttest"`)
 
-- `run_info(result)['method_used']` identifies the executed method. Missing DESeq2 raises an installation hint; a failed R fit can fall back to Welch with a warning and `fallback_reason`.
-- `run_info(result)['lfc_note']` distinguishes Welch effects from the R bridge's package-dependent shrinkage. Welch tests are not a substitute for biological replication.
-- `run_info(result)['n_tested']` counts genes after the default total-count filter of 10. Unmatched sample prefixes do not enter the comparison.
+```python
+# Calling use_skill("bulkrna-de") auto-injects kernel.py helpers into the python kernel:
+de_results = differential_expression(raw_counts, control_cols=ctrl_cols, treat_cols=treat_cols, min_count=10)
+summary = de_summary(de_results, padj_cutoff=0.05, lfc_cutoff=1.0)
+```
+
+## 3. Output Format & Verification Contract
+
+- **Full DE Results** (`tables/de_results.csv`):
+  - Indexed by `gene`, containing `baseMean` (when `pydeseq2`), `log2FoldChange`, `pvalue`, and `padj` (Benjamini-Hochberg FDR).
+- **Significant DEGs** (`tables/de_significant.csv`):
+  - Subset passing `padj < 0.05` and `|log2FoldChange| >= 1.0`.
+- **Diagnostic Figures**:
+  - Volcano plot (`-log10(padj)` vs. `log2FoldChange`) and MA plot (`log2FoldChange` vs. `log10(baseMean + 1)`).
+
+## 4. Gotchas & Troubleshooting
+
+1. **Matrix Orientation in `pydeseq2` (`samples × genes`) vs. R `DESeq2` (`genes × samples`)**:
+   - Standard bioinformatics CSV files store **genes as rows and samples as columns**, whereas `pydeseq2.dds.DeseqDataSet` expects **samples as rows and genes as columns** (`counts=filtered.T`). Always check `counts.index.equals(metadata.index)` before fitting `DeseqDataSet`.
+2. **Independent Filtering `NaN` in `padj`**:
+   - Both `DESeq2` and `pydeseq2` set `padj = NaN` for low-mean or Cook's distance outlier genes. Filter or fill `NaN` values (`de_results["padj"].notna()`) when counting significant genes or plotting volcano plots (`-np.log10(de_results["padj"].clip(lower=1e-300))`).
+3. **Never Feed TPM/FPKM to `DeseqDataSet`**:
+   - `DESeq2` / `pydeseq2` models raw UMI/fragment counts with a Negative Binomial distribution and estimates library size factors internally. If only pre-normalized TPM/FPKM values exist, use log-scale linear modeling (`limma-trend` / Welch test) rather than rounding TPMs to integers.
 
 ## Dependencies
 

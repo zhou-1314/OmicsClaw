@@ -15,167 +15,98 @@ tags:
 - pathway-enrichment
 ---
 
-# sc-enrichment
+# Single-Cell Pathway & Gene-Set Enrichment Analysis (`sc-enrichment`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Test named gene sets against per-group marker/DE rankings with ORA or GSEA.
-GSVA scores mean expression per group in R. For scores per cell use
-`sc-pathway-scoring`; for programmes discovered without gene sets use
-`sc-gene-programs`.
+Select the enrichment framework based on whether you have a thresholded gene list, a full continuous DE ranking, or group-level expression profiles:
 
-## Steps
+| Method (`--method` / `method=`) | Upstream Package | Statistical Test | Required Input | Best Used When |
+|---|---|---|---|---|
+| **Preranked GSEA** (`method="gsea"`) | `gseapy.prerank` / R `fgsea` (`clusterProfiler`) | Kolmogorov-Smirnov weighted running-sum statistic (`NES`, permutation `FDR q-val`) | Full ranked gene table (`names`, `scores` or `stat`/`log2FoldChange`) without p-value truncation | **Gold standard** for condition DE or cluster rankings; detects coordinated subtle shifts across entire pathways |
+| **Over-Representation Analysis (ORA)** (`method="ora"`) | `gseapy.enrich` / `scipy.stats.hypergeom` | One-sided Fisher's exact / hypergeometric test + BH FDR | Significant upregulated gene list (`padj < 0.05`, `log2FC > 0.25`) + **explicit background universe** | Quick functional annotation of top cluster markers or discrete gene modules |
+| **Group-Level GSVA** (`method="gsva"`) | R `GSVA` (`gsva` / `ssgsea`) | Non-parametric kernel estimation of cumulative density across groups | Cluster/group mean log-normalized expression matrix + gene-set dict/GMT | Comparing pathway activity across many clusters or pseudobulk samples simultaneously |
 
-Start a step with `python skills/_sdk/notebook/run.py new enrichment`.
-Load `enrichment = load_skill("sc-enrichment")`, then call `rank_groups`,
-`load_gene_sets` (GMT, JSON or Enrichr library), and `ora` or `gsea`.
-Pass the complete tested gene universe as `background` for ORA; its API
-default is all genes in the supplied ranking. Write returned tables and
-Figures with `write_output`. See `examples/example_step.py`.
+> **Scope Distinction**: Use `sc-enrichment` for **group-level or DE-table** pathway testing ($p$-values, FDR, NES). To compute **per-cell** pathway activity scores stored in `adata.obs`, use `sc-pathway-scoring`.
 
-The default engine is Python. Explicit `engine="auto"` prefers R when its
-packages are available; `engine="r"` requires clusterProfiler. The legacy
-`gsea_r` method uses GO_BP/KEGG/Reactome annotation databases, not custom GMT.
-`gsva` accepts a gene-set mapping, or None for the GO_BP/KEGG R database route.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-## Inputs & Outputs
+### Pattern A: Preranked GSEA on Cluster or Pseudobulk DE Rankings (`gseapy.prerank`)
 
-Rankings need gene/names and a score or effect, with an optional group column.
-`rank_groups` reads log-normalised `X`, never `raw`. For the processed PBMC
-demo, use `.raw.to_adata()` in new steps; the CLI retains its old scaled-X
-demo ranking for compatibility. The CLI accepts H5AD or an upstream output
-directory containing `processed.h5ad` and marker/DE tables.
+```python
+import gseapy as gp
+import pandas as pd
 
-ORA/GSEA CLI writes `processed.h5ad`, `report.md`, `result.json`,
-`reproducibility/`, and five tables:
-`enrichment_results.csv`, `enrichment_significant.csv`, `group_summary.csv`,
-`ranking_input.csv`, `top_terms.csv`. Python GSEA adds
-`tables/gsea_running_scores.csv` when running curves can be built.
-`figure_data/` mirrors plot tables. Figures depend on available terms.
-GSVA uses `tables/gsva_r_scores.csv` and `figures/gsva_r_heatmap.png` instead.
-See `references/output_contract.md` for R-specific files.
+# 1. Prepare a deduplicated, finite ranking series sorted descending by test statistic / score
+# From sc.get.rank_genes_groups_df(adata, group="0") or pydeseq2 results:
+rnk_df = (
+    de_df[["names", "scores"]]
+    .replace([ float("inf"), float("-inf") ], pd.NA)
+    .dropna()
+    .assign(_abs=lambda d: d["scores"].abs())
+    .sort_values("_abs", ascending=False)
+    .drop_duplicates(subset=["names"])
+    .sort_values("scores", ascending=False)[["names", "scores"]]
+)
 
-## Gotchas
-
-- `result.json.summary.resolved_engine` records the engine actually used.
-  The default is now `python`; ask for `--engine auto` to retain auto-selection.
-- `tables/enrichment_results.csv` records Python GSEA's local fallback in
-  `engine`, with the reason in `result.json.summary.warnings`. This is not
-  interchangeable with gseapy's permutation implementation.
-- `tables/enrichment_significant.csv` retains the legacy fixed FDR 0.05
-  filter. `--fdr-threshold` controls `group_summary.csv` and the report summary.
-- `_api.py:37`: `rank_groups` does not infer a suitable matrix. Using scaled `X` can yield
-  invalid log-fold changes; use a log-normalised snapshot instead.
-- `_api.py:103`: empty gene sets fail validation. Failed R annotation mapping raises an
-  error; the R scripts no longer manufacture pathways to fill an empty result.
-- `_api.py:205`: GSVA's R database route supports GO_BP and KEGG, not Enrichr's Hallmark
-  alias. For Hallmark, explicitly load gene sets and pass the mapping to `gsva`.
-
-## Key CLI
-
-```bash
-python skills/singlecell/scrna/sc-enrichment/sc_enrichment.py --demo --output /tmp/sc_enrich_demo
-python skills/singlecell/scrna/sc-enrichment/sc_enrichment.py --input clustered.h5ad --output results/ora --gene-set-db hallmark --groupby cell_type
-python skills/singlecell/scrna/sc-enrichment/sc_enrichment.py --input clustered.h5ad --output results/gsea --method gsea --gene-sets pathways.gmt --gsea-seed 123
-python skills/singlecell/scrna/sc-enrichment/sc_enrichment.py --input clustered.h5ad --output results/gsva --method gsva_r --groupby cell_type --gene-sets pathways.gmt
+# 2. Run Preranked GSEA against MSigDB Hallmark, Reactome, KEGG, or a local GMT file
+pre_res = gp.prerank(
+    rnk=rnk_df,
+    gene_sets="MSigDB_Hallmark_2020",  # Or local path "/path/to/c2.cp.reactome.v2023.1.Hs.symbols.gmt"
+    min_size=5,
+    max_size=500,
+    permutation_num=1000,
+    seed=123,
+    outdir=None,
+    verbose=False,
+)
+gsea_table = pre_res.res2d.sort_values("FDR q-val", ascending=True)
 ```
 
-## API
+### Pattern B: Hypergeometric Over-Representation Analysis with Explicit Background (`gseapy.enrich`)
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+```python
+import gseapy as gp
 
-### `rank_groups(adata, *, groupby: str, method: str='wilcoxon') -> pd.DataFrame`
+sig_genes = de_df.loc[(de_df["pvals_adj"] < 0.05) & (de_df["logfoldchanges"] >= 0.25), "names"].tolist()
+background_genes = adata.var_names.tolist()  # Crucial: restrict universe to expressed/tested genes!
 
-Rank each group's genes against the rest using log-normalised ``X``.
+enr_res = gp.enrich(
+    gene_list=sig_genes,
+    gene_sets="GO_Biological_Process_2023",
+    background=background_genes,
+    cutoff=0.05,
+    outdir=None,
+)
+ora_table = enr_res.results.sort_values("Adjusted P-value", ascending=True)
+```
 
-``method`` is wilcoxon (default), t-test or logreg. This uses ``X``, not
-``raw``; convert a scaled object with ``adata.raw.to_adata()`` first when
-raw holds log-normalised values. Scanpy ranking statistics remain in
-``uns``. Return a table with group, gene and available scores/p-values.
+### Optional Micro-Helper (`kernel.py`)
 
-### `load_gene_sets(source, *, species: str='human', universe=None) -> dict[str, list[str]]`
+Calling `use_skill("sc-enrichment")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `run_ora(gene_list, gene_sets="MSigDB_Hallmark_2020", background=None, cutoff=0.05)`
+- `run_prerank_gsea(ranking_df, gene_col="names", score_col="scores", gene_sets="MSigDB_Hallmark_2020", min_size=5, max_size=500, permutation_num=100, seed=123)`
+- `enrichment_summary(df, fdr_col="Adjusted P-value", fdr=0.05)`
 
-Load GMT/JSON or fetch an Enrichr library; optionally match genes to a universe.
+## 3. Output Format & Verification Contract
 
-``source`` accepts a local path or hallmark/kegg/reactome/go_bp aliases
-and full Enrichr library names. Remote sources need network access and
-gseapy; local files do not. ``species`` is human (default) or mouse.
-Return a term-to-gene-list mapping; no output files are written.
+- **Enrichment Results Tables** (`tables/enrichment_results.csv`, `tables/enrichment_significant.csv`, `tables/top_terms.csv`):
+  - For ORA: `Term`, `Overlap`, `P-value`, `Adjusted P-value`, `Odds Ratio`, `Combined Score`, `Genes`.
+  - For Preranked GSEA: `Term`, `ES`, `NES`, `NOM p-val`, `FDR q-val`, `FWER p-val`, `Tag %`, `Lead_genes`.
+- **Verification Invariants**:
+  - Confirm `len(enrichment_results) > 0` (at least one gene set satisfied `min_size <= overlap <= max_size`).
+  - Confirm `Adjusted P-value` / `FDR q-val` values are finite numbers in $[0, 1]$.
 
-### `demo_gene_sets(*, species: str='human') -> dict[str, list[str]]`
+## 4. Gotchas & Troubleshooting
 
-Return the six named PBMC demo signatures, human by default or mouse symbols.
-
-### `marker_gene_sets(markers: pd.DataFrame, *, groups=None, top_n: int | None=100, universe=None) -> dict[str, list[str]]`
-
-Convert marker groups to gene sets, sorted by adjusted p-value or score.
-
-``markers`` needs group and names (or gene). ``groups=None`` selects all;
-``top_n=None`` keeps all genes. ``universe`` optionally restricts and
-canonicalises gene symbols. Raise ValueError when no sets remain.
-
-### `ora(ranking: pd.DataFrame, gene_sets, *, background=None, engine: str='python', padj_cutoff: float=0.05, log2fc_cutoff: float=0.25, max_genes: int=200, source: str='custom', library_mode: str='local', n_top: int=18) -> pd.DataFrame`
-
-Test over-representation with a local hypergeometric test or clusterProfiler.
-
-``ranking`` accepts marker/DE columns and optional group (default all).
-``background=None`` uses every ranked gene; pass all tested genes to make
-the universe explicit. Positive genes passing adjusted p-value <= 0.05
-and log2FC >= 0.25 are kept, up to 200 per group, by default. Score-only
-rankings keep positive scores. ``engine`` is python (default), r or auto
-(R when available). ``source`` and ``library_mode`` label result rows;
-``n_top`` controls R's optional plots. Return a sorted enrichment table;
-:func:`run_info` returns warnings and the resolved engine.
-
-### `gsea(ranking: pd.DataFrame, gene_sets, *, engine: str='python', ranking_metric: str='auto', min_size: int=5, max_size: int=500, permutation_num: int=100, weight: float=1.0, random_state: int=123, source: str='custom', library_mode: str='local', n_top: int=18, species: str='human', gene_set_db: str | None=None) -> pd.DataFrame`
-
-Run preranked GSEA and return sorted terms with NES, p-values and leading edges.
-
-``engine`` is python (default), r (clusterProfiler GMT), auto, or gsea_r
-(the retained annotation-database R bridge; pass ``gene_sets=None`` and
-select GO_BP, KEGG or Reactome with ``gene_set_db``). Python uses gseapy
-when available and reports its existing local rank-based fallback.
-``ranking_metric='auto'`` chooses stat, scores or logfoldchanges.
-Defaults: gene-set sizes 5..500, 100 permutations, weight 1.0, seed 123.
-Permutation count and weight configure Python; the retained R bridge
-uses fgsea's multilevel defaults and exponent 1.
-``source``/``library_mode`` label rows; ``n_top`` controls R plot selection;
-``species`` selects human or mouse annotation for gsea_r. Seeds are passed
-to Python and R. No gene sets are fabricated when input or mapping fails.
-
-### `gsva(adata, gene_sets, *, groupby: str, species: str='human', gene_set_db: str='GO_BP', method: str='gsva', min_size: int=5, max_size: int=500) -> pd.DataFrame`
-
-Score mean log-normalised expression per group with R GSVA, returning a long table.
-
-Supply a term-to-genes mapping, or None for the retained GO_BP/KEGG R
-annotation bridge selected by ``gene_set_db`` and human/mouse ``species``.
-``method`` is gsva (default), ssgsea or zscore; gene-set size defaults are
-5..500. R runs serially in a temporary directory. Missing annotation or
-gene sets raises an error rather than producing synthetic pathways.
-
-### `run_info(results: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return a JSON-serialisable diagnostics summary, excluding rankings and R artifacts.
-
-### `top_terms(results: pd.DataFrame, *, n_top: int=18, per_group: int=3) -> pd.DataFrame`
-
-Select up to n_top terms, first reserving per_group rows for each group.
-
-### `group_summary(enrich_df: pd.DataFrame, *, fdr_threshold: float=0.05) -> pd.DataFrame`
-
-Summarise term counts, FDR-significant terms and the top term per group.
-
-### `top_terms_figure(results: pd.DataFrame, *, n_top: int=18)`
-
-Return a horizontal score bar Figure; the caller saves and closes it.
-
-<!-- api:end -->
-
-## See also
-
-`sc-markers` and `sc-de` provide rankings. `marker_gene_sets` can convert their
-tables into a signature library; avoid circular validation against the same
-cells used to select the markers. CLI flags are in `references/parameters.md`.
+1. **Always Supply the Tested Gene Universe as `background` in ORA**:
+   - In single-cell RNA-seq, only $\sim 10,000\text{--}15,000$ genes are detected in the tissue. Using the default whole-genome background ($\sim 20,000+$ genes) in hypergeometric ORA artificially inflates significance for generic tissue-expressed pathways. Always pass `background=adata.var_names.tolist()`.
+2. **Never Truncate the Gene List Before Running `gseapy.prerank`**:
+   - Preranked GSEA requires the **entire tested gene ranking** from most upregulated (`+score`) to most downregulated (`-score`) to calibrate the Kolmogorov-Smirnov null distribution. Passing only `padj < 0.05` genes to `prerank` invalidates `NES` and `FDR q-val`.
+3. **Deduplicate and Strip `±inf` / `NaN` Scores Before `prerank`**:
+   - Scanpy `rank_genes_groups` log-fold changes often contain `±inf` (when a gene has $0$ expression in the reference group) or duplicate gene symbols. Rank by the Wilcoxon Z-score (`scores`) or Wald statistic (`stat`) rather than raw `logfoldchanges`, and drop `NaN`/duplicates prior to `gp.prerank`.
+4. **Offline Execution vs. Remote Enrichr Library Names**:
+   - Passing a string library alias like `"MSigDB_Hallmark_2020"` to `gseapy` queries the Enrichr REST API and requires internet access. In air-gapped or offline environments, pass a local `.gmt` file path or a Python `dict[str, list[str]]` directly to `gene_sets=`.
 
 ## Dependencies
 

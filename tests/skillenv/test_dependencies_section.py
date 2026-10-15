@@ -21,8 +21,8 @@ _HEAD = "# x\n\nSome text.\n\n## Dependencies\n\n"
 _PROSE = "Python packages this skill's script needs.\n\n"
 
 
-def test_there_are_88_skill_files():
-    assert len(SKILL_FILES) == 88
+def test_there_are_89_skill_files():
+    assert len(SKILL_FILES) == 89
 
 
 @pytest.mark.parametrize("path", SKILL_FILES, ids=lambda p: p.parent.name)

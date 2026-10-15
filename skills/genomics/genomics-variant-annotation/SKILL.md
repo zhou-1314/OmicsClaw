@@ -15,114 +15,65 @@ tags:
 - impact
 ---
 
-# genomics-variant-annotation
+# Functional Variant Annotation & Pathogenicity Prioritization (`genomics-variant-annotation`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Load this skill for the file-based analysis named in the description.
-The function library and CLI share the same calculations; no external
-aligner, assembler, caller or annotation service is started.
+Select the functional annotation engine and clinical/pathogenicity database according to study goals:
 
-## Use from a step
+| Annotation Goal | Recommended Upstream Tool | Key Fields Produced | Why |
+|---|---|---|---|
+| **Comprehensive transcript & regulatory annotation** | **Ensembl VEP** (`vep --everything --mane`) | `Consequence`, `IMPACT`, `SYMBOL`, `HGVSc`, `HGVSp`, `MANE_SELECT` | Official Ensembl/GENCODE consequence engine with native support for MANE Select canonical transcripts and plugins |
+| **Fast lightweight Java VCF annotation** | **SnpEff + SnpSift** (`snpEff ann GRCh38.105`) | `INFO/ANN` (`Allele|Annotation|Annotation_Impact|Gene_Name|...`) | High-throughput single-command VCF annotation for bacterial, plant, and vertebrate genomes |
+| **Deleteriousness & splice scoring** | **CADD v1.7** (`cadd_phred`), **SpliceAI**, **AlphaMissense** | `CADD_PHRED` ($\ge 20$ top 1%, $\ge 30$ top 0.1%), `$\Delta$` score | Integrates conservation, epigenetic, and protein-structure features across coding and non-coding SNVs/indels |
+| **Clinical & population allele frequency filtering** | **ClinVar** + **gnomAD v4** (`bcftools annotate`) | `CLNSIG`, `gnomAD_AF`, `gnomAD_nhomalt` | Filters common benign polymorphisms (`AF > 0.01`) and flags known pathogenic alleles |
 
-```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("genomics-variant-annotation")
-data = read_input("input.csv", reader=library.read_records)
-result = library.analyze(data)
-write_output(result, "tables/result.csv")
-write_output(library.distribution_figure(result), "figures/distribution.png")
-```
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-Run `examples/example_step.py` through the step runner for a small,
-hand-worked synthetic fixture. It asserts known summary values.
-The reader materializes the input in memory; use bounded FASTQ reads or
-pre-filter large genomic files before loading them.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `read_records(path: str | Path) -> pd.DataFrame`
-
-Read records through read_input(path, reader=library.read_records).
-
-:param path: Existing input file in the format documented under Inputs and outputs.
-:returns: Parsed records as a DataFrame.
-:raises ValueError: Input values or file structure cannot be parsed.
-
-### `analyze(data: pd.DataFrame) -> pd.DataFrame`
-
-Compute variant-annotation summaries and return a new table, leaving data unchanged.
-
-:param data: Records containing impact, consequence, gene, cadd_phred.
-
-:returns: Result table with diagnostics and summary in attrs['run_info'].
-:raises ValueError: Required columns are absent or records are empty or invalid.
-
-### `run_info(data: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return the analysis diagnostics and summary.
-
-:param data: Result returned by analyze.
-:param keep: Keep diagnostics by default; the CLI passes False.
-:returns: Independent diagnostics dictionary.
-:raises ValueError: analyze has not populated diagnostics.
-
-### `distribution_figure(data: pd.DataFrame)`
-
-Plot cadd_phred values without writing files.
-
-:param data: Result table containing cadd_phred.
-:returns: Matplotlib Figure.
-:raises ValueError: The value column is absent or the table is empty.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-`analyze` returns a new DataFrame and leaves the input unchanged.
-`run_info(result)` returns the summary and method diagnostics.
-The CLI passes `keep=False` so diagnostics do not enter output tables.
-All calculations are deterministic; synthetic CLI demos retain seed 42.
-
-## Gotchas
-
-- `analyze` summarizes annotations already supplied by the caller; it does not run VEP, SIFT, PolyPhen or CADD.
-- `analyze` requires lowercase impact, consequence, gene and cadd_phred columns. Missense rows also require sift_prediction and polyphen_prediction.
-- `tables/annotated_variants.csv` from --demo contains simulated scores, not predictions for real variants.
-
-## Inputs and outputs
-
-Input files:
-
-- File types: `.csv`
-- Accepts artifact `genomics.variant_table` (`csv`)
-
-CLI output files:
-
-- `tables/annotated_variants.csv`
-- `tables/impact_distribution.csv`
-- `report.md`
-- `result.json`
-- Produces artifact `genomics.annotated_variants` as `tables/annotated_variants.csv` (`csv`)
-
-The library writes no files. Steps use `write_output`; the CLI owns the
-listed artifacts. Public figure functions return matplotlib Figures and
-do not add new CLI outputs.
-
-## CLI
+### Pattern A: `Ensembl VEP` CLI + Parsing `CSQ` / Annotated Table
 
 ```bash
-python skills/genomics/genomics-variant-annotation/variant_annotation.py --input input_file --output results/
-python skills/genomics/genomics-variant-annotation/variant_annotation.py --demo --output /tmp/genomics_variant_annotation_demo
+# Annotate normalized VCF with Ensembl VEP using MANE Select canonical transcripts and CADD plugin
+vep -i normalized.vcf.gz -o annotated.vcf.gz --vcf --compress_output bgzip \
+    --cache --offline --assembly GRCh38 --mane --pick_allele_gene \
+    --plugin CADD,/path/to/whole_genome_SNVs.tsv.gz
 ```
 
-## See also
+```python
+import pandas as pd
 
-- `references/parameters.md`
-- `references/methodology.md`
-- `references/output_contract.md`
+# Prioritize HIGH-impact LoF or high-CADD missense variants in MANE Select transcripts
+df = pd.read_csv("tables/annotated_variants.csv")
+candidates = df[(df["impact"] == "HIGH") | ((df["impact"] == "MODERATE") & (df["cadd_phred"] >= 20.0))]
+```
+
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("genomics-variant-annotation")`)
+
+```python
+# Calling use_skill("genomics-variant-annotation") auto-injects kernel.py helpers into the python kernel:
+records = read_records("data/annotated_variants.csv")
+annotated_df = analyze(records)
+impact_df = impact_distribution(annotated_df)
+```
+
+## 3. Output Format & Verification Contract
+
+- **Annotated Variants Table** (`tables/annotated_variants.csv`):
+  - Contains `chrom`, `pos`, `ref`, `alt`, `gene`, `consequence` (Sequence Ontology term, e.g., `stop_gained`, `missense_variant`), `impact` (`HIGH`, `MODERATE`, `LOW`, `MODIFIER`), and `cadd_phred`.
+- **Impact Tier Breakdown** (`tables/impact_distribution.csv`):
+  - Counts and percentages of variants stratified by VEP/SnpEff `impact` tier (`HIGH`, `MODERATE`, `LOW`, `MODIFIER`).
+- **Verification Invariants**:
+  - `impact` values belong strictly to `{"HIGH", "MODERATE", "LOW", "MODIFIER"}`.
+  - `cadd_phred` scores are finite non-negative floats ($\ge 0$), where `cadd_phred >= 20` denotes the top 1% most predicted deleterious substitutions genome-wide.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Transcript Isoform Explosion (`1 variant -> 20 CSQ entries`)**:
+   - By default, VEP and SnpEff emit a separate consequence for every overlapping Ensembl transcript isoform, turning 1 variant into dozens of rows. Use `--mane --pick_allele_gene` (or filter to `MANE_SELECT` / canonical transcripts) before counting coding consequences per gene.
+2. **Unnormalized Indels Receive Wrong HGVS and Consequence Calls**:
+   - Multi-allelic or right-shifted indels in repetitive regions fail to match ClinVar/gnomAD coordinates and produce wrong frameshift positions. Always left-align and normalize indels with `bcftools norm -m -any -f ref.fa` **before** running VEP/SnpEff.
+3. **`IMPACT=HIGH` Does Not Automatically Equal Clinical Pathogenicity (`ACMG P/LP`)**:
+   - Terminal-exon `stop_gained` variants escaping Nonsense-Mediated Decay (last 50 bp of penultimate exon or final exon) and LoF variants in olfactory receptors are frequently benign in healthy cohorts (`LOEUF` tolerant). Always cross-check `gnomAD` allele frequency and gene constraint (`pLI` / `LOEUF`).
 
 ## Dependencies
 

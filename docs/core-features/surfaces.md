@@ -240,27 +240,6 @@ handle 不是 `converged` 时也发答案，那一行判断这次没有改，仓
 这次回放的脚本和三次的日志留在实现方的工作目录里，没有放进仓库，上面这组数字只能对着那里的日志核对，从仓库里
 重跑不出来。独立审核另写了一份回放，脚本和日志在审核方的工作目录里，同样不在仓库里，它的数字见本节末尾。
 
-按 `SPEC.md` 第 3 档验证，基线是 `bd5dde25`。每一行都带 `-o addopts=""` 跑，`pyproject.toml` 里默认的
-`-m 'not slow and not demo and not eval and not skill_example'` 没有生效，带这些标记的用例也在范围里：
-
-| 范围 | 基线 | 修复后 |
-|---|---|---|
-| `tests/entry`、`tests/launch`、`tests/engine`、`tests/observability`、`tests/planning` | 3266 passed、13 skipped、3 xfailed | 3338 passed、13 skipped、3 xfailed |
-| `tests/evals` | 188 passed、26 skipped | 191 passed、26 skipped |
-| `tests/evals/dataset -m scripted_eval` | 30 passed | 30 passed |
-| 分层守卫（`tests/*/test_*layer*.py`、`tests/sdk/test_boundary.py`、`tests/sdk/test_public_surface.py`） | 624 passed、6 skipped | 624 passed、6 skipped |
-| 顶层 `tests/test_*.py` | 225 passed、8 skipped、1 xpassed | 224 passed、9 skipped、1 xpassed |
-| `tests/entry/test_desktop_*.py`（装了 fastapi 的 OmicsClaw 环境） | 569 passed、3 skipped | 569 passed、3 skipped |
-
-多出的 72 条和 3 条是新加的用例。30 条脚本化数据集用例没有一条依赖旧行为。顶层那一行两边差的一条是
-`tests/test_setup_env_script.py::test_conda_forge_wrmisc_builds_do_not_target_r43`。它带 `slow` 标记，联网跑
-`conda search`，60 秒内没有结果就跳过：基线那次它通过，修复后那次超时跳过，随后单独重跑这个文件时 27 条全过。
-这一条的结果取决于网络，和这次改动无关。
-
-默认选项下，`slow` 的那一条被 `-m` 排除，顶层 234 条里跑 233 条，独立审核在基线和修复后跑出来的都是
-224 passed、8 skipped、1 deselected、1 xpassed。`tests/evals` 一行里跳过的 26 条带 `eval` 标记，没有设
-`OMICSCLAW_EVAL_LIVE=1` 时跳过；默认选项下它们是 26 deselected，通过数和表里相同。
-
 #### 没验证和没改的部分
 
 - 修复时没有请求真实模型，测试和回放里的 provider 都是脚本化的。独立审核用真实的 DeepSeek 跑过一次
@@ -846,10 +825,6 @@ Channel 拒绝空消息，`/compact` 不经过回复泵，所以走到 `_answer`
 两处在独立审核时还活着，为它们补了"工具调用旁先写一句、最后一轮给出回答"和空白回复这两条用例。
 剩下的两处在今天的代码上和原写法等价："压缩摘要不算边界"，摘要前面只有 system 消息，摘要后面的消息两种
 写法都会读到；"角色改回用 `is` 比较"，内置代码放进轨迹的 user 消息都带枚举类型的角色。
-
-按 `SPEC.md` 第 2 档验证。`tests/entry` 加 `tests/launch/test_channel_command.py`：基线 `5daf5482` 上
-1851 passed、6 skipped、3 xfailed，修复后 1872 passed、6 skipped、3 xfailed，多出的 21 条是上面四组用例。
-`tests/entry/test_desktop_*.py` 在装了 fastapi 的 OmicsClaw 环境里另跑，两边都是 566 passed、3 skipped。
 
 #### 没验证和没改的部分
 

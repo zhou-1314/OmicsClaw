@@ -27,9 +27,19 @@ Core rules:
   commands, paths and identifiers unchanged. Agents without skill support
   read that file and apply its patterns directly.
 
+## Current skill runtime
+
+The checkout now uses four-part `SKILL.md` instructions and definition-only
+`kernel.py` sidecars. There are 88 domain skills plus `skill-creator`.
+`use_skill` registers helpers for injection into the persistent Python kernel.
+The old `skills/_sdk/`, domain `_lib/`, `_api.py`, primary scripts and replay
+examples have been removed. References to those layouts in dated plans are
+historical. Follow `OMICSCLAW.md`, `templates/skill/README.md` and
+`tests/skills/test_claude_science_contract.py` for the current contract.
+
 ## Project Overview
 
-OmicsClaw is a multi-omics analysis platform supporting 88 skills
+OmicsClaw is a multi-omics analysis platform supporting 88 domain skills
 across 7 domains: spatial transcriptomics, single-cell omics, genomics,
 proteomics, metabolomics, bulk RNA-seq, and literature. Each
 skill is a self-contained module that performs a specific analysis task via CLI
@@ -71,7 +81,7 @@ oc cli                     # terminal REPL
 >   Tier 3 (`devtools::install_github` for spacexr, CARD, CellChat, numbat,
 >   SPARK, DoubletFinder).
 > - **Optional analysis backends** (cellrank, palantir, scvelo, tangram-sc,
->   …) are catalogued once, in `DEPENDENCIES` in `skills/_sdk/deps.py`: PyPI
+>   …) are catalogued once, in `DEPENDENCIES` in `omicsclaw/skillenv/deps_registry.py`: PyPI
 >   name (as spelled in `## Dependencies`) → a pure-literal entry with
 >   `module`, `kind` (`pip`/`git`/`r`), `install`, `description`, and optional
 >   `also` / `alt_env`. Names resolve by key, then PEP 503-normalised key,
@@ -127,9 +137,9 @@ There is **no `oc run <skill>`**. The skill runner and the other 33
 subcommands lived in `omicsclaw/surfaces/cli/_main.py`, which the framework
 rebuild retired; see "Running a skill" below for what replaced it.
 
-> **Makefile status.** `list`, `skill-index`, `demo`, `demo-all` and
-> `demo-bulkrna` were rewritten against `omicsclaw.skills` and the real
-> script paths, and do run. `catalog`, `audit-requires`, `check-drift`,
+> **Makefile status.** `list` and `skill-index` read `omicsclaw.skills`.
+> `demo`, `demo-all` and `demo-bulkrna` were removed with the primary skill
+> scripts. `catalog`, `audit-requires`, `check-drift`,
 > `eval-snapshot` and `demo-orchestrator` were deleted with the old skill
 > system. `bot-telegram`, `bot-multi` and `bot-list` were rewritten against
 > `oc channel` and do run; `bot-telegram` and `bot-multi` exit 1 unless
@@ -139,117 +149,31 @@ rebuild retired; see "Running a skill" below for what replaced it.
 
 ## Project Structure
 
-`omicsclaw/` is one Python package of one-way layers. **Every layer may
-import `schema`; `schema` imports nothing.** `docs/FRAMEWORK-REBUILD.md`
-is the living account of how the stack got here and is the file to read
-before changing a layer boundary.
+`omicsclaw/` contains the framework's one-way layers. Every layer may import
+`schema`; `schema` imports no other layer. Read `docs/FRAMEWORK-REBUILD.md`
+before changing a boundary.
 
-```
-OmicsClaw/
-├── omicsclaw/
-│   │  ── the rebuilt stack: this is where new code goes ──
-│   ├── schema/         Stdlib-only vendor-neutral leaf. Message, ToolCall,
-│   │                   ToolResult, ToolDefinition, Usage, StreamChunk.
-│   ├── provider/       Model adapters. LLMProvider + OpenAI-compatible and
-│   │                   Anthropic; imports only schema.
-│   ├── engine/         The ReAct main loop. Imports schema + provider.
-│   ├── tools/          Tool registry, policy, dispatch; builtin/ holds
-│   │                   read_file, write_file, edit_file, bash, web_*.
-│   ├── context/        Prompt assembly, token budget, progressive compaction.
-│   ├── skills/         Skill **loader** (plural). Reads skills/*/SKILL.md into
-│   │                   a catalogue; `search_skills` queries it and `use_skill`
-│   │                   fetches one body on demand.
-│   ├── memory/         Session store + long-term recall + MEMORY.md precis.
-│   ├── mcp/            MCP client: .mcp.json, stdio + Streamable HTTP.
-│   ├── planning/       The execution plan the agent keeps outside the chat.
-│   ├── permission/     Rules, modes, danger patterns; decides if a call happens.
-│   ├── sandbox/        Docker/Podman isolation for `bash`. Stdlib-only leaf.
-│   ├── hooks/          Tool-call interception seam + the audit hook.
-│   ├── observability/  Spans, six instruments, optional OpenTelemetry.
-│   ├── subagent/       Sub-agent definitions and the `task` tool that
-│   │                   delegates one bounded sub-task to one of them.
-│   ├── entry/          Composition root, sessions, turns, events, approval,
-│   │                   plus the cli/, desktop/ and channel/ facades.
-│   ├── launch/         `oc` argv grammar; picks a surface and builds the app.
-│   ├── skillenv/       Which packages under a skill's `## Dependencies` the
-│   │                   `python` bash runs can import; the note `use_skill`
-│   │                   appends (`skill_env=probe`, the default; `off`
-│   │                   removes it); with `skill_env=install`, the
-│   │                   approval-gated `install_skill_deps` and the overlay
-│   │                   venvs it builds. Reads skills/_sdk/deps.py as a file.
-│   │  ── kept from the old stack ──
-│   ├── common/         Framework-side helpers: report reading/validation,
-│   │                   checksums, runtime_env, workspace. Skills no longer
-│   │                   import it; they use skills/_sdk/.
-│   ├── remote/         SSH remote execution. Partly imports: schemas, auth,
-│   │                   storage and routers/{connections,sessions} do (with
-│   │                   fastapi installed); routers/{env,jobs,datasets,
-│   │                   artifacts}, app_integration, run_wire and
-│   │                   runtime_binding reach the deleted `omicsclaw.control`
-│   │                   or `omicsclaw.diagnostics` and do not.
-│   ├── attachments/    Immutable attachment store. Imports; the store half
-│   │                   needs the deleted control plane.
-│   ├── routing/        Old keyword router. Does not import; superseded by
-│   │                   the prompt index + `use_skill`.
-│   └── surfaces/       desktop/ only, kept as the pre-port reference the
-│                       wire-contract tests diff against. Does not import.
-│                       surfaces/cli/ was deleted once entry/cli/ was
-│                       covered on its own; see git log for it.
-├── skills/             88 skills across 7 domains, each a SKILL.md plus scripts
-│   ├── spatial/ singlecell/ genomics/ proteomics/ metabolomics/ bulkrna/
-│   ├── literature/
-│   ├── _sdk/           Mechanical helpers every skill shares: result.json and
-│   │                   report writers, checksums, R script runner and
-│   │                   r_scripts/, the dependency registry (deps.py), conda
-│   │                   sub-env calls. Imports no `omicsclaw`; not a skill
-│   └── <domain>/_lib/  Domain-shared utilities, not registered as skills
-├── tests/              schema/ provider/ engine/ tools/ context/ skills/ entry/
-│                       mcp/ memory/ permission/ planning/ launch/ sandbox/
-│                       hooks/ observability/ subagent/ are the rebuilt
-│                       stack's suite
-├── docs/FRAMEWORK-REBUILD.md   Living status of the rebuild — read this first
-├── docs/plans/         Numbered plans, one per rebuild step
-├── OMICSCLAW.md        Runtime contract of the analysis agent — the top of its
-│                       system prompt, read from beside skills/
-├── SPEC.md             Repository maintenance + AI development contract
-├── CLAUDE.md           Claude Code entry: maintenance contract, issue tracker
-└── AGENTS.md           This file
-```
+- `schema/`, `provider/`, `engine/`, `tools/` and `context/` hold shared types,
+  model adapters, the loop, tool dispatch and prompt assembly.
+- `skills/` discovers `SKILL.md`; `sidecar.py` validates and registers
+  `kernel.py`. Framework code reads skill files without importing `skills.*`.
+- `memory/`, `mcp/`, `planning/`, `permission/`, `sandbox/`, `hooks/`,
+  `observability/` and `subagent/` supply the runtime services.
+- `entry/` composes the CLI, Desktop and channel surfaces. `entry/ssh/`
+  contains the shared SSH controller work; its current limits are documented
+  in `docs/engineering/2026-10-14-ssh-controller.md`.
+- Top-level `skills/` contains 88 domain skills and `skill-creator`, each
+  with `SKILL.md` and `kernel.py`. `templates/skill/` is the authoring scaffold.
+- `omicsclaw/skillenv/deps_registry.py` owns the literal backend dependency
+  mapping. Optional dependencies remain lazy imports in skill functions.
 
-`autoagent/` is **gone**: deleted whole with its tests. The `omicsclaw.autoagent`
-imports and "autoagent" references left in `omicsclaw/surfaces/desktop/`
-(chiefly `server.py`) no longer point at anything.
-
-`surfaces/cli/` is **gone**, not kept: 26 files and 14,936 lines removed
-once `entry/cli/` was covered by its own behavioural tests rather than by
-comparison against it. The reasoning about what was and was not ported
-survives in `omicsclaw/entry/cli/__init__.py`'s docstring; the code
-survives only in `git log`.
-
-> **Import convention**: domain-specific skill utilities live in
-> `skills/<domain>/_lib/` and are imported as
-> `from skills.<domain>._lib.<module> import <name>`. A directory starting
-> with `_` is never a skill. The `omicsclaw/` package holds only
-> domain-agnostic framework code. Helpers every skill shares live in
-> `skills/_sdk/` and are imported as `from skills._sdk.<module> import <name>`,
-> using only the names in each module's `__all__` (frozen by
-> `tests/sdk/test_public_surface.py`). Skill code never imports `omicsclaw`,
-> and `omicsclaw` never imports `skills`: they meet through files
-> (`SKILL.md` and the result.json schema `RESULT_SCHEMA` in
-> `skills/_sdk/result.py`), and `tests/sdk/` pins both sides.
-> `tests/sdk/test_boundary.py` lists no exceptions on either side. `_sdk` imports
-> nothing from any `skills/<domain>/`, and a domain `_lib` may import only its
-> own domain's `_lib` and `skills._sdk`. Every skill script puts the checkout
-> on `sys.path` with the same block, anchored on `skills/_sdk/__init__.py`
-> (see `templates/skill/replace_me.py`).
-> Framework control-plane credentials are removed where the framework starts
-> a process (`bash`'s local shell), never in skill code.
+The former skill SDK, domain libraries and CLI script layout are retired.
+Credential scrubbing belongs at framework process-launch boundaries.
 
 ## Skill Architecture
 
-Every skill has a `SKILL.md` with YAML frontmatter + methodology, a Python
-script accepting `--input`, `--output`, `--demo`, and optionally `tests/`
-and `data/`.
+Every skill has YAML routing metadata, four methodology sections and a
+`## Dependencies` section in `SKILL.md`, plus a definition-only `kernel.py`.
 
 ### The frontmatter contract
 
@@ -275,73 +199,32 @@ read them. The dependency list they mirrored now lives in the body, as
 
 ### Running a skill
 
-The 83 computational and document-processing skills expose `_api.py` through
-`skills._sdk.notebook.load_skill`. Their CLIs keep reports and file writes;
-the function libraries return data or Figures. Each ships an executable
-`examples/example_step.py` and an API section generated from its public
-functions. `sc-count`, `sc-velocity-prep`, `sc-fastq-qc`,
-`spatial-raw-processing` and `metabolomics-xcms-preprocessing` stay CLI-only;
-the XCMS script supports only synthetic demos and rejects real raw-MS input.
-Steps call these scripts through `run_cli`. DataFrame results carry diagnostics
-in `attrs['run_info']`, read through the library's `run_info`; CSV does not retain
-attrs. Network fetches are explicit `fetch_*` calls, separate from calculations.
-See `templates/skill/README.md` for the
-library contract and `OMICSCLAW.md` for Python/R module execution.
+Read its `SKILL.md`, then call the documented upstream code and registered
+`kernel.py` helpers through the persistent Python tool. The framework's
+sidecar gate validates definitions, literal defaults, annotations and exports
+before injection. Successful injection stays out of execution history;
+failed injection remains retryable.
 
-`oc run <skill>` is gone. A skill script is now invoked **directly**, by a
-person or by the agent through `bash`:
+For direct Python use:
 
-```bash
-python skills/<domain>/<skill>/<script>.py --input <file> --output <dir>
-python skills/<domain>/<skill>/<script>.py --demo --output /tmp/<skill>_demo
+```python
+from omicsclaw.skills.sidecar import load_skill
+helpers = load_skill("spatial-preprocess")
 ```
 
-**Missing packages.** `use_skill` appends an environment check to the body
-(`skill_env=probe`, the default): which packages under `## Dependencies` the
-`python` that `bash` runs can import, git-only ones with the registry's
-command, R packages named but not probed. With `skill_env=install` (set by
-the deployment; `oc desktop` refuses it, having no approval channel) the
-agent also gets `install_skill_deps(skill, packages)`, mounted only while
-`bash` runs on this machine. After the person approves the card it builds
-an overlay — `python -m venv --system-site-packages` over that `python`, in
-`$XDG_CACHE_HOME/omicsclaw/envs/<key>/` (or `--skill-env-dir`) — installs
-only what the base lacks, wheels only and pinned, rolls back on any new
-`pip check` problem, and returns the interpreter to run the script with:
-`PYTHONNOUSERSITE=1 <overlay>/.venv/bin/python skills/<domain>/<skill>/<script>.py …`.
-The base environment is never changed. Things to know:
-
-- Packages come from **this machine's pip configuration**, exactly as with
-  your own `pip install`; OmicsClaw does not check where it points (index,
-  proxy, certificates), and the card says so. Each result lists every wheel
-  with its source, marking plain-http ones. A `pip.conf` under the base
-  environment's prefix does not apply to an overlay; use the user-level
-  `~/.config/pip/pip.conf` (or `~/.pip/pip.conf`) instead.
-- A pip configuration or environment that sets `target`, `prefix`, `root`,
-  `user`, `src` or `python` is refused before anything is resolved: it would
-  install outside the overlay or into another interpreter, and `prefix`
-  pointing at the base would change it. `quiet`, `global`, `site` and `user`
-  cannot hide such a setting from the check.
-- Do not configure a directory the agent can write to (anything in the
-  workspace) as `find-links`: whoever writes there supplies packages.
-- Approval works like `bash`'s: asked in the default mode, not under
-  auto-approve or `/auto`. A rule on `bash(pip install*)` does **not** reach
-  this tool — rules match tool names — so a deployment that wants the same
-  control writes `install_skill_deps` rules (`ask: ["install_skill_deps"]`
-  asks every time; "always allow" writes `install_skill_deps(<skill>)`).
-- Overlay directories can be deleted at any time. A changed base gets a new
-  key and a new overlay; the old one is never reused or removed by OmicsClaw.
+Dependency declarations remain in `## Dependencies`. The framework-owned
+literal registry is `omicsclaw/skillenv/deps_registry.py`. Missing-package
+probe and approval-gated overlay installation remain deployment options;
+installation never changes the base environment.
 
 ### Sandbox
 
-With the sandbox on, the repository's `omicsclaw/` and `skills/` are
-mounted read-only at their host paths, so `bash` runs the skill code of
-this checkout; the repository root is not mounted. An existing
-`<workspace>/.env` is covered by `/dev/null` and `<workspace>/.omicsclaw/`
-by an empty tmpfs inside the container, with the sandbox's own exchange
-directory `.omicsclaw/sandbox` mounted back so `bash` still works. The
-container defaults suit several concurrent analyses: memory `auto` (80% of
-`MemTotal`), `/tmp` 64g, `/dev/shm` 128g, pids 65536, `nofile` 65536, CPUs
-uncapped, GPUs only with `--sandbox-gpus`.
+The runtime uses native OS backends (`bwrap`, `netns`, `seatbelt` or
+`appcontainer`) for shell commands, kernels and dependency operations.
+Configuration and effective isolation levels are documented in
+`docs/core-features/sandbox.md`. Network access follows the configured egress
+policy and approved session grants. Docker/Podman settings belong to the
+retired sandbox.
 
 ### Reaching a skill's instructions
 
@@ -396,55 +279,29 @@ The `OMICSCLAW.md` routing table is maintained by hand.
 
 ### Skill conventions
 
-Nothing below is enforced mechanically — `skill_lint.py` and the schema
-validator went with the rest of the toolchain. They are still the bar for
-review, and they are what every gold skill does.
-
-- A `description` says when to **load** and when to **skip**, naming the
-  skill to use instead. The skip half prevents a wrong choice; it is the
-  more valuable half and the one a naive one-line parser drops.
-- `name` is unique across all skills. A duplicate is **skipped** by the
-  loader, not merged. Check with the `load_skills` one-liner above.
-- Every primary skill script exposes a lightweight direct `--help`.
-- The `## Key CLI` section spells the real
-  `python skills/<domain>/<skill>/<script>.py` invocation. The body is the
-  only place anyone learns a skill's CLI.
-- Each `## Gotchas` bullet anchors to a real code path
-  (`<script>.py:LINE`), a `result.json` key, or a `tables/` / `figures/`
-  filename the script actually writes.
-- `## Inputs & Outputs` is an inventory, not a promise. Do not turn an
-  optional entry into an unconditional one.
-
-Rules that **lapsed with the shared runner** and are kept here only so
-nobody re-derives them from an old document: the `result.json` envelope
-check, `reproducibility/replay.json` + `environment.json` + `replay.sh`,
-the generated top-level `README.md`, the `security` / `resources.compute` /
-`lifecycle.status` blocks, and the routing block that hid a deprecated
-skill. Nothing enforces any of them today.
+- Descriptions state when to load a skill and when to use an adjacent one.
+- Names are unique; the loader records duplicate or malformed headers in
+  `SkillIndex.skipped`.
+- The four methodology sections explain method choice, upstream code,
+  expected outputs and biological or statistical pitfalls.
+- Sidecars stay under 80 lines, expose `__all__`, document public functions
+  and defer imports into function bodies. The AST gate rejects executable
+  module scope, decorators, dynamic defaults and executable annotations.
+- Output inventories distinguish required and optional results. Scientific
+  assertions need behavioral evidence; structural loading checks are not
+  scientific acceptance.
 
 ## How to Add a New Skill
 
-1. `cp -r templates/skill skills/<domain>/<your-skill-name>`, then rename
-   and fill the placeholders.
-2. Write the `SKILL.md` frontmatter by hand: `name` (unique across all 88 —
-   a duplicate is skipped, not merged), `description` (say when to **load**
-   it *and* when to **skip** it, naming the skill to use instead; the model
-   routes on this line alone), and optionally `trigger` / `tags`.
-3. Fill in the `SKILL.md` body — including a worked
-   `python skills/.../<script>.py` invocation, because that is now the only
-   way anyone learns the CLI.
-4. Add the Python script, accepting `--input`, `--output`, `--demo`.
-5. Add tests under the skill's own `tests/`.
-6. Add the test path to `pyproject.toml`'s `[tool.pytest.ini_options]
-   testpaths` if it should run in the default suite.
-7. Regenerate the domain index:
-   `OMICSCLAW_WRITE_SKILL_INDEX=1 pytest tests/skills/test_domain_index_is_current.py`.
-8. Update the routing table in `OMICSCLAW.md` by hand — the count and, for a
-   new domain, its row.
-
-Check it landed with `python -c "from omicsclaw.skills import load_skills;
-i = load_skills('skills'); print(len(i), i.skipped)"` — 0 skipped is the
-healthy answer.
+1. Copy `templates/skill/` into the appropriate domain.
+2. Write unique routing metadata and the four methodology sections plus
+   `## Dependencies` in `SKILL.md`.
+3. Add a definition-only `kernel.py` under 80 lines with explicit `__all__`
+   exports, function docstrings and lazy imports.
+4. Add behavioral coverage for changed calculations under `tests/`.
+5. Run `python -m pytest tests/skills -q -p no:cacheprovider` and the affected
+   behavior tests. Regenerate the domain index when metadata changes.
+6. Update the routing documentation and `CHANGELOG.md` as needed.
 
 ## Development Workflow
 
@@ -467,15 +324,18 @@ python -m pytest tests/entry -p no:cacheprovider -q -o addopts=""
 ```
 
 The interpreter matters: the repo needs Python 3.11+ and the default
-`python3` on a dev box is often older. The rebuilt stack's own suite is
+`python3` on a dev box is often older. The framework suite is:
 
 ```bash
-python -m pytest tests/schema tests/provider tests/engine tests/tools \
-  tests/context tests/skills tests/entry tests/mcp tests/memory \
-  tests/permission tests/planning tests/launch tests/sandbox tests/hooks \
-  tests/observability tests/subagent -p no:cacheprovider -q -o addopts=""
-# 4982 passed, 12 skipped   <- measured 2026-09-21; see the note below
+python -m pytest tests -p no:cacheprovider -q -o addopts="" \
+  -m "not slow and not demo and not eval and not scripted_eval and not skill_example"
 ```
+
+Historical test totals are not a baseline for the current checkout. Record
+new verification with its date, code revision (including local changes),
+interpreter, command and result. Keep generated reports under `build/` or
+outside the checkout. Preserve test fixtures and intentional golden files;
+remove reports for retired implementations when those implementations go.
 
 Run it for a level 4 change. The unit job in `.github/workflows/eval.yml`
 holds the current selection, and `Eval CI` runs it on every pull request and

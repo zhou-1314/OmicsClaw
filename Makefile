@@ -1,6 +1,5 @@
 .PHONY: setup-env setup-env-name \
         install install-dev \
-        demo demo-all demo-bulkrna \
         test test-serial test-slow test-all \
         list skill-index \
         bot-telegram bot-multi bot-list
@@ -31,9 +30,6 @@ install-dev:
 	pip install -e ".[dev]"
 
 ## ── Demo & test targets ──────────────────────────────────────────────────────
-
-demo:
-	python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/omicsclaw_demo
 
 # Deterministic fast suite. Skill demo executions, optional scientific stacks,
 # and real-LLM evaluations are separate because they have different dependency,
@@ -78,31 +74,6 @@ list:
 skill-index:
 	OMICSCLAW_WRITE_SKILL_INDEX=1 python -m pytest -q \
 		tests/skills/test_domain_index_is_current.py
-
-demo-all:
-	python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/sc_preprocess
-	python skills/spatial/spatial-domains/spatial_domains.py --demo --output /tmp/sc_domains
-	python skills/spatial/spatial-de/spatial_de.py --demo --output /tmp/sc_de
-	python skills/spatial/spatial-genes/spatial_genes.py --demo --output /tmp/sc_genes
-	python skills/spatial/spatial-statistics/spatial_statistics.py --demo --output /tmp/sc_statistics
-	python skills/spatial/spatial-annotate/spatial_annotate.py --demo --output /tmp/sc_annotate
-	python skills/spatial/spatial-deconv/spatial_deconv.py --demo --output /tmp/sc_deconv
-	python skills/spatial/spatial-communication/spatial_communication.py --demo --output /tmp/sc_communication
-	python skills/spatial/spatial-condition/spatial_condition.py --demo --output /tmp/sc_condition
-	python skills/spatial/spatial-velocity/spatial_velocity.py --demo --output /tmp/sc_velocity
-	python skills/spatial/spatial-trajectory/spatial_trajectory.py --demo --output /tmp/sc_trajectory
-	python skills/spatial/spatial-enrichment/spatial_enrichment.py --demo --output /tmp/sc_enrichment
-	python skills/spatial/spatial-cnv/spatial_cnv.py --demo --output /tmp/sc_cnv
-	python skills/spatial/spatial-integrate/spatial_integrate.py --demo --output /tmp/sc_integrate
-	python skills/spatial/spatial-register/spatial_register.py --demo --output /tmp/sc_register
-
-demo-bulkrna:
-	python skills/bulkrna/bulkrna-read-alignment/bulkrna_read_alignment.py --demo --output /tmp/bulkrna_alignment
-	python skills/bulkrna/bulkrna-de/bulkrna_de.py --demo --output /tmp/bulkrna_de
-	python skills/bulkrna/bulkrna-splicing/bulkrna_splicing.py --demo --output /tmp/bulkrna_splicing
-	python skills/bulkrna/bulkrna-enrichment/bulkrna_enrichment.py --demo --output /tmp/bulkrna_enrichment
-	python skills/bulkrna/bulkrna-deconvolution/bulkrna_deconvolution.py --demo --output /tmp/bulkrna_deconv
-	python skills/bulkrna/bulkrna-coexpression/bulkrna_coexpression.py --demo --output /tmp/bulkrna_coexpr
 
 ## ── Bot targets ─────────────────────────────────────────────────────────────
 ## bot-telegram and bot-multi exit 1 unless OMICSCLAW_APPROVAL_TIMEOUT_S is set

@@ -13,154 +13,105 @@ tags:
 - proportion-test
 ---
 
-# sc-differential-abundance
+# Single-Cell Differential Abundance & Compositional Analysis (`sc-differential-abundance`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has a multi-sample, multi-condition scRNA AnnData and asks
-*"Did the relative abundance of these cell states change between
-conditions?"* — distinct from per-cell DE. Four methods:
+Use this skill to test whether the relative abundance of discrete cell types or continuous $k$NN neighborhoods changes across conditions in a multi-sample cohort (`sample_key`).
 
-- `milo` (default) — neighbourhood-level DA, replicate-aware (pertpy).
-- `sccoda` — Bayesian compositional analysis with a reference cell
-  type (pertpy).
-- `simple` — exploratory proportion screen, no pertpy needed.
-- `proportion_test_r` — base-R Monte-Carlo permutation; lollipop plots
-  with bootstrap 95% CI.
+| Experimental Design & Question | Recommended Method | Upstream Library | Statistical Unit & Assumptions |
+|---|---|---|---|
+| **Continuous state shifts / resolution-free DA** ($\ge 3$ replicates/condition) | **Milo** (`milo`) | `pertpy.tl.Milo` | Overlapping $k$NN neighborhoods (`nhood`); negative binomial GLM with spatial FDR |
+| **Discrete cell-type compositional shift** ($\ge 3$ replicates/condition) | **scCODA** (`sccoda`) | `pertpy.tl.Sccoda` / `sccoda` | Sample $\times$ cell-type counts; hierarchical Dirichlet-multinomial with reference cell type |
+| **Fast non-parametric sample proportion screen** ($\ge 4$ replicates/condition) | **Mann-Whitney U Proportion Screen** (`simple`) | `scipy.stats.mannwhitneyu` + `statsmodels` BH | Per-sample row-normalized cell-type proportions (`counts / sample_total`) |
+| **Single-sample exploratory permutation** (no biological replicates) | **R Monte-Carlo Permutation** (`proportion_test_r`) | Base-R permutation + bootstrap CI | Permutes cell labels ignoring donor structure (exploratory only) |
 
-For per-cell **expression** changes between conditions, use `sc-de`.
-For ranking *what* defines a cluster, use `sc-markers`.
+> **Decision Rule**: Cell-type proportions sum to $1.0$ within each sample—expansion of one dominant population mechanically lowers the fractions of all others. Prefer `milo` for continuous sub-cluster shifts and `sccoda` (with an invariant reference cell type) for discrete cell-type composition.
 
-## Use in an analysis step
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-Use `load_skill` from the notebook SDK; write returned objects with
-`write_output`. This runnable example is also in `examples/example_step.py`.
-The CLI remains available for standalone reports and galleries.
+### Pattern A: Neighborhood-Level Differential Abundance via Milo (`pertpy`)
 
 ```python
-# Recover a threefold change in a synthetic cell type using independent samples.
-# Reads multisample_synthetic: four control and four treated samples.
-# Calls sc-differential-abundance: test_abundance, composition, proportion_figure.
+import pertpy as pt
+import scanpy as sc
 
-from skills._sdk.notebook import load_demo, load_skill, write_output
+# 1. Ensure a batch-corrected kNN graph exists (e.g., built from X_pca_harmony or X_scVI)
+if "connectivities" not in adata.obsp:
+    sc.pp.neighbors(adata, n_neighbors=30, use_rep="X_pca")
 
-abundance = load_skill('sc-differential-abundance')
-adata = load_demo('multisample_synthetic')
+# 2. Construct overlapping kNN neighborhoods on the graph
+milo = pt.tl.Milo()
+mdata = milo.load(adata)
+milo.make_nhoods(mdata["rna"], prop=0.1, seed=0)
 
-table = abundance.test_abundance(adata, method='simple')
-counts, proportions = abundance.composition(adata, sample_key='sample',
-    condition_key='condition', celltype_key='cell_type')
-write_output(table, 'tables/abundance.csv')
-write_output(counts, 'tables/sample_counts.csv')
-write_output(abundance.proportion_figure(proportions), 'figures/sample_proportions.png')
-
-enriched = table.set_index('cell_type').loc['Enriched']
-assert enriched['significant']
-assert enriched['log2fc_group_b_over_a'] > 1
-assert counts.shape == (8, 3)
+# 3. Count cells per (neighborhood, biological sample) and fit GLM
+mdata = milo.count_nhoods(mdata, sample_col="sample")
+milo.da_nhoods(mdata, design="~condition")
+nhood_df = mdata["milo"].var.copy()  # Columns: logFC, PValue, SpatialFDR, Nhood_size
 ```
 
-## Inputs & Outputs
+### Pattern B: Replicate-Aware Sample Proportion Screen (`scipy` + `statsmodels`)
 
-Input is an AnnData with sample, condition and cell-type columns. Each
-sample must have one condition. The Python API returns composition tables
-or a method-specific result DataFrame; it does not change the input.
+```python
+import numpy as np
+import pandas as pd
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
 
-The CLI writes `processed.h5ad`, `annotated_input.h5ad`, `report.md`,
-`result.json`, and these common tables:
-`sample_by_celltype_counts.csv`, `sample_by_celltype_proportions.csv`,
-`condition_mean_proportions.csv`. The selected method adds
-`simple_da_results.csv`, `milo_nhood_results.csv`, `sccoda_effects.csv`,
-or a nonempty `proportion_test_results.csv`. Figures depend on the method
-and available results. R exchange files are temporary.
+# 1. Tabulate sample-by-celltype counts and row-normalized proportions
+counts = pd.crosstab(adata.obs["sample"], adata.obs["cell_type"])
+props = counts.div(counts.sum(axis=1), axis=0)
+sample_cond = adata.obs.groupby("sample", observed=True)["condition"].first().loc[props.index]
+conds = sorted(sample_cond.unique())
+g_a, g_b = sample_cond == conds[0], sample_cond == conds[1]
 
-## Flow
+# 2. Compare replicate proportions per cell type with two-sided Mann-Whitney U + BH
+rows = []
+for ct in props.columns:
+    va, vb = props.loc[g_a, ct].to_numpy(), props.loc[g_b, ct].to_numpy()
+    _, pval = mannwhitneyu(vb, va, alternative="two-sided")
+    l2fc = np.log2((vb.mean() + 1e-6) / (va.mean() + 1e-6))
+    rows.append({"cell_type": ct, "mean_prop_a": va.mean(), "mean_prop_b": vb.mean(), "log2fc_group_b_over_a": l2fc, "pval": pval})
 
-1. Load AnnData; validate `--method`, `--fdr`, `--n-neighbors`, `--prop`, `--n-permutations`.
-2. Run preflight on `--condition-key`, `--sample-key`, `--cell-type-key` — fail fast on missing columns or under-replication.
-3. Build the universal composition summary (counts / proportions / condition means) and save them.
-4. Dispatch to the method-specific runner (`run_milo_da` / `run_sccoda_da` / simple proportion test / R proportion test).
-5. Append method-specific summary fields to `result.json` (`n_nhoods` / `n_effect_rows` / `n_cell_types` / `n_significant`, plus `backend` for milo/sccoda).
-6. Save figures, `report.md`, `result.json`.
-
-## Gotchas
-
-- `run_info(table)["executed_method"]` distinguishes pertpy Milo from the internal `milo_like` fallback. The fallback reason includes the failed import; it is not the same method as official Milo.
-- The CLI demo has only two samples per condition. Its simple/Milo-like Mann-Whitney tests cannot reach p < 0.05. The step uses `multisample_synthetic`, with four samples per condition and a known enriched cell type.
-- `proportion_test_r` permutes cell labels, ignoring sample identity, and uses the existing R seed 42. It requires R; failures propagate from `test_abundance` rather than being reported as empty successful output.
-- `--min-count` is accepted by the CLI but has no effect. The API does not expose that unused option.
-- `run_info(table)` records seeds. `random_state` controls pertpy and newly computed neighbors; standalone scCODA retains its sampler defaults and reports no effective seed.
-- CLI preflight exits on missing metadata or insufficient replication. The API raises `ValueError` for missing values or a sample assigned to multiple conditions; `composition` and `condition_proportions` use sample-level denominators.
-
-## Key CLI
-
-```bash
-# Demo (built-in synthetic 2-condition × 4-sample data)
-python skills/singlecell/scrna/sc-differential-abundance/sc_differential_abundance.py --demo \
-  --method milo --output /tmp/sc_da_demo
-
-# Milo (replicate-aware neighbourhood DA)
-python skills/singlecell/scrna/sc-differential-abundance/sc_differential_abundance.py \
-  --input integrated.h5ad --output results/ \
-  --method milo --condition-key treatment --sample-key donor
-
-# scCODA Bayesian compositional analysis
-python skills/singlecell/scrna/sc-differential-abundance/sc_differential_abundance.py \
-  --input integrated.h5ad --output results/ \
-  --method sccoda --reference-cell-type "B cell" \
-  --condition-key treatment --sample-key donor --cell-type-key cell_type
-
-# Lightweight proportion screen (no pertpy)
-python skills/singlecell/scrna/sc-differential-abundance/sc_differential_abundance.py \
-  --input integrated.h5ad --output results/ --method simple
+da_df = pd.DataFrame(rows)
+da_df["padj"] = multipletests(da_df["pval"], method="fdr_bh")[1]
+da_df["significant"] = da_df["padj"] < 0.05
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- `references/parameters.md` — every CLI flag, per-method tunables
-- `references/methodology.md` — when each method wins; pertpy install notes
-- `references/output_contract.md` — `result.json` keys per method, table column schemas
-- Adjacent skills: `sc-cell-annotation` / `sc-clustering` (upstream — produce the cell-type column), `sc-de` (parallel — per-cell expression DE between conditions, NOT abundance), `sc-markers` (parallel — within-sample cluster marker ranking, NOT cross-condition)
+Calling `use_skill("sc-differential-abundance")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `composition(adata, sample_key="sample", celltype_key="cell_type", condition_key="condition")`
+- `condition_proportions(adata, sample_key="sample", celltype_key="cell_type", condition_key="condition")`
+- `test_abundance(adata, method="simple", sample_key="sample", condition_key="condition", celltype_key="cell_type", fdr=0.05)`
+
+## 3. Output Format & Verification Contract
+
+- **Universal Composition Tables**:
+  - `tables/sample_by_celltype_counts.csv`: integer cell counts of shape `(n_samples, n_cell_types)`.
+  - `tables/sample_by_celltype_proportions.csv`: row-normalized sample proportions (each row sums to $1.0$).
+  - `tables/condition_mean_proportions.csv`: condition-level mean proportions weighting each donor/sample equally.
+- **Differential Abundance Results** (`tables/abundance.csv` / `tables/milo_nhood_results.csv` / `tables/sccoda_effects.csv`):
+  - `simple`: `cell_type`, `mean_prop_a`, `mean_prop_b`, `log2fc_group_b_over_a`, `pval`, `padj`, `significant`.
+  - `milo`: `logFC`, `PValue`, `SpatialFDR`, `Nhood_size`.
+- **Verification Invariants**:
+  - Assert every `sample` maps to exactly one `condition`.
+  - Assert `np.allclose(proportions.sum(axis=1), 1.0)`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Under-Replication Trap ($n < 3$ Samples per Condition)**:
+   - With only $n=2$ samples per condition, a two-sided Mann-Whitney $U$ test cannot achieve $p < 0.333$, so `padj < 0.05` is mathematically impossible. Require $\ge 3\text{--}4$ independent samples per condition.
+2. **Sample-to-Condition Mapping Violation**:
+   - Each value in `adata.obs[sample_key]` must belong to a single `condition_key`. If the same donor was sampled before and after treatment, use distinct sample IDs (`donor1_pre`, `donor1_post`) in `sample_key`.
+3. **Reference Cell-Type Selection in `scCODA`**:
+   - `scCODA` models log-fold changes relative to a reference cell type assumed constant across conditions. Verify that `reference_cell_type="automatic"` (or your explicit reference) exhibits stable proportions across samples.
+4. **Cell-Level Permutation Pseudoreplication (`proportion_test_r`)**:
+   - Permuting individual cell labels ignores sample-level correlation and inflates false positives when donor replicates exist. Use `proportion_test_r` only as an exploratory screen on unreplicated designs.
 
 ## Dependencies
 
 Python packages this skill's script needs. They are not installed for you — check before a long run.
 
 `anndata`, `matplotlib`, `numpy`, `pandas`, `pertpy`, `scanpy`, `sccoda`, `scipy`, `seaborn`, `statsmodels`
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `composition(adata, *, sample_key: str, celltype_key: str, condition_key: str)`
-
-Return sample-by-cell-type counts and row-normalized proportions.
-
-Each sample must belong to one condition. No cells or counts are changed.
-
-### `condition_proportions(adata, *, sample_key: str, celltype_key: str, condition_key: str) -> pd.DataFrame`
-
-Return condition means of per-sample proportions, weighting samples equally.
-
-### `test_abundance(adata, *, method: str='milo', sample_key: str='sample', condition_key: str='condition', celltype_key: str='cell_type', contrast: str | None=None, reference_cell_type: str='automatic', fdr: float=0.05, prop: float=0.1, n_neighbors: int=30, n_permutations: int=1000, random_state: int=0) -> pd.DataFrame`
-
-Return differential-abundance results without changing adata.
-
-simple tests sample proportions with two-sided Mann-Whitney and BH.
-milo uses pertpy, or the existing milo_like neighborhood screen when its
-import fails; run_info names the executed backend and reason. scCODA uses
-pertpy or the installed standalone sccoda backend. random_state controls
-pertpy and newly computed neighbors; standalone sccoda retains its sampler
-defaults. proportion_test_r uses the existing fixed R seed 42 and permutes
-cells, ignoring sample identity; its failures propagate instead of returning
-an empty success result. This function does not apply a minimum-count filter.
-
-### `proportion_figure(proportions: pd.DataFrame)`
-
-Return a sample-by-cell-type proportion heatmap without writing files.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return backend and seed diagnostics; keep=False removes the table's run record.
-
-<!-- api:end -->

@@ -13,114 +13,67 @@ tags:
 - msgf
 ---
 
-# proteomics-identification
+# Peptide & PSM Identification Confidence Filtering (`proteomics-identification`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Confidence filtering uses qvalue, q-value, q_value, PEP, pep or fdr in that order. The default threshold is 0.01.
-Use existing search-engine tables; this skill does not search raw spectra.
+Select the peptide-spectrum match (PSM) rescoring and FDR control workflow according to the search engine:
 
-## Use from a step
+| Search Engine & Acquisition | Confidence Columns | Recommended Rescoring / FDR Control | Standard Threshold |
+|---|---|---|---|
+| **MaxQuant (`evidence.txt` / `peptides.txt`)** | `PEP` (Posterior Error Prob.) & target-decoy `q-value` | Target-decoy competition + MaxQuant Andromeda score & `PEP` | Global `q-value <= 0.01` (1% FDR) + remove `Reverse == "+"` |
+| **FragPipe (`MSFragger` + `Philosopher` / `Percolator`)** | `PeptideProphet Probability` / `q-value` | `MSBooster` deep-learning RT/MS2 prediction + `Percolator` SVM | `q-value <= 0.01` at both PSM, peptide, and protein levels |
+| **DIA-NN (`report.tsv`)** | `Q.Value` (precursor), `Global.Q.Value`, `PG.Q.Value` | Neural network target-decoy classifier | `Q.Value <= 0.01` and `PG.Q.Value <= 0.01` |
+| **OpenMS / `pyopenms` (`mzIdentML` / `idXML`)** | `Posterior Error Probability_score` / `q-value` | `PercolatorAdapter` + `FalseDiscoveryRate` | 1% global peptide & protein FDR |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Target-Decoy 1% Global FDR Filtering on PSM / Peptide Tables
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('proteomics-identification')
-data = library.demo_data(random_state=42)
-result = library.filter_identifications(data, n_spectra=1000)
-write_output(result, 'tables/peptides.csv')
+import pandas as pd
+
+# 1. Load peptide/PSM table (e.g. FragPipe psm.tsv, DIA-NN report.tsv, or MaxQuant peptides.txt)
+df = pd.read_csv("psm.tsv", sep="\t")
+
+# 2. Exclude decoy and contaminant hits before summarizing target identifications
+if "Is Decoy" in df.columns:
+    df = df[~df["Is Decoy"].astype(bool)]
+
+# 3. Filter at 1% global FDR (q-value <= 0.01) and summarize PSMs, stripped peptides, and proteins
+conf = df[df["q-value"] <= 0.01]
+n_psms = len(conf)
+n_peptides = conf["Peptide"].nunique()
+n_proteins = conf["Protein"].nunique()
 ```
 
-For real data, use `read_input` and pass any `read_table` helper as `reader=`.
-The executable `examples/example_step.py` also checks the result and writes a Figure.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("proteomics-identification")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `read_table(path: str | Path) -> pd.DataFrame`
-
-Read peptide CSV/TSV; pass this function as reader= to read_input.
-
-:param path: Peptide table; txt and tsv suffixes select tab separation.
-:returns: Table with common MaxQuant column names normalized.
-:raises OSError: The file cannot be read.
-
-### `filter_identifications(data: pd.DataFrame, *, fdr_threshold: float=0.01, n_spectra: int | None=None) -> pd.DataFrame`
-
-Filter peptide confidence values and return a new table.
-
-:param data: Existing peptide/protein rows with optional qvalue, q-value, q_value, PEP, pep or fdr.
-:param fdr_threshold: CLI default 0.01; PEP thresholding is not a global FDR estimate.
-:param n_spectra: Total spectra; CLI default None uses retained PSM count, not an observed identification rate.
-:returns: Filtered rows with the actual confidence column and summary in attrs.
-:raises ValueError: Threshold or spectrum count is invalid.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read identification diagnostics.
-
-:param table: Filtered peptide table.
-:param keep: True preserves attrs; False removes diagnostics.
-:returns: A separate dictionary with filter provenance and summary.
-:raises TypeError: The input is not a DataFrame.
-
-### `score_figure(table: pd.DataFrame)`
-
-Plot peptide identification scores.
-
-:param table: Peptide table including score.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: score is absent.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Simulate identifications for one thousand spectra.
-
-:param random_state: CLI seed 42; change for another simulation.
-:returns: Synthetic peptide identifications, not a search-engine result.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Confidence filtering uses qvalue, q-value, q_value, PEP, pep or fdr in that order. The default threshold is 0.01.
-Functions return new DataFrames. `run_info(result)` reads diagnostic attrs;
-use `keep=False` before serialization when those attrs are not needed.
-
-## Gotchas
-
-- filter_identifications warns and records an unfiltered result without confidence columns. PEP thresholding is not global FDR control. run_info marks inferred spectrum totals.
-- `demo_data` uses seed 42, matching the CLI; every demo is synthetic.
-- `run_info` lives in DataFrame attrs and is not preserved by CSV serialization.
-
-## Inputs and outputs
-
-The CLI reads CSV tables and writes:
-
-- tables/peptides.csv
-- report.md
-- result.json
-- `reproducibility/commands.sh` records the CLI invocation template.
-
-Functions return data and Figures without writing files. Steps own their outputs.
-Demo mode also writes its synthetic input when the original CLI used a file.
-
-## CLI
-
-```bash
-python skills/proteomics/proteomics-identification/proteomics_identification.py --demo --output /tmp/proteomics_identification
+```python
+# Calling use_skill("proteomics-identification") auto-injects kernel.py helpers into the python kernel:
+df = read_table("data/peptides.csv")
+filtered = filter_identifications(df, fdr_threshold=0.01)
+summary = identification_summary(filtered)
 ```
 
-For real input replace `--demo` with `--input <table>`.
+## 3. Output Format & Verification Contract
 
+- **Filtered Peptide / PSM Table** (`tables/peptides.csv`):
+  - Contains confidence-filtered PSM/peptide rows (`qvalue <= fdr_threshold`) with standardized `sequence`, `protein`, `charge`, `score`, and confidence columns.
+- **Summary Metrics** (`df.attrs["run_info"]`):
+  - Reports `confidence_column`, `fdr_threshold`, `n_input_psms`, `n_retained_psms`, `n_unique_peptides`, `n_unique_proteins`, and (when `n_spectra` is supplied) `id_rate_pct`.
+- **Verification Invariants**:
+  - All rows in `tables/peptides.csv` satisfy `confidence <= fdr_threshold`.
+  - `n_unique_proteins <= n_unique_peptides <= n_retained_psms`.
 
-## See also
+## 4. Gotchas & Troubleshooting
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
-- `proteomics-data-import` for protein-table normalization; `proteomics-de` for comparisons.
+1. **Posterior Error Probability (`PEP`) vs. Global `q-value` (FDR)**:
+   - `PEP` is the **local** probability that a *single* individual PSM is incorrect (conditional on its score), whereas `q-value` is the **expected fraction of false positives across the entire accepted set** up to that threshold. Filtering at `PEP <= 0.01` is vastly more conservative than `q-value <= 0.01` (typically a set filtered at `q-value <= 0.01` includes edge PSMs with `PEP` up to `0.05–0.10`). Always prefer `q-value` over `PEP` for global FDR control.
+2. **PSM-Level 1% FDR Inflates to 5–15% FDR at the Protein Level**:
+   - True positive PSMs cluster onto the same true abundant proteins, whereas false positive decoy hits scatter randomly across the database. Consequently, 1% PSM FDR accumulates to a much higher error rate at the unique-peptide and protein-group levels unless protein-level FDR (`Picked-FDR` / `PG.Q.Value <= 0.01`) is enforced independently.
+3. **Modified Sequence (`_M(Oxidation)_`) vs. Stripped Sequence When Counting Unique Peptides**:
+   - Counting unique strings on modified peptide notation counts oxidized methionine or carbamidomethyl variants as distinct peptides. Strip modification brackets (`re.sub(r"[\(\[].*?[\)\]]", "", seq)`) when reporting unique stripped sequences.
 
 ## Dependencies
 

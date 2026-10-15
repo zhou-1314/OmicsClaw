@@ -16,142 +16,75 @@ tags:
 - simba
 ---
 
-# sc-batch-integration
+# Single-Cell Multi-Batch Integration (`sc-batch-integration`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Correct batch effects in merged, normalised scRNA data. The nine methods are
-Harmony (default), scVI, scANVI, BBKNN, Scanorama, SIMBA, fastMNN, Seurat CCA
-and Seurat RPCA. Check batch/condition confounding before correction: a batch
-fully confounded with the biological contrast cannot be separated statistically.
+Select the integration method according to batch complexity, count availability, and sample size:
 
-## Steps
+| Method (`--method` / `method=`) | Upstream Package | Input Required | Output Key | Best Used When |
+|---|---|---|---|---|
+| `method="harmony"` (`--method harmony`) | `scanpy.external.pp.harmony_integrate` / `harmonypy` | `adata.obsm["X_pca"]` + `batch_key` | `adata.obsm["X_pca_harmony"]` | Fast linear/soft-clustering correction across 2–50 batches |
+| `method="scvi"` (`--method scvi`) | `scvi.model.SCVI` | Raw integer counts in `adata.layers["counts"]` | `adata.obsm["X_scVI"]` | Complex non-linear batch effects, large atlases, or multi-covariate designs |
+| `method="scanorama"` (`--method scanorama`) | `scanpy.external.pp.scanorama_integrate` | `adata.obsm["X_pca"]` (batches in contiguous order) | `adata.obsm["X_scanorama"]` | Partially overlapping cell types across heterogeneous tissues |
+| `method="bbknn"` (`--method bbknn`) | `scanpy.external.pp.bbknn` | `adata.obsm["X_pca"]` + `batch_key` | Batch-balanced `adata.obsp["connectivities"]` | Lightweight graph-level integration directly for UMAP & Leiden |
 
-Start a notebook step with `python skills/_sdk/notebook/run.py new integration`.
-Inside it, use `integration = load_skill("sc-batch-integration")`, then
-`adata = integration.integrate(adata, method="harmony", batch_key="batch")`.
-This returns the corrected representation; choose neighbours, UMAP and
-clustering separately with `sc-clustering`. After BBKNN, call
-`load_skill("sc-clustering").cluster(adata, use_existing_graph=True)` to keep
-the corrected graph. The default clustering call rebuilds it and loses BBKNN's
-batch correction.
-The CLI additionally builds neighbours/UMAP and writes the legacy report.
-See `examples/example_step.py` for a runnable PBMC example.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-## Inputs & Outputs
+### Pattern A: Harmony Integration on PCA (`method="harmony"`)
 
-Input is AnnData with a batch column and normalised `X`. Keep counts in
-`layers['counts']` for scVI/scANVI and R integration. Existing PCA is optional.
-The API returns AnnData and separate table/Figure helpers; it writes no output
-directory. R methods retain the existing H5AD bridge and need zellkonverter.
+```python
+import scanpy as sc
+import scanpy.external as sce
 
-CLI outputs are `processed.h5ad`, `report.md`, `result.json` and
-`reproducibility/{commands.sh,requirements.txt}`. Non-empty tables are written
-to `tables/{integration_summary,batch_sizes,cluster_sizes,batch_mixing_matrix,integration_metrics}.csv`.
-Label-dependent tables and plots are optional. Plot data, including UMAP
-coordinates, live under `figure_data/`, not `tables/umap.csv`.
-See `references/output_contract.md` for the conditional inventory.
+# Ensure batch_key is categorical string and PCA is computed on batch-aware HVGs
+adata.obs["batch"] = adata.obs["batch"].astype(str).astype("category")
+if "X_pca" not in adata.obsm:
+    sc.pp.highly_variable_genes(adata, n_top_genes=2000, batch_key="batch")
+    sc.tl.pca(adata, n_comps=30, random_state=0)
 
-## Gotchas
+sce.pp.harmony_integrate(adata, key="batch", basis="X_pca", adjusted_basis="X_pca_harmony")
 
-- `result.json.data.requested_method`, `executed_method`, `fallback_used` and
-  `fallback_reason` record scANVI's fallback to scVI when labels are absent.
-  Supply `--labels-key` to choose an existing label column.
-- `tables/integration_metrics.csv` omits unavailable LISI/ASW values; this is
-  not evidence of good or bad integration. Label-free input has no label ASW.
-- `_api.py:303`: `run_info(adata)` contains a small JSON summary. The retained Seurat bridge
-  also returns old R UMAP coordinates under the private
-  `uns['_omicsclaw_legacy_integration_umap']` key. The CLI moves these to
-  `obsm['X_umap']` and removes the private key; the API adds no UMAP to obsm.
-- `_api.py:39`: `obsm['X_harmony']` uses existing PCA only when the requested PCA size would
-  exceed the data's rank. Normal-sized input still recomputes PCA.
-- `_api.py:182`: SIMBA uses a temporary working directory; do not run it concurrently in
-  threads. Its returned AnnData can be a cell-subset copy.
-
-## Key CLI
-
-```bash
-python skills/singlecell/scrna/sc-batch-integration/sc_integrate.py --demo --output /tmp/sc_integrate_demo
-python skills/singlecell/scrna/sc-batch-integration/sc_integrate.py --input merged.h5ad --output results/integration --method harmony --batch-key sample_id --seed 0
-python skills/singlecell/scrna/sc-batch-integration/sc_integrate.py --input labelled.h5ad --output results/scanvi --method scanvi --labels-key cell_type --no-gpu --n-epochs 200
+# Build downstream neighbor graph on the Harmony-corrected embedding!
+sc.pp.neighbors(adata, use_rep="X_pca_harmony", n_neighbors=15, random_state=0)
+sc.tl.umap(adata, random_state=0)
+sc.tl.leiden(adata, resolution=1.0, key_added="leiden", flavor="igraph", n_iterations=2, random_state=0)
 ```
 
-`--seed` controls Harmony, Scanorama and scVI/scANVI and the Python CLI UMAP.
-It does not control SIMBA or the retained R integration bridge.
+### Pattern B: Deep Generative Integration with `scvi-tools` (`method="scvi"`)
 
-## API
+```python
+import scvi
+import scanpy as sc
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+scvi.settings.seed = 0
+adata_hvg = adata[:, adata.var["highly_variable"]].copy() if "highly_variable" in adata.var else adata.copy()
 
-### `integrate(adata, *, method: str='harmony', batch_key: str='batch', harmony_theta: float=2.0, n_pcs: int=50, n_latent: int=30, n_epochs: int | None=None, use_gpu: bool=True, labels_key: str | None=None, bbknn_neighbors_within_batch: int=3, scanorama_knn: int=20, integration_features: int=2000, integration_pcs: int=30, simba_n_top_genes: int=3000, simba_n_components: int=15, simba_k: int=15, simba_num_workers: int=4, random_state: int=0)`
+scvi.model.SCVI.setup_anndata(adata_hvg, layer="counts", batch_key="batch")
+model = scvi.model.SCVI(adata_hvg, n_latent=30, n_layers=2, gene_likelihood="nb")
+model.train(max_epochs=200, early_stopping=True)
 
-Integrate batches and return AnnData with a corrected representation.
+adata.obsm["X_scVI"] = model.get_latent_representation()
+sc.pp.neighbors(adata, use_rep="X_scVI", n_neighbors=15, random_state=0)
+sc.tl.umap(adata, random_state=0)
+```
 
-``harmony`` reads log-normalised expression and batch labels, writes
-``obsm['X_harmony']`` and preserves cells and genes. It recomputes PCA on
-ordinary inputs; when ``n_pcs`` exceeds the small input's rank, it reuses
-an existing PCA or computes the largest valid PCA. No neighbours or UMAP
-are computed. Diagnostics are available through :func:`run_info`.
+## 3. Output Format & Verification Contract
 
-:param method: ``harmony`` (default), ``scvi``, ``scanvi``, ``bbknn``,
-    ``scanorama``, ``simba``, ``fastmnn``, ``seurat_cca`` or ``seurat_rpca``.
-    BBKNN writes its batch-balanced neighbour graph, not a new embedding.
-:param batch_key: Batch column in ``obs``; default ``batch``.
-:param harmony_theta: Harmony diversity penalty; default 2.0.
-:param n_pcs: Requested Harmony components; default 50.
-:param n_latent: scVI/scANVI latent dimensions; default 30.
-:param n_epochs: Training epochs; None uses 400 for scVI, 200 for scANVI.
-:param use_gpu: Request a GPU for scVI/scANVI; default True, CPU if unavailable.
-:param labels_key: scANVI labels; None searches cell_type/leiden/louvain/
-    seurat_clusters. With no labels it falls back to scVI and records why.
-:param bbknn_neighbors_within_batch: BBKNN neighbours per batch; default 3.
-:param scanorama_knn: Scanorama matching neighbours; default 20.
-:param integration_features: R integration variable genes; default 2000.
-:param integration_pcs: R integration components; default 30.
-:param simba_n_top_genes: SIMBA variable genes; default 3000.
-:param simba_n_components: SIMBA inter-batch components; default 15.
-:param simba_k: SIMBA inter-batch neighbours; default 15.
-:param simba_num_workers: SIMBA training workers; default 4.
-:param random_state: Backend seed; default 0.
-    Passed to Harmony, Scanorama and scVI/scANVI. SIMBA and the retained
-    R bridge do not expose this seed. SIMBA runs in a temporary working
-    directory; do not call it concurrently from multiple threads.
-:returns: AnnData, modified in place for Python methods except SIMBA.
-    SIMBA and R methods can return a cell-subset copy. scVI/scANVI require
-    raw counts in ``layers['counts']``; other Python methods use ``X``.
-:raises ValueError: The method, batch column or PCA dimensions are invalid.
-:raises ImportError: The chosen optional backend is unavailable.
+- **Integrated AnnData** (`intermediate/integrated.h5ad`):
+  - Contains the integrated latent representation (`adata.obsm["X_pca_harmony"]` or `adata.obsm["X_scVI"]`) with zero `NaN` values.
+  - `sc.pp.neighbors` has been recomputed with `use_rep=` pointing to the integrated embedding (`adata.uns["neighbors"]["params"]["use_rep"]`).
+- **Verification**:
+  - Check batch mixing across Leiden clusters (`pd.crosstab(adata.obs["leiden"], adata.obs["batch"])`) to confirm batches are well mixed while biological cell types remain separated.
 
-### `run_info(adata, *, keep: bool=True) -> dict`
+## 4. Gotchas & Troubleshooting
 
-Return integration diagnostics; set ``keep=False`` to remove them from ``uns``.
-
-### `integration_metrics(adata, *, batch_key: str='batch', label_key: str | None=None, embedding_key: str='X_harmony') -> pd.DataFrame`
-
-Return LISI and ASW diagnostics; unavailable metrics are logged and omitted.
-
-LISI values are also attached to ``obs["ilisi"]`` and, with labels,
-``obs["clisi"]``. The corrected embedding and batch column must exist.
-
-### `batch_mixing_table(adata, *, batch_key: str='batch', label_key: str | None=None) -> pd.DataFrame`
-
-Return each label's fraction of cells from each batch; empty without labels.
-
-### `batch_sizes_table(adata, *, batch_key: str='batch') -> pd.DataFrame`
-
-Return batch labels and cell counts, largest first.
-
-### `batch_sizes_figure(adata, *, batch_key: str='batch')`
-
-Return a Figure of cell counts per batch; the caller owns saving and closing it.
-
-<!-- api:end -->
-
-## See also
-
-`sc-multi-count` merges samples; `sc-clustering` clusters the returned
-representation; `sc-cell-annotation` supplies labels. CLI tuning details are
-in `references/parameters.md`.
+1. **Forgetting `use_rep="X_pca_harmony"` in `sc.pp.neighbors`**:
+   - `harmony_integrate` writes `adata.obsm["X_pca_harmony"]` and leaves `X_pca` untouched. Calling `sc.pp.neighbors(adata)` without `use_rep="X_pca_harmony"` silently builds the graph on the unintegrated `X_pca`.
+2. **Scanorama Contiguous Batch Ordering**:
+   - `sce.pp.scanorama_integrate` requires `adata` observations to be sorted contiguously by `batch_key` (`adata = adata[adata.obs["batch"].argsort()].copy()`).
+3. **`scVI` Requires Unnormalized Integer Counts**:
+   - `scvi.model.SCVI.setup_anndata` models a Negative Binomial / ZINB distribution over raw integer counts (`layer="counts"`). Passing log-normalized data corrupts the variational posterior.
 
 ## Dependencies
 

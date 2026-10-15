@@ -14,110 +14,58 @@ tags:
 - bnd
 ---
 
-# genomics-sv-detection
+# Structural Variant Detection & Breakpoint QC (`genomics-sv-detection`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Load this skill for the file-based analysis named in the description.
-The function library and CLI share the same calculations; no external
-aligner, assembler, caller or annotation service is started.
+Select the structural variant ($\ge 50$ bp) caller according to sequencing read technology and experimental design:
 
-## Use from a step
+| Sequencing Technology & Design | Recommended SV Caller | Signal Used | Why |
+|---|---|---|---|
+| **Illumina paired-end WGS** (germline or matched tumor-normal) | **Manta** / **DELLY2** / **GRIDSS2** | Discordant read pairs + split-read assembly | Local breakpoint graph assembly resolves DEL, DUP, INV, INS, and inter-chromosomal BND events |
+| **PacBio HiFi / ONT long reads** (germline or mosaic) | **Sniffles2** (`sniffles --input bam --vcf out.vcf`) / **cuteSV** | Intra-read CIGAR indels + split alignments | Long reads span full insertions (Alu/LINE1/VNTR) and complex inversions missed by short-read callers |
+| **Multi-caller cohort merging** | **SURVIVOR** / **Jasmine** / **Truvari** (`truvari bench`) | Reciprocal overlap + breakpoint distance + sequence similarity | Deduplicates redundant SV calls across callers or samples while enforcing SVTYPE consistency |
+| **SV VCF inspection & classification** | **VCF 4.3 `INFO/SVTYPE` & `INFO/SVLEN`** | `cyvcf2` / `pysam.VariantFile` / `bcftools query` | Stratifies calls by class (`DEL`, `INS`, `DUP`, `INV`, `BND`), FILTER status, and size regime |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: `Sniffles2` / `Manta` + `bcftools` SV Extraction
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("genomics-sv-detection")
-data = read_input("input.vcf", reader=library.read_records)
-result = library.analyze(data)
-write_output(result, "tables/result.csv")
-write_output(library.distribution_figure(result), "figures/distribution.png")
+import pandas as pd
+
+# 1. Call long-read SVs with Sniffles2 (CLI):
+# sniffles --input aligned.bam --vcf sv_calls.vcf.gz --reference ref.fa --threads 8
+
+# 2. Query SV fields with bcftools:
+# bcftools query -f '%CHROM\t%POS\t%ID\t%FILTER\t%INFO/SVTYPE\t%INFO/SVLEN[\t%GT]\n' sv_calls.vcf.gz > sv_table.tsv
 ```
 
-Run `examples/example_step.py` through the step runner for a small,
-hand-worked synthetic fixture. It asserts known summary values.
-The reader materializes the input in memory; use bounded FASTQ reads or
-pre-filter large genomic files before loading them.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("genomics-sv-detection")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `read_records(path: str | Path) -> pd.DataFrame`
-
-Read records through read_input(path, reader=library.read_records).
-
-:param path: Existing input file in the format documented under Inputs and outputs.
-:returns: Parsed records as a DataFrame.
-:raises ValueError: Input values or file structure cannot be parsed.
-
-### `analyze(data: pd.DataFrame) -> pd.DataFrame`
-
-Compute sv-detection summaries and return a new table, leaving data unchanged.
-
-:param data: Records containing chrom, sv_type, sv_len, filter, size_class, genotype.
-
-:returns: Result table with diagnostics and summary in attrs['run_info'].
-:raises ValueError: Required columns are absent or records are empty or invalid.
-
-### `run_info(data: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return the analysis diagnostics and summary.
-
-:param data: Result returned by analyze.
-:param keep: Keep diagnostics by default; the CLI passes False.
-:returns: Independent diagnostics dictionary.
-:raises ValueError: analyze has not populated diagnostics.
-
-### `distribution_figure(data: pd.DataFrame)`
-
-Plot sv_len values without writing files.
-
-:param data: Result table containing sv_len.
-:returns: Matplotlib Figure.
-:raises ValueError: The value column is absent or the table is empty.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-`analyze` returns a new DataFrame and leaves the input unchanged.
-`run_info(result)` returns the summary and method diagnostics.
-The CLI passes `keep=False` so diagnostics do not enter output tables.
-All calculations are deterministic; synthetic CLI demos retain seed 42.
-
-## Gotchas
-
-- `read_records` reads INFO/SVTYPE; breakend ALT notation without that field stays UNKNOWN. There is no mate-pair resolution or SV calling.
-- `run_info()["summary"]` uses absolute SVLEN and the legacy small (<1000), medium (<100000), and large size classes. Only the first sample genotype is read.
-
-## Inputs and outputs
-
-Input files:
-
-- File types: `.vcf`
-
-CLI output files:
-
-- `tables/structural_variants.csv`
-- `report.md`
-- `result.json`
-
-The library writes no files. Steps use `write_output`; the CLI owns the
-listed artifacts. Public figure functions return matplotlib Figures and
-do not add new CLI outputs.
-
-## CLI
-
-```bash
-python skills/genomics/genomics-sv-detection/sv_detection.py --input input_file --output results/
-python skills/genomics/genomics-sv-detection/sv_detection.py --demo --output /tmp/genomics_sv_detection_demo
+```python
+# Calling use_skill("genomics-sv-detection") auto-injects kernel.py helpers into the python kernel:
+records = read_records("data/structural_variants.vcf")
+sv_df = analyze(records)
+summary = sv_summary(sv_df)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- `references/parameters.md`
-- `references/methodology.md`
-- `references/output_contract.md`
+- **Structural Variants Table** (`tables/structural_variants.csv`):
+  - Contains `chrom`, `pos`, `sv_type` (`DEL`, `INS`, `DUP`, `INV`, `BND`), `sv_len` (absolute length in bp), `filter`, `genotype`, and `size_class` (`"small_50_1kb"`, `"medium_1kb_10kb"`, `"large_10kb_plus"`, or `"translocation"` for `BND`).
+- **Verification Invariants**:
+  - Non-translocation SVs satisfy `abs(sv_len) >= 50` (standard 50-bp operational boundary between indels and SVs).
+  - `sv_len` is stored as a non-negative integer span (`abs(INFO/SVLEN)` or `INFO/END - POS`), while `sv_type` preserves the direction of change (`DEL` vs. `INS`/`DUP`).
+
+## 4. Gotchas & Troubleshooting
+
+1. **Signed `INFO/SVLEN` Conventions Vary Across Callers**:
+   - VCF specifications store negative `SVLEN` for deletions (`SVLEN=-350`, `SVTYPE=DEL`) and positive `SVLEN` for insertions/duplications, while breakend (`SVTYPE=BND`) records omit `SVLEN` altogether. Always normalize with `abs(int(svlen))` when binning by SV size, and handle `SVTYPE=BND` separately.
+2. **Short-Read Insertion Drop-Off Above Read Length**:
+   - Short-read callers (`Manta`, `DELLY`) lose sensitivity for insertions larger than the fragment insert size ($\ge 500$ bp), producing unanchored breakends (`<INS>` with unknown length). Long reads (`Sniffles2`) are required to fully assemble large repeat insertions.
+3. **Alu (~300 bp) and LINE-1 (~6 kb) Peaks Are Expected in Human Germline SV Size Distributions**:
+   - A human germline SV callset naturally exhibits sharp spikes at ~300 bp (Alu mobile elements) and ~6 kb (full-length L1 elements) in both `DEL` and `INS` size histograms; absence of the 300-bp Alu peak indicates aggressive size filtering or poor split-read sensitivity.
 
 ## Dependencies
 

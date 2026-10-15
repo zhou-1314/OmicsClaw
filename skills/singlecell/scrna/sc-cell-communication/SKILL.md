@@ -15,192 +15,87 @@ tags:
 - nichenet
 ---
 
-# sc-cell-communication
+# Single-Cell Ligand-Receptor Cell-Cell Communication (`sc-cell-communication`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has an annotated scRNA AnnData (cell-type labels in
-`obs["cell_type"]` or another column passed via `--cell-type-key`) and
-wants ligand-receptor / sender-receiver interaction tables and figures.
-Five backends:
+Choose a ligand-receptor (L-R) inference framework based on species, statistical testing needs, and experimental design:
 
-- `builtin` (default) — compact curated L-R set, heuristic score, no p-values.
-- `liana` — Python LIANA rank aggregation (recommended general default).
-- `cellphonedb` — official CellPhoneDB statistical workflow (human-only).
-- `cellchat_r` — R-backed CellChat with pathway / centrality outputs.
-- `nichenet_r` — R-backed NicheNet ligand prioritisation; needs explicit `--receiver` + `--senders` + `--condition-*` (human-only).
+| Method (`--method` / `method=`) | Upstream Package | Statistical Paradigm | Species Support | Best Used When |
+|---|---|---|---|---|
+| **LIANA Consensus** (`method="liana"`) | `liana` (`liana.mt.rank_aggregate`) | Robust rank aggregation across CellPhoneDB, Connectome, logFC, NATMI, SingleCellSignalR | Human (`consensus`) & Mouse (`mouseconsensus`) | **Default choice** for single-condition ligand-receptor discovery; balances specificity and magnitude |
+| **CellPhoneDB** (`method="cellphonedb"`) | `cellphonedb` (v4/v5 permutation test) | Empirical cluster-label permutation $p$-values (`iterations=1000`) | Human (`hgnc_symbol`) | Heteromeric multi-subunit receptor complexes requiring formal permutation $p$-values |
+| **CellChat** (`method="cellchat_r"`) | R `CellChat` | Mass-action law (`triMean`) with cofactor/agonists and pathway-level network centrality | Human & Mouse | Signaling pathway aggregation and sender/receiver/mediator/influencer role analysis |
+| **NicheNet** (`method="nichenet_r"`) | R `nichenetr` | Prior-knowledge ligand-to-target signaling network + DE target enrichment in receiver cells | Human & Mouse | Two-condition (`condition_oi` vs. `condition_ref`) prioritization of ligands driving DE in a specific receiver cell type |
 
-For TF → target gene regulatory networks use `sc-grn`. For cell-type
-labelling use `sc-cell-annotation`.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-## Use in an analysis step
-
-Use `load_skill` from the notebook SDK; write returned objects with
-`write_output`. This runnable example is also in `examples/example_step.py`.
-The CLI remains available for standalone reports and galleries.
+### Pattern A: LIANA Consensus Rank Aggregation (`liana-py`)
 
 ```python
-# Rank curated ligand-receptor mean products across PBMC clusters.
-# Reads pbmc3k_processed and uses its log-normalized raw snapshot.
-# Calls sc-cell-communication: communicate, sender_receiver_summary, interaction_heatmap_figure.
-# The builtin method does not test statistical significance.
+import liana as li
+import pandas as pd
 
-from skills._sdk.notebook import load_demo, load_skill, write_output
+# 1. Ensure log1p-normalized expression is in adata.X and cell-type labels exist in adata.obs
+# Use resource_name="consensus" for human, "mouseconsensus" for mouse
+li.mt.rank_aggregate(
+    adata,
+    groupby="cell_type",
+    resource_name="consensus",
+    expr_prop=0.1,        # Minimum fraction of cells expressing ligand and receptor in each cluster
+    min_cells=5,
+    use_raw=False,
+    seed=1337,
+    verbose=True,
+)
 
-communication = load_skill('sc-cell-communication')
-adata = load_demo('pbmc3k_processed').raw.to_adata()
-
-table = communication.communicate(adata, cell_type_key='louvain')
-write_output(table, 'tables/lr_interactions.csv')
-write_output(communication.sender_receiver_summary(table), 'tables/sender_receiver.csv')
-write_output(communication.interaction_heatmap_figure(table), 'figures/interaction_heatmap.png')
-
-assert not table.empty
-assert table.pvalue.isna().all()
-assert (table.score > 0).all()
-assert set(table.source).issubset(set(adata.obs['louvain'].astype(str)))
+# 2. Extract and filter high-specificity, high-magnitude interactions
+lr_df = adata.uns["liana_res"].copy()
+top_lr = lr_df[lr_df["specificity_rank"] <= 0.05].sort_values("magnitude_rank", ascending=True)
 ```
 
-## Inputs & Outputs
+### Pattern B: Sender-Receiver Interaction Frequency Matrix & Visualization
 
-Input is an annotated AnnData. builtin, LIANA, CellPhoneDB and CellChat
-use normalized X; NicheNet needs count-like data. PCA and neighbors are
-not required. The API returns an interaction DataFrame, with backend
-diagnostics and optional tables accessible through helpers.
-
-The CLI writes `processed.h5ad`, `report.md`, `result.json`, and
-`tables/lr_interactions.csv`, `top_interactions.csv`,
-`sender_receiver_summary.csv`, `group_role_summary.csv`,
-`pathway_summary.csv`. CellChat can add pathway, centrality, count and
-weight tables; CellPhoneDB can add means, p-values and significant means;
-NicheNet can add ligand activities and target links. Those tables and the
-corresponding figures are conditional. Backend exchange files are temporary.
-
-## Flow
-
-1. Load AnnData; preflight `--cell-type-key`, species, and per-method requirements (e.g., NicheNet needs `--receiver` / `--senders` / `--condition-*`).
-2. Dispatch via `communicate` to the chosen backend (one of `builtin` / `liana` / `cellphonedb` / `cellchat_r` / `nichenet_r`).
-3. Standardise the L-R table to columns `ligand`, `receptor`, `source`, `target`, `score`, `pvalue`, `pathway`.
-4. Build sender-receiver / role / pathway summaries.
-5. Detect "no interactions found" and print a UX-guardrail message; do NOT raise.
-6. Save tables, figures, `processed.h5ad`, `report.md`, `result.json` (incl. `score_semantics` / `significance_semantics` / `pvalue_available`).
-
-## Gotchas
-
-- `run_info(table)["fallback_used"]` is false: a missing selected backend raises; the API does not silently switch to builtin.
-- builtin scores are grouped ligand mean × receptor mean, not interaction probabilities. `pvalue` is NaN and `n_significant` is zero.
-- LIANA's `specificity_rank` is a consensus rank, not a p-value. `tables/lr_interactions.csv` retains that column, leaves `pvalue` NaN and reports zero significant interactions. Its default seed is 1337; the wrapper retains its existing species-independent resource selection.
-- CellPhoneDB is human-only and now passes seed 0 to `debug_seed`. `cellphonedb_lr(random_state=...)` changes it. Its v4.1.0 database downloads on first use to the user's cache; this is not an offline path unless cached.
-- CellChat and NicheNet need their R dependency stacks. NicheNet is human-only and also requires `lr_network_human_21122021.rds` and `weighted_networks_nsga2r_final.rds` under the user's `.cache/omicsclaw/nichenet/`; the wrapper does not download them.
-- Empty interaction tables are valid output. Check `run_info(table)["n_interactions_tested"]` before plotting or interpreting them.
-
-## Key CLI
-
-```bash
-# Demo (built-in annotated PBMC)
-python skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py --demo --output /tmp/sc_ccc_demo
-
-# Default builtin scorer (heuristic, no pvalue)
-python skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py \
-  --input annotated.h5ad --output results/
-
-# LIANA rank aggregation (recommended general default)
-python skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py \
-  --input annotated.h5ad --output results/ --method liana
-
-# CellPhoneDB statistical (human only)
-python skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py \
-  --input annotated.h5ad --output results/ \
-  --method cellphonedb --cellphonedb-iterations 1000 --cellphonedb-threshold 0.1
-
-# CellChat R workflow
-python skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py \
-  --input annotated.h5ad --output results/ \
-  --method cellchat_r --cellchat-prob-type triMean
-
-# NicheNet ligand prioritisation across conditions (human only)
-python skills/singlecell/scrna/sc-cell-communication/sc_cell_communication.py \
-  --input annotated.h5ad --output results/ \
-  --method nichenet_r \
-  --condition-key condition --condition-oi stim --condition-ref ctrl \
-  --receiver "Monocyte" --senders "T_cell,B_cell" --nichenet-top-ligands 20
+```python
+# Summarize significant L-R interactions per (source, target) cell-type pair
+sig_lr = lr_df[lr_df["specificity_rank"] <= 0.05]
+sr_matrix = (
+    sig_lr.groupby(["source", "target"], observed=True)
+    .size()
+    .unstack(fill_value=0)
+)
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- `references/parameters.md` — every CLI flag, per-backend tunables
-- `references/methodology.md` — when each backend wins; species coverage
-- `references/output_contract.md` — `lr_interactions.csv` columns + `result.json` keys per backend
-- Adjacent skills: `sc-cell-annotation` (upstream — produces `obs["cell_type"]`), `sc-clustering` (upstream — provides leiden/louvain if you pass `--cell-type-key leiden`), `sc-grn` (parallel — TF→target regulatory networks, NOT L-R), `sc-differential-abundance` (parallel — cross-condition cell-state proportion changes)
+Calling `use_skill("sc-cell-communication")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `communicate(adata, cell_type_key="cell_type", method="liana", resource_name="consensus", expr_prop=0.1, random_state=1337)`
+- `sender_receiver_summary(lr_df)`
+- `top_interactions(lr_df, n_top=50)`
+
+## 3. Output Format & Verification Contract
+
+- **Primary L-R Interaction Table** (`tables/lr_interactions.csv` and `tables/top_interactions.csv`):
+  - Standardized columns: `source` (sender cell type), `target` (receiver cell type), `ligand` (`ligand_complex`), `receptor` (`receptor_complex`), `score` (`lr_means` or `magnitude_rank`), `specificity_rank` / `cellphone_pvals` / `pvalue`.
+- **Network Summaries** (`tables/sender_receiver_summary.csv`):
+  - Columns: `source`, `target`, `n_interactions`, `mean_score`.
+- **Verification Invariants**:
+  - Verify `set(lr_df["source"]).issubset(set(adata.obs[cell_type_key].astype(str)))`.
+  - Verify `expr_prop >= 0.1` was enforced so artefactual interactions driven by $1\text{--}2$ outlier cells are excluded.
+
+## 4. Gotchas & Troubleshooting
+
+1. **LIANA `specificity_rank` and `magnitude_rank` Are Aggregate Ranks, Not $p$-Values**:
+   - In `liana.mt.rank_aggregate`, smaller `specificity_rank` and `magnitude_rank` values indicate stronger rank consensus across methods (values near $0$ are best), not frequentist $p$-values. For individual permutation $p$-values, inspect `cellphone_pvals` in `adata.uns["liana_res"]`.
+2. **Input Expression Matrix Must Be Log-Normalized (`log1p`), Never `sc.pp.scale`d**:
+   - L-R scoring methods compute geometric/arithmetic means or products of ligand and receptor expression (`expr_prop` checks fraction of cells $> 0$). Passing zero-centered/negative values from `sc.pp.scale` corrupts `expr_prop` and produces negative ligand-receptor products. If `adata.X` was scaled, restore log1p expression from `adata.raw.to_adata()` or `adata.layers["log1p"]`.
+3. **Human vs. Mouse Gene Symbol Casing in L-R Databases**:
+   - `resource_name="consensus"` expects uppercase HGNC human symbols (`TGFB1`, `TGFBR1`), whereas mouse datasets (`Tgfb1`, `Tgfbr1`) require `resource_name="mouseconsensus"`. Mismatched casing yields zero matched interactions.
+4. **Small Cell-Type Clusters Inflate Permutation Variance**:
+   - Clusters with $< 10$ cells produce unstable cluster means and noisy permutation distributions in `CellPhoneDB` and `CellChat`. Always set `min_cells=10` (or filter rare clusters) prior to L-R inference.
 
 ## Dependencies
 
 Python packages this skill's script needs. They are not installed for you — check before a long run.
 
 `anndata`, `cellphonedb`, `liana`, `matplotlib`, `numpy`, `pandas`, `scanpy`, `scipy`, `seaborn`
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `communicate(adata, *, method: str='builtin', cell_type_key: str='cell_type', species: str='human', cellphonedb_counts_data: str='hgnc_symbol', cellphonedb_iterations: int=1000, cellphonedb_threshold: float=0.1, cellphonedb_threads: int=4, cellphonedb_pvalue: float=0.05, cellchat_prob_type: str='triMean', cellchat_min_cells: int=10, condition_key: str | None=None, condition_oi: str | None=None, condition_ref: str | None=None, receiver: str | None=None, senders: list[str] | None=None, nichenet_top_ligands: int=20, nichenet_expression_pct: float=0.1, nichenet_lfc_cutoff: float=0.25, liana_random_state: int=1337, cellphonedb_random_state: int=0) -> pd.DataFrame`
-
-Return ranked ligand-receptor interactions without changing the input.
-
-builtin multiplies grouped ligand and receptor means and supplies no
-p-values. LIANA retains specificity_rank as a rank, not a significance
-statistic, and ignores species as in the existing wrapper. CellPhoneDB
-uses debug_seed=0 by default; its database may download on first use.
-R methods use temporary H5AD exchange files. NicheNet needs its two
-local resource files. Optional backend imports occur only when selected.
-Backend-specific tables and diagnostics are accessible through helpers.
-
-### `builtin_lr(adata, *, cell_type_key: str='cell_type', species: str='human') -> pd.DataFrame`
-
-Return the curated mean-product heuristic; pvalue is always NaN.
-
-### `liana_lr(adata, *, cell_type_key: str='cell_type', species: str='human', random_state: int=1337) -> pd.DataFrame`
-
-Return LIANA consensus scores and specificity ranks; neither is a p-value.
-
-### `cellphonedb_lr(adata, *, cell_type_key: str='cell_type', species: str='human', counts_data: str='hgnc_symbol', iterations: int=1000, threshold: float=0.1, threads: int=4, pvalue: float=0.05, random_state: int=0) -> pd.DataFrame`
-
-Run CellPhoneDB permutations with an explicit debug_seed; database may download.
-
-### `cellchat_lr(adata, *, cell_type_key: str='cell_type', species: str='human', prob_type: str='triMean', min_cells: int=10) -> pd.DataFrame`
-
-Run CellChat in R on normalized X; require the existing R dependency stack.
-
-### `nichenet_ligands(adata, *, cell_type_key: str='cell_type', species: str='human', condition_key: str, condition_oi: str, condition_ref: str, receiver: str, senders: list[str], top_ligands: int=20, expression_pct: float=0.1, lfc_cutoff: float=0.25) -> pd.DataFrame`
-
-Run NicheNet and return LR scores; backend_tables includes ligand activities.
-
-### `sender_receiver_summary(table: pd.DataFrame) -> pd.DataFrame`
-
-Return mean scores and interaction counts for each sender-receiver pair.
-
-### `group_role_summary(table: pd.DataFrame) -> pd.DataFrame`
-
-Return summed incoming and outgoing interaction scores for each cell type.
-
-### `pathway_summary(table: pd.DataFrame, *, pathways: pd.DataFrame | None=None) -> pd.DataFrame`
-
-Return mean pathway scores, using CellChat pathway results when supplied.
-
-### `top_interactions(table: pd.DataFrame, *, n: int=50) -> pd.DataFrame`
-
-Return the first n interactions in the backend's existing ranked order.
-
-### `backend_tables(table: pd.DataFrame) -> dict[str, pd.DataFrame]`
-
-Return copies of backend-specific tables, including optional R summaries.
-
-### `interaction_heatmap_figure(table: pd.DataFrame)`
-
-Return a sender-by-receiver mean-score heatmap without writing files.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return backend provenance; keep=False removes the table's run record.
-
-<!-- api:end -->

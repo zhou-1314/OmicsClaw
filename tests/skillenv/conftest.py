@@ -7,5 +7,5 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 FIXTURE_SKILLS = FIXTURES / "skills"
-REAL_REGISTRY = REPO / "skills" / "_sdk" / "deps.py"
+REAL_REGISTRY = REPO / "omicsclaw" / "skillenv" / "deps_registry.py"
 

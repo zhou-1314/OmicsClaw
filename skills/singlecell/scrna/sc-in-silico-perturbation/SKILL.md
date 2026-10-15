@@ -12,97 +12,103 @@ tags:
 - sctenifoldknk
 ---
 
-# sc-in-silico-perturbation
+# Single-Cell In-Silico Gene Knockout & Network Perturbation (`sc-in-silico-perturbation`)
 
-Explore descriptive gene associations or run the optional scTenifoldKnk R
-method. The default `grn_ko` name is retained for CLI compatibility; its Pearson
-edge-removal score is not a causal knockout simulation or a significance test.
+## 1. Method Decision Matrix & When to Use
 
-## Method Selection Table
+Use this skill to rank genes whose co-expression or manifold alignment shifts when a target gene (`ko_gene`) is virtually ablated in an unperturbed scRNA-seq dataset via `scTenifoldKnk` (R) or fast GRN correlation edge-removal (`grn_ko`).
 
-| Method | What it returns | Requirement |
-|---|---|---|
-| `grn_ko` | Absolute correlation edge-removal scores; no p-values | Python science stack |
-| `sctenifoldknk` | R scTenifoldKnk differential-regulation table | Rscript + scTenifoldKnk |
+| Analytical Scenario | Recommended Method | Upstream Library / Implementation | Statistical Output & Requirements |
+|---|---|---|---|
+| **Manifold-aligned virtual KO with statistical significance** | **scTenifoldKnk** (`sctenifoldknk`) | R `scTenifoldKnk` (PCNet tensor decomposition + manifold alignment) | `FC`, `Z`, `p.value`, `p.adj` (requires `Rscript` + `scTenifoldKnk`) |
+| **Fast Python co-expression edge-removal ranking** | **GRN Edge-Removal** (`grn_ko` / `knockout_correlation`) | High-variance gene Pearson network edge ablation (`kernel.py`) | Descriptive `dr_score` and `wt_ko_corr` (no $p$-values; fast Python screen) |
+| **Foundation-model embedding perturbation** | **Geneformer / scGPT In-Silico Perturbation** | `geneformer.InSilicoPerturber` | Cosine shift in transformer cell embeddings upon token deletion |
+| **Real CRISPR / Perturb-seq screen analysis** | **Mixscape / E-Distance** | `pertpy.tl.Mixscape` (use `sc-perturb`) | Requires experimental sgRNA guide assignments |
 
-## Key CLI
+> **Decision Rule**: Use `sc-in-silico-perturbation` only for hypothesis generation on unperturbed baseline data. When experimental CRISPR / Perturb-seq data exist, use `sc-perturb` instead. Never fabricate $p$-values from descriptive `grn_ko` correlation edge-removal scores.
 
-```bash
-python skills/singlecell/scrna/sc-in-silico-perturbation/sc_in_silico_perturbation.py --demo --output /tmp/sc_iko_demo
-python skills/singlecell/scrna/sc-in-silico-perturbation/sc_in_silico_perturbation.py --input expression.h5ad --ko-gene TP53 --n-top-genes 2000 --output results/associations
-python skills/singlecell/scrna/sc-in-silico-perturbation/sc_in_silico_perturbation.py --input expression.h5ad --method sctenifoldknk --ko-gene TP53 --seed 0 --n-cores 1 --output results/tenifold
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Python Co-Expression Edge-Removal Screen (`grn_ko`)
+
+```python
+import numpy as np
+import pandas as pd
+from scipy import sparse
+
+ko_gene = "STAT1"
+if ko_gene not in adata.var_names:
+    raise ValueError(f"Target ko_gene '{ko_gene}' not found in adata.var_names.")
+
+# 1. Select top 2000 high-variance genes + ensure ko_gene is included
+mat = adata.layers["counts"] if "counts" in adata.layers else adata.X
+dense = mat.toarray().astype(float) if sparse.issparse(mat) else np.asarray(mat, dtype=float)
+variances = np.var(dense, axis=0)
+top_idx = list(np.argsort(variances)[::-1][:2000])
+ko_full_idx = int(adata.var_names.get_loc(ko_gene))
+if ko_full_idx not in top_idx:
+    top_idx[-1] = ko_full_idx
+
+sub_genes = adata.var_names[top_idx].astype(str)
+sub_mat = dense[:, top_idx]
+
+# 2. Compute WT Pearson correlation matrix and ablate ko_gene row/column
+wt_net = np.nan_to_num(np.corrcoef(sub_mat, rowvar=False), nan=0.0)
+np.fill_diagonal(wt_net, 0.0)
+ko_net = wt_net.copy()
+ko_pos = int(np.where(sub_genes == ko_gene)[0][0])
+ko_net[ko_pos, :] = 0.0
+ko_net[:, ko_pos] = 0.0
+
+# 3. Rank genes by mean absolute edge change (dr_score)
+dr_score = np.abs(wt_net - ko_net).mean(axis=1)
+wt_ko_corr = wt_net[:, ko_pos]
+diff_df = pd.DataFrame({"gene": sub_genes, "dr_score": dr_score, "wt_ko_corr": wt_ko_corr}).sort_values("dr_score", ascending=False)
 ```
 
-`--corr-threshold` is an inactive legacy argument; it never thresholded the
-correlation matrix. The API intentionally does not expose it.
+### Pattern B: R `scTenifoldKnk` Virtual Knockout (`Rscript`)
 
-## Workflow
+```r
+library(scTenifoldKnk)
+# countMatrix: genes x cells raw integer count matrix
+res <- scTenifoldKnk(
+  countMatrix = count_mat,
+  gKO = "STAT1",
+  qc = FALSE,
+  nc_nNet = 10,
+  nc_nCells = 500,
+  nc_nComp = 3
+)
+write.csv(res$diffRegulation, "tables/tenifold_diff_regulation.csv", row.names = FALSE)
+```
 
-Preflight checks the target gene. `grn_ko` selects high-variance genes plus the
-target, computes Pearson correlations, zeros the target row/column and averages
-absolute changes by gene. The target's own score summarizes all its removed
-edges; other genes lose one edge. R uses the existing temporary CSV bridge and
-sets `set.seed` before fitting. No backend is silently substituted.
+### Optional Micro-Helper (`kernel.py`)
 
-## Matrix Contract
+Calling `use_skill("sc-in-silico-perturbation")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `knockout_correlation(adata, ko_gene, n_top_genes=2000)`
+- `top_perturbed_genes(table, n_top=15)`
 
-Reads raw_counts from `layers['counts']` when present, otherwise X. Inputs are
-unchanged by the API; returned table metadata records the chosen source.
-CLI `processed.h5ad` carries `omicsclaw_input_contract` and
-`omicsclaw_matrix_contract`. Use `sc-perturb` for an actual perturbation screen.
+## 3. Output Format & Verification Contract
 
-## Inputs & Outputs
+- **Primary Perturbation Ranking Table** (`tables/diff_regulation.csv`):
+  - For `grn_ko`: `gene`, `dr_score`, `wt_ko_corr` (sorted descending by `dr_score`).
+  - For `sctenifoldknk` (`tables/tenifold_diff_regulation.csv`): `gene`, `distance`, `Z`, `FC`, `p.value`, `p.adj`.
+- **Annotated AnnData** (`intermediate/perturbed.h5ad` or `processed.h5ad`):
+  - `adata.var["perturbation_dr_score"]`: per-gene perturbation score aligned to `adata.var_names`.
+- **Verification Invariants**:
+  - Assert `ko_gene in table["gene"].values` and `table["dr_score"].ge(0).all()`.
+  - Verify `ko_gene` itself has the largest edge-removal sum (since all of its edges are zeroed simultaneously).
 
-Input: expression `.h5ad` with `--ko-gene` in `var_names`.
-The CLI writes `processed.h5ad`, `tables/diff_regulation.csv`, `report.md`,
-`result.json`, `figures/top_perturbed_genes.png`, and figure/plot-data manifests.
-The default table has `gene`, `dr_score`, `wt_ko_corr`; only `perturbation_dr_score`
-is added to `var`. R additionally writes `tables/tenifold_diff_regulation.csv`
-and may produce a p-value histogram and statistical `var` columns. R-enhanced
-volcano plots require R statistical output; they are not made for correlation scores.
+## 4. Gotchas & Troubleshooting
 
-## Gotchas
-
-- `tables/diff_regulation.csv` no longer contains fabricated `p_value`, `p.adj`, `z_score` or an `FC` alias for the default method. Scores are sorted descending; they do not measure treatment effects.
-- `result.json` → `summary.n_significant` exists only for R results with adjusted p-values. No significant-gene count is inferred from correlation scores.
-- `--ko-gene G10` is a synthetic-demo default; the API raises when the chosen gene is absent.
-- `tables/tenifold_diff_regulation.csv` is produced only if scTenifoldKnk succeeds. The R package is not installed by this skill.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `knockout_correlation(adata, *, ko_gene, n_top_genes=2000)`
-
-Return descriptive edge-removal scores, not a causal knockout simulation.
-
-Select the most variable genes plus ko_gene, compute Pearson correlations
-from layers['counts'] (or X), and average absolute changes after zeroing the
-target row and column. Returns gene, dr_score and wt_ko_corr, with no p-values.
-The target's own score includes all its removed edges and is not comparable
-to another gene's single removed edge. The input AnnData is unchanged.
-
-### `sctenifoldknk(adata, *, ko_gene, qc=False, qc_min_lib_size=0, qc_min_cells=10, n_net=2, n_cells=100, n_comp=3, q=0.8, td_k=2, ma_dim=2, n_cores=1, random_state=0)`
-
-Return scTenifoldKnk diffRegulation through a temporary CSV bridge.
-
-Uses layers['counts'] or X without changing the input. Requires Rscript and
-the scTenifoldKnk R package; missing packages and R failures propagate.
-random_state is passed to R set.seed before fitting the network.
-
-### `run_info(table, *, keep: bool=True)`
-
-Return method and interpretation; keep=False removes the table's run record.
-
-### `top_perturbed_genes(table, *, n_top=15)`
-
-Return top correlation scores, or lowest adjusted p-values for scTenifoldKnk.
-
-### `perturbed_genes_figure(table, *, n_top=15)`
-
-Return a Figure of descriptive edge scores or R differential-regulation FC.
-
-<!-- api:end -->
+1. **Target Gene Self-Score Asymmetry in `grn_ko`**:
+   - When zeroing both the row and column of `ko_gene`, the target gene loses all $N-1$ of its edges, whereas every other gene $g \neq \text{ko\_gene}$ loses only a single edge ($|r_{g,\text{ko}}| / N$). Do not compare the target gene's own `dr_score` magnitude directly to downstream genes.
+2. **Descriptive `dr_score` Has No $p$-Value**:
+   - The Python `grn_ko` method is a deterministic correlation edge-removal ranking and does not emit `p_value`, `p.adj`, or `z_score`. Use `sctenifoldknk` when chi-squared manifold-alignment $p$-values are required.
+3. **Target Gene Filtered Out by HVG Selection**:
+   - Transcription factors are often expressed at low-to-moderate levels and may fall outside the top 2,000 HVGs. Always explicitly force `ko_gene` into the selected gene subset before building the network.
+4. **Sparsity & Zero-Variance Genes**:
+   - Genes expressed in zero or one cell produce `0 / 0` (`NaN`) in `np.corrcoef`. Always sanitize correlation matrices with `np.nan_to_num(..., nan=0.0)` before computing edge differences.
 
 ## Dependencies
 

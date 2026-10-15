@@ -15,6 +15,5 @@
 tests/entry/test_assembly.py::test_this_layer_reads_no_provider_attribute_the_protocol_omits | cli/_configure.py:482 reads .upper on a provider attribute the protocol does not publish
 tests/entry/test_session.py::test_a_second_compaction_extends_the_first_instead_of_restarting | the second compaction's summarizer is never called
 tests/entry/test_turn.py::test_the_system_message_survives_a_successful_summarization | compaction lands on EMERGENCY where the test expects FULL
-tests/sdk/test_banksy_fallback.py::test_missing_banksy_and_missing_sub_env_raise_env_not_found | needs scanpy, which the CI job does not install | env
 tests/skillenv/test_overlay_real.py::test_the_overlay_sees_the_base_and_uses_the_base_pip | fails inside a virtualenv built over another environment's pip | env
 tests/test_output_ux.py::test_spatial_genes_help_does_not_require_scanpy_runtime | spatial_genes.py imports scanpy at module level, so --help fails where scanpy is not installed | env

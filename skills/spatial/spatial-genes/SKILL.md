@@ -12,112 +12,102 @@ tags:
 - flashs
 ---
 
-# spatial-genes
+# Spatially Variable Gene (SVG) Discovery (`spatial-genes`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Rank genes whose expression varies across spatial coordinates. Moran's I
-uses continuous log-normalized expression; SpatialDE, SPARK-X and the legacy
-FlashS approximation use counts. Scores have method-specific meanings.
+Use this playbook to rank **spatially variable genes (SVGs)** whose expression exhibits non-random spatial patterns across 2D/3D tissue coordinates, independent of cluster labels. For differential expression between predefined clusters or conditions, use `spatial-de` or `spatial-condition`.
 
-## Use from a step
+| Method (`method=`) | Upstream Package | Statistical Test & Metric | Input Expression Layer | Best Used When |
+|---|---|---|---|---|
+| **Moran's $I$** (`morans`) | `squidpy.gr.spatial_autocorr(mode="moran")` | Global spatial autocorrelation $I \in [-1, 1]$ + analytical/permutation FDR | Log-normalized `adata.X` | Default fast, scalable SVG discovery across thousands of spots/cells |
+| **Geary's $C$** (`gearys`) | `squidpy.gr.spatial_autocorr(mode="geary")` | Local squared-difference autocorrelation $C \in [0, 2]$ ($C < 1$ positive clustering) | Log-normalized `adata.X` | Detecting sharp local boundary gradients and focal hot-spots |
+| **SpatialDE** (`spatialde`) | `SpatialDE` + `NaiveDE` | Gaussian Process decomposition of spatial vs. non-spatial variance (`FSV`, `LLR`) | Raw counts (`adata.layers["counts"]`) stabilized via `NaiveDE` | Estimating characteristic spatial length scales ($l$) and automatic expression histology (AEH) |
+| **SPARK-X** (`sparkx`) | R `SPARK` (`sparkx`) | Non-parametric covariance kernel trace test | Raw integer counts + coordinates | Ultra-large spatial datasets ($>50,000$ spots/cells; Slide-seq, Stereo-seq, HD) |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Moran's $I$ Spatial Autocorrelation (`squidpy`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("spatial-genes")
-adata = read_input("processed.h5ad")
-library.spatial_genes(adata, random_state=0)
-write_output(library.results(adata), "tables/svg_results.csv")
+import scanpy as sc
+import squidpy as sq
+
+# 1. Build spatial neighbor graph from adata.obsm["spatial"]
+# Use coord_type="grid", n_neighs=6 for Visium; coord_type="generic", delaunay=True for single-cell spatial
+sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
+
+# 2. Restrict candidate genes to expressed / highly variable genes to avoid zero-variance NaNs
+candidate_genes = (
+    adata.var_names[adata.var["highly_variable"]].tolist()
+    if "highly_variable" in adata.var
+    else adata.var_names.tolist()
+)
+
+# 3. Compute Moran's I and BH-adjusted p-values
+sq.gr.spatial_autocorr(
+    adata,
+    mode="moran",
+    genes=candidate_genes,
+    n_perms=100,
+    n_jobs=1,
+)
+svg_df = adata.uns["moranI"].reset_index().rename(columns={"index": "gene"})
+sig_svgs = svg_df[svg_df["pval_norm_fdr_bh"] < 0.05].sort_values("I", ascending=False)
 ```
 
-The executable example checks spatial autocorrelation in simulated stripes.
+### Pattern B: Gaussian Process SVG Discovery (`SpatialDE` + `NaiveDE`)
 
-## API
+```python
+import numpy as np
+import pandas as pd
+import NaiveDE
+import SpatialDE
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+# Extract raw integer counts for genes expressed in >= 10 spots
+raw_mat = adata.layers["counts"] if "counts" in adata.layers else adata.X
+dense_counts = pd.DataFrame(
+    raw_mat.toarray() if hasattr(raw_mat, "toarray") else np.asarray(raw_mat),
+    index=adata.obs_names,
+    columns=adata.var_names,
+)
+dense_counts = dense_counts.loc[:, (dense_counts > 0).sum(axis=0) >= 10]
 
-### `spatial_genes(adata, *, method='morans', n_top_genes=20, fdr_threshold=0.05, random_state=None, **parameters)`
+sample_info = pd.DataFrame(adata.obsm["spatial"][:, :2], index=adata.obs_names, columns=["x", "y"])
+sample_info["total_counts"] = dense_counts.sum(axis=1).clip(lower=1)
 
-Compute spatial gene scores and return the same AnnData.
+# Anscombe variance stabilization and library-size regression
+norm_expr = NaiveDE.stabilize(dense_counts.T).T
+resid_expr = NaiveDE.regress_out(sample_info, norm_expr.T, "np.log(total_counts)").T
 
-Moran's I reads X; count-based methods prefer counts, then raw, then X.
-SpatialDE AEH does not expose a seed: results vary between runs.
-
-:param adata: Expression and spatial coordinates; modified in place.
-:param method: CLI default morans; spatialde, sparkx or flashs also supported.
-:param n_top_genes: CLI default 20 reported significant genes.
-:param fdr_threshold: CLI default 0.05 significance threshold.
-:param random_state: None uses CLI seeds, 0 for Moran's I and 42 for FlashS.
-:param parameters: Method-specific CLI parameters in references/parameters.md.
-:returns: The same AnnData with spatial_genes_results in uns.
-:raises ValueError: Method, thresholds or spatial coordinates are invalid.
-:raises ImportError: A backend is missing; use install_skill_deps.
-
-### `results(adata, *, significant_only=False)`
-
-Return native spatial-gene scores and significance columns.
-
-:param adata: AnnData returned by spatial_genes.
-:param significant_only: Default False; True selects the run's FDR threshold.
-:returns: A new DataFrame; score meaning depends on the method.
-:raises ValueError: No run is recorded.
-
-### `run_info(adata, *, keep=True)`
-
-Read the most recent spatial-gene diagnostics.
-
-:param adata: AnnData returned by spatial_genes.
-:param keep: Default True; False removes transient diagnostics for CLI output.
-:returns: Method, thresholds and significant-gene counts.
-:raises ValueError: No run is recorded.
-
-### `ranking_figure(adata, *, n_top=20)`
-
-Plot the highest-scoring genes without writing files.
-
-:param adata: AnnData returned by spatial_genes.
-:param n_top: Default 20 genes, matching the CLI report size.
-:returns: A matplotlib Figure.
-:raises ValueError: No run is recorded or n_top is not positive.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Moran's I defaults to six neighbors and 100 permutations. The default seed is
-0 for Moran's I and 42 for FlashS, matching their CLIs. SpatialDE's optional
-AEH clustering has no seed interface and may vary between runs. SPARK-X
-requires R and SPARK. See [parameters](references/parameters.md) for backend
-keywords and [methodology](references/methodology.md) for algorithms.
-
-## Gotchas
-
-- `spatial_genes` stores every method's table in `uns['spatial_genes_results']`;
-  Moran's I also writes `uns['moranI']`.
-- `results` returns native scores, not a common calibrated statistic.
-- Count methods prefer `layers['counts']`, then raw, then X with a warning;
-  preserve original counts before normalization.
-- `run_info()['significance_column']` names the method's p-value/q-value column.
-- `spatial_genes(method='spatialde')` needs both SpatialDE and NaiveDE.
-
-## Inputs and outputs
-
-Functions modify AnnData in place and return tables/Figures without file
-output. The CLI writes `processed.h5ad`, `tables/svg_results.csv`, diagnostics,
-report and result JSON. The [output contract](references/output_contract.md)
-distinguishes temporary R exchange files from delivered artifacts.
-
-## CLI
-
-```bash
-python skills/spatial/spatial-genes/spatial_genes.py --input processed.h5ad --output results/genes
-python skills/spatial/spatial-genes/spatial_genes.py --demo --output /tmp/spatial-genes_demo
+results = SpatialDE.run(sample_info[["x", "y"]], resid_expr)
+svg_df = results.sort_values("qval", ascending=True).rename(columns={"g": "gene"})
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-Use spatial-preprocess to prepare expression, spatial-de to compare groups,
-and spatial-statistics for spatial relationships between labels.
+Calling `use_skill("spatial-genes")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `morans_svg(adata, genes=None, n_perms=100, coord_type="generic", n_neighs=6, library_key=None)`
+- `svg_summary(df, fdr=0.05, fdr_col="pval_norm_fdr_bh")`
+
+## 3. Output Format & Verification Contract
+
+- **SVG Ranking Table** (`tables/svg_results.csv`):
+  - For Moran's $I$: `gene`, `I`, `pval_norm`, `pval_norm_fdr_bh` (and `pval_sim_fdr_bh` when `n_perms > 0`).
+  - For SpatialDE: `gene` (`g`), `FSV` (fraction of spatial variance), `l` (length scale), `LLR`, `pval`, `qval`.
+- **Verification**:
+  - Confirm `I` values lie in $[-1, 1]$ with zero `NaN` rows among top-ranked genes, and visually confirm spatial gradients via `sq.pl.spatial_scatter(adata, color=top_genes[:4])`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Zero-Variance Genes Produce `NaN` in `sq.gr.spatial_autocorr`**:
+   - Genes with 0 counts across all filtered spots have zero variance, yielding `I = NaN`. Always run `sc.pp.filter_genes(adata, min_cells=10)` or pass `genes=candidate_genes` before computing Moran's $I$.
+2. **`SpatialDE` Quadratic Complexity ($O(N^3)$ GP Cholesky)**:
+   - `SpatialDE` scales cubically in the number of spatial locations $N$ and linearly in genes. For slides with $>5,000$ spots/cells, use `squidpy` Moran's $I$ or `SPARK-X` instead of `SpatialDE`.
+3. **Multi-Slide Datasets Require `library_key` in `sq.gr.spatial_neighbors`**:
+   - If `adata` contains multiple tissue sections, pass `library_key="slide_id"` when building `spatial_neighbors` so autocorrelation is computed strictly within each tissue section's graph.
+4. **Native Score Directionality Across Methods**:
+   - Higher Moran's $I$ ($I \to 1$) and higher SpatialDE `LLR` indicate stronger spatial clustering, whereas **lower** Geary's $C$ ($C \to 0$) indicates stronger positive spatial autocorrelation.
 
 ## Dependencies
 

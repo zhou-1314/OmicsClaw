@@ -99,12 +99,11 @@ OmicsClaw 把"记住"拆成两件性质完全不同的事，它们共用一个 S
 
 ### 2.1 关于 `entry/memory.py` 的接线状态
 
-`docs/FRAMEWORK-REBUILD.md` 开头的警告提到，step 6.9 评估期间工作区里有一个"未跟踪、半接线"的 `omicsclaw/entry/memory.py`，与 `entry/compaction.py` 有真实的循环 import。那是当时的快照。**当前状态**（以代码为准）：
+`docs/FRAMEWORK-REBUILD.md` 的重建记录曾提到，step 6.9 评估期间工作区里有一个"未跟踪、半接线"的 `omicsclaw/entry/memory.py`，与 `entry/compaction.py` 有真实的循环 import。那是当时的快照。**当前状态**（以代码为准）：
 
 - 该文件已随 `c23ec181` 提交进仓库，接线工作由 plan 0040 完成；
 - `entry/compaction.py` 顶层 `from .memory import build_memory_extractor`，而 `entry/memory.py` 只 import `omicsclaw.context`、`omicsclaw.memory`、`omicsclaw.tools` 与 `.config`，不再反向 import `compaction`；
 - 六个接入点（开库、提取器、prompt 段、两个工具、会话存储、启动维护）全部在 `build_app` / `open_app` / `build_compactor` / `attach_sessions` 中真实调用，`tests/entry/test_memory_wiring.py` 覆盖每一个；
-- `tests/memory tests/planning tests/entry/test_memory_wiring.py tests/entry/test_planning.py` 本地运行结果为 381 passed, 5 skipped。
 
 ---
 

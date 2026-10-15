@@ -17,69 +17,12 @@ existing session-history behavior: their partial conversation is discarded,
 and completed tool side effects are not rolled back. Automatic resume of
 partial exchanges is not implemented by this change.
 
-The built-in `module-reviewer` accepts `task`'s optional `review_module`
-argument (`NN_slug`). The framework compares the replay, step files, README,
-REPORT and review brief before and after the review, then writes the reply
-as UTF-8 without rewriting it. `results/<NN_slug>/reviews/task-review-*.json`
-records these hashes beside the Markdown reply. `accept --review` verifies
-the receipt for this reserved filename prefix; replay archives both files.
-Legacy calls without `review_module` return text only, and manually written
-human reviews keep their existing acceptance rules. Receipts detect stale
-files and accidental edits; they are not signed and do not protect against
-a workspace writer replacing the review and receipt together. They do not
-rehash every scientific output; the runner's existing replay and validation
-checks still apply.
+The former SDK step runner and its module acceptance records have been
+retired. Their test reports and aggregate results have been removed.
 
-Verification on the reliability branch, against baseline `57ad6d83`:
-
-- The CI unit-job directories and marker filter: 7,024 passed, 26 skipped,
-  98 deselected, 3 known xfails and 3 environment-dependent xpasses, 397.56 s.
-- After the buffered-stream fix and shared cleanup extraction: provider,
-  engine, subagent and both new application-level suites, 846 passed and
-  2 skipped, 9.10 s. The three agreed public entry tests plus the two CI
-  fixture suites passed 88 tests under Python 3.11, 10.39 s.
-- Independent Spec review: no findings, including a separate `TERM=dumb`
-  run of all three public entry suites (52 passed). Independent Standards
-  review: one P3 duplicated-cleanup finding, fixed by sharing the provider
-  helper and then independently rechecked; no remaining findings.
-
-One exploratory notebook run accidentally included scientific examples in
-the framework environment. It was stopped after six missing-backend failures
-(including igraph and scrublet), 315 passes and 2 skips. The corrected
-non-scientific selection passed 346 tests with 1 skip and 31 deselected.
-No backend was installed to hide those environment gaps. Live-model and
-real-container checks were not rerun; this checkout has no Docker or Podman.
-This branch has not been pushed as part of these checks.
-
-The following dated rebuild account is historical.
-
-**Last updated: 2026-09-20. Steps 1 through 7 are complete; step 6.11
-(`omicsclaw/observability/`, plan 0043) is the most recent addition — the
-span tree, the six instruments and an optional OpenTelemetry exporter,
-built without adding a seam to the engine. `tests/observability/` = 244
-passed, plus 16 on the wiring. Before it, step 6.10
-(`omicsclaw/hooks/`, plan 0042) shipped the
-tool-call interception seam, plus the audit hook that plan 0031 Q13
-deferred. Measured after that step: `schema provider engine tools context skills
-entry mcp memory permission planning launch sandbox hooks` = **4,068
-passed, 9 skipped**. Before it, step 6.9
-(`omicsclaw/planning/`, plan 0039) had landed — the
-execution plan the agent keeps outside the conversation and is shown again
-before every model call, so a long task survives its own compaction. The
-engine gained one optional seam for it (`TurnAugmentor`), consulted after
-the compactor and able only to append to the call being made. That step's
-own measurement (`schema provider engine tools context skills entry mcp
-memory permission planning launch`) was **3,679 passed, 7 skipped**.
-**The migration has run** (2026-09-20) and the rebuilt stack is the only
-one: eleven packages removed across four commits, `c23ec181..6a1533f8`.
-See "The migration" below for what went, what was kept and why.**
-
-> ⚠️ **Several sessions write this tree at once.** Step 6.9's parity
-> evaluation reported six regressions that did not exist; both evaluations
-> independently traced them to an unrelated, half-wired
-> `omicsclaw/entry/memory.py` another session had left untracked, with a
-> real circular import that makes test collection order-dependent. Before
-> reading a red suite as evidence about your own change, isolate it.
+The dated rebuild account below preserves design decisions. It does not
+establish a test baseline for the current checkout. Verify the current
+code with the applicable test selection in `SPEC.md`.
 
 ## Why this rebuild exists
 
@@ -270,8 +213,7 @@ repair in usage accounting, system-prompt joining, persisted
 ### Step 3 — `omicsclaw/engine/` (plan 0027)
 
 ~1,500 lines across 6 modules, the ReAct loop that moves step 1's types
-using step 2's adapters. `tests/schema/ tests/provider/ tests/engine/` =
-**635 passed**.
+using step 2's adapters.
 
 ```python
 from omicsclaw.engine import AgentEngine, EngineConfig
@@ -331,10 +273,8 @@ gate is not ceremony. Plan 0027 appendix B records the outcome, including
 
 ### Step 4 — `omicsclaw/tools/` (plan 0028)
 
-10 modules including three reference tools, `tests/tools/` = **315
-passed**; all four directories = **950 passed**, with steps 1–3's 635
-untouched. Purely additive: the legacy tool layer was not moved and not
-edited.
+10 modules including three reference tools. The legacy tool layer was
+left in place during this step.
 
 > **The three reference tools were removed on 2026-09-18** (owner), once
 > step 4.5's `read_file` / `write_file` / `bash` carried every property
@@ -415,8 +355,7 @@ carrying forward:
 
 ### Step 4.5 — `omicsclaw/tools/builtin/` (plan 0029)
 
-Six tools on two boundaries, `tests/tools/` = **715 passed**. Purely
-additive; nothing is wired to production.
+Six tools on two boundaries, initially introduced without production wiring.
 
 ```
 read_file  write_file  edit_file  bash          ← _workspace.py + _pathlock.py
@@ -579,7 +518,7 @@ survived that check; five of the interpretive claims did not.
 
 ### Step 5.6 — `omicsclaw/skills/` (plan 0032)
 
-Six modules, `tests/skills/` = **416 passed**. The assembly layer
+Six modules. The assembly layer
 shipped a *slot* for a skills section and said outright that the
 renderer lives outside it (plan 0030 §5.1); this is that renderer, and
 step 6 below now fills the slot with it.
@@ -660,10 +599,7 @@ prompt.
 
 The top layer: the composition root, the prompt, sessions, the turn, the
 typed event stream, approval — plus the three surface facades that
-consume them. **17,899 lines**, delivered in two waves. Measured
-2026-09-20: `tests/entry/` = **620 passed, 1 skipped** (the skip is the
-HTTP smoke, which needs `fastapi`), and the rest of the rebuilt stack
-(`schema provider engine tools context skills`) = **2,089 passed**.
+consume them. **17,899 lines**, delivered in two waves.
 
 The one pre-existing file this step touched is
 `omicsclaw/tools/__init__.py`, which gained a single
@@ -673,8 +609,7 @@ red; the reason and the remedy are in that plan's Q15.
 
 #### First wave — the Composer reaching the loop
 
-`tests/entry/` was **196 passed** at this point. Two things landed here
-beyond the wiring the entry layer already had.
+Two things landed here beyond the wiring the entry layer already had.
 
 **The three-tier prompt is complete.** `default_sections` had five
 sections — persona (`SOUL.md`), project contract (`CLAUDE.md`), safety,
@@ -1019,15 +954,6 @@ above — plus three medium and five low; plan 0035 §9 has the table and
 what was done with each. The implementer made the repairs, as in plan
 0034.
 
-**Verification.** The rebuilt stack (`tests/schema provider engine tools
-context skills entry mcp memory`) = **2,996 passed**, 106 of them new,
-run on a frozen copy of the tree because another session was mutating
-`entry/` at the same time; `tests/tools/test_workspace.py` is excluded for
-a pre-existing collection error (it loads a deleted legacy module). Fifteen mutations — ten on the gates, five on the repairs — each kill a
-named test. Two survived the first round, both holes in the tests: a
-failed `/compact` test whose budget was too loose for the fallback to
-remove anything, and no case where a *successful* summary grew the
-conversation.
 
 Not done, and named: there is no session-delete entry point for the `purge`
 methods; the CLI REPL has no `/compact`. The LTM extractor seam was the
@@ -1287,9 +1213,7 @@ calls inline, handing several Tasks one shared `Context`) unnamed.
 
 ### Step 6.9 — `omicsclaw/planning/` (plan 0039)
 
-Eight modules, `tests/planning/` = **181 passed**, plus 13 in
-`tests/engine/` and 23 in `tests/entry/`. The whole rebuilt stack =
-**3,679 passed**. The layer structure comes from harness9's
+Eight modules. The layer structure comes from harness9's
 `internal/planning/` + `internal/tools/plan_write.go` + the planning
 parts of `internal/engine/loop_phases.go` + `internal/hooks/plan_writer.go`.
 
@@ -1392,8 +1316,7 @@ and one was **rejected on evidence**:
   uses, had nothing. A feature verified only on the library path is a
   feature verified on the path nobody runs.
 - **Rejected: "planning on by default broke 6 pre-existing tests."** Not
-  reproducible — `tests/entry tests/engine tests/planning` = 1,116
-  passed, 0 failed, including every test named. Both evaluations
+  reproducible. Both evaluations
   independently traced the real cause to an untracked, half-wired
   `omicsclaw/entry/memory.py` left in the working tree by a concurrent
   session, with a genuine circular import against `entry/compaction.py`
@@ -1415,8 +1338,7 @@ around it is right.**
 
 ### Step 6.11 — `omicsclaw/observability/` (plan 0043)
 
-Eleven modules, `tests/observability/` = **257 passed**, plus 17 in
-`tests/entry/test_telemetry_wiring.py`. Two independent read-only
+Eleven modules. Two independent read-only
 evaluations gated the step; both found real defects and **neither found
 what the other did**, which is the mechanism working.
 
@@ -1515,9 +1437,7 @@ answers to "did that call fail, or was it refused?".
 
 ### Step 6.10 — `omicsclaw/hooks/` (plan 0042)
 
-Four modules, `tests/hooks/` = **117 passed**, plus 18 in
-`tests/entry/test_hook_wiring.py`. Whole rebuilt stack = **4,068 passed,
-9 skipped**, zero failures.
+Four modules, with composition-root wiring in `entry/`.
 
 **The scope was decided by an inventory, not by the reference.**
 harness9's `internal/hooks` bundles one mechanism with four policies, and
@@ -1594,9 +1514,7 @@ by a hook in this deployment's own code.
 
 ### Step 6.8 — `omicsclaw/permission/` (plan 0038)
 
-Five modules, `tests/permission/` = **262 passed**, plus 30 in
-`tests/entry/`. All rebuild layers together = **3,301 passed**, against a
-3,021 baseline taken before the step. The layer structure comes from
+Five modules. The layer structure comes from
 harness9's `internal/permission/` + `internal/hooks/` +
 `internal/engine/permission.go`.
 
@@ -1691,12 +1609,9 @@ non-adopted findings and why.
 
 ### Step 6.12 — `omicsclaw/subagent/` (plan 0046)
 
-Seven modules plus `entry/subagent.py`. `tests/subagent/` = **123
-passed, 2 skipped**, `tests/entry/test_subagent_wiring.py` = **44
-passed**, both re-measured 2026-09-23 after the fixes that withheld
-`memory_write` and made a turn ceiling an error; the whole rebuilt
-stack was **4,982 passed, 12 skipped** when the step landed on
-2026-09-21. The shape comes from harness9's `internal/subagent/`.
+Seven modules plus `entry/subagent.py`. Later fixes withheld
+`memory_write` and made a turn ceiling an error. The shape comes from
+harness9's `internal/subagent/`.
 
 ```python
 from omicsclaw.subagent import SubAgentRegistry, TaskTool
@@ -1887,7 +1802,6 @@ DeepSeek half of `patches.py`, then collapse the two packages.
 ```bash
 /opt/conda/envs/rapids_singlecell/bin/python -m pytest tests/schema/ tests/provider/ \
     -p no:cacheprovider -q -o addopts=""
-# 396 passed
 ```
 
 - **No network, and neither vendor SDK is installed.** No test may need
@@ -1912,7 +1826,7 @@ DeepSeek half of `patches.py`, then collapse the two packages.
   passed.
 - **The coordinator does not take a self-report at face value.** Run the
   tests yourself after every delivery and re-check the report's
-  falsifiable claims. Step 6 caught a report of "549 passed, 0 failed"
+  falsifiable claims. Step 6 caught an inaccurate passing report
   while the tree actually had a red test belonging to the very lane that
   filed the report.
 - **Never write an acceptance criterion as "this must hang".**
@@ -1962,8 +1876,7 @@ reflected in ADR 0077.
 ## The migration
 
 Ran 2026-09-20, `c23ec181..6a1533f8`, four commits plus a README entry.
-Each was gated on the rebuilt stack's own suite — **4,412 passed, 10
-skipped** — and each is reviewable on its own.
+Each commit can be reviewed on its own.
 
 **Removed because a successor shipped**: `skill/`, `providers/`,
 `control/`, `services/`, `autonomous/`, `execution/`, `loaders/`, plus the

@@ -11,92 +11,95 @@ tags:
 - read-quality
 ---
 
-# sc-fastq-qc
+# Single-Cell Raw FASTQ Read Quality Control (`sc-fastq-qc`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
 
-This is CLI_ONLY: it reads FASTQ files and optionally starts FastQC/MultiQC.
+Run read-level quality assessment on raw single-cell sequencing FASTQ files (`R1` barcode/UMI + `R2` cDNA transcript) **before** launching compute-intensive alignment (`sc-count`).
+
+| Inspection Layer | Tool / Library | Metrics Computed | Typical Target Threshold | Best Used When |
+|---|---|---|---|---|
+| **Fast Prefix / Stream Profiling** | Python `gzip` + `numpy` (`kernel.py`) | Per-position Phred quartiles (`mean`, `Q25`, `median`, `Q75`), `%Q30`, `%GC`, read length distribution | `R1` (CB+UMI) `%Q30 > 90%`; `R2` (cDNA) `%Q30 > 75%` | Instant pre-flight check on sampled reads (`max_reads=20000..100000`) without external Java/CLI dependencies |
+| **Full-File Per-Read Diagnostics** | `fastqc` + `multiqc` (CLI) | Adapter contamination, overrepresented sequences, per-tile quality, duplication levels | `< 5%` adapter read-through (`PolyA` / Illumina TruSeq) | Comprehensive full-depth sequencing lane validation across multi-sample cohorts |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Paired R1/R2 Read Structure & Phred Quality Profiling in Python
 
 ```python
-from skills._sdk.notebook import run_cli
+import gzip
+import numpy as np
+import pandas as pd
 
-run_cli("sc-fastq-qc", "--input", "data/sample_R1.fastq.gz",
-        "--read2", "data/sample_R2.fastq.gz",
-        inputs=["data/sample_R1.fastq.gz", "data/sample_R2.fastq.gz"])
+def profile_fastq(path: str, max_reads: int = 50000) -> tuple[dict, pd.DataFrame]:
+    opener = gzip.open if str(path).endswith(".gz") else open
+    quals, gc_bases, total_bases = [], 0, 0
+    with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+        for _ in range(max_reads):
+            if not fh.readline():
+                break
+            seq = fh.readline().rstrip("\r\n")
+            fh.readline()
+            qual = fh.readline().rstrip("\r\n")
+            if seq and qual:
+                q_arr = np.frombuffer(qual.encode("ascii"), dtype=np.uint8) - 33
+                quals.append(q_arr)
+                total_bases += len(seq)
+                gc_bases += seq.upper().count("G") + seq.upper().count("C")
+
+    max_len = max(len(q) for q in quals)
+    mat = np.full((len(quals), max_len), np.nan, dtype=np.float32)
+    for i, q in enumerate(quals):
+        mat[i, :len(q)] = q
+
+    summary = {
+        "sampled_reads": len(quals),
+        "mean_length": float(total_bases / max(len(quals), 1)),
+        "gc_pct": float(100.0 * gc_bases / max(total_bases, 1)),
+        "q30_pct": float(100.0 * np.nanmean(mat >= 30)),
+    }
+    per_base = pd.DataFrame({
+        "position": np.arange(1, max_len + 1),
+        "mean_phred": np.nanmean(mat, axis=0),
+        "q25_phred": np.nanpercentile(mat, 25, axis=0),
+        "median_phred": np.nanmedian(mat, axis=0),
+        "q75_phred": np.nanpercentile(mat, 75, axis=0),
+    })
+    return summary, per_base
 ```
 
-The demo renders synthetic summary tables; it does not read FASTQ or test
-the external tools. There is no `_api.py` for this skill.
-
-## When to use
-
-The user has raw scRNA-seq FASTQ files (one or more, or a directory of
-samples) and wants per-file / per-sample / per-base quality summaries
-before running `sc-count` or `cellranger`. Python summaries always run.
-FastQC and MultiQC add reports when installed; a tool that is present but
-fails is a hard error, not a fallback to a successful Python-only run.
-
-## Inputs & Outputs
-
-**Inputs**
-
-- Input kinds: `file`, `directory`
-- Modalities: scrna
-- File types: `.fastq`, `.fq`, and their `.gz` variants
-- FASTQ structure: valid first record
-- Directory layouts (any): `fastq-collection`
-
-**Outputs**
-
-- `tables/fastq_per_base_quality.csv`
-- `tables/fastq_per_file_summary.csv`
-- `tables/fastq_per_sample_summary.csv`
-- `figures/fastq_file_quality.png`
-- `figures/fastq_q30_summary.png`
-- `figures/fastq_read_structure.png`
-- `figures/per_base_quality.png`
-- `figures/manifest.json`, `figure_data/manifest.json`, plot-data CSV files
-- `reproducibility/commands.sh`, `reproducibility/requirements.txt`
-- Optional external reports under `artifacts/fastqc/` and `artifacts/multiqc/`
-- `report.md`
-- `result.json`
-
-## Flow
-
-1. Discover FASTQ files and choose one sample (`--sample` disambiguates a directory).
-2. Summarize the first `--max-reads` records per file in Python.
-3. Run FastQC when present, then MultiQC when both tools are present.
-4. Render four figures from the Python summaries; external HTML is separate.
-5. Write three tables, `report.md` and `result.json`.
-
-## Gotchas
-
-- **`--max-reads 20000` caps Python summaries only.** `tables/fastq_per_file_summary.csv` records sampled depth. FastQC processes the full files. This is a prefix sample, not random sampling.
-- **`--r-enhanced` is accepted but produces no R plots.** This skill emits Python figures only.  Pass freely, expect no R Enhanced output.
-- `figures/manifest.json` records per-figure status; `result.json` lists external tool availability and commands under `data.external_tools`.
-- `_lib/upstream.py:choose_fastq_sample` rejects ambiguous multi-sample directories. Run once per sample with `--sample`; one invocation does not batch every sample.
-
-## Key CLI
+### Pattern B: CLI Batch Execution with `FastQC` + `MultiQC`
 
 ```bash
-# Demo (synthetic summary tables, no FASTQ or external tools)
-python skills/singlecell/scrna/sc-fastq-qc/sc_fastq_qc.py --demo --output /tmp/sc_fastq_qc_demo
-
-# Single-file with paired-end
-python skills/singlecell/scrna/sc-fastq-qc/sc_fastq_qc.py \
-  --input sample_R1.fastq.gz --read2 sample_R2.fastq.gz --output results/
-
-# Choose a sample and increase Python sampling depth
-python skills/singlecell/scrna/sc-fastq-qc/sc_fastq_qc.py \
-  --input fastq_dir/ --sample sample_A --output results/ --max-reads 100000 --threads 8
+mkdir -p artifacts/fastqc artifacts/multiqc
+fastqc --threads 4 --outdir artifacts/fastqc sample_R1.fastq.gz sample_R2.fastq.gz
+multiqc artifacts/fastqc --outdir artifacts/multiqc
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- `references/parameters.md` — every CLI flag and tuning hint
-- `references/methodology.md` — FastQC integration + Python fallback rationale
-- `references/output_contract.md` — table column schemas + figure roles
-- Adjacent skills: `sc-count` (next step — FASTQ → AnnData), `bulkrna-read-qc` (bulk RNA-seq variant), `sc-qc` (downstream count-matrix QC)
+Calling `use_skill("sc-fastq-qc")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `summarize_fastq(fastq_path, max_reads=20000)`
+- `per_base_quality_table(fastq_path, max_reads=20000)`
+- `fastq_qc_summary(summaries)`
+
+## 3. Output Format & Verification Contract
+
+- **Summary Tables** (`tables/fastq_per_file_summary.csv`, `tables/fastq_per_sample_summary.csv`, `tables/fastq_per_base_quality.csv`):
+  - Per-file columns: `file`, `sampled_reads`, `mean_length`, `gc_pct`, `q30_pct`.
+  - Per-base columns: `position` ($1 \dots L$), `mean_phred`, `q25_phred`, `median_phred`, `q75_phred`.
+- **Verification Invariants**:
+  - Confirm `sampled_reads > 0` and `0.0 <= q30_pct <= 100.0`.
+  - Confirm Read 1 length matches expected 10x barcode+UMI geometry ($26$ bp for `10xv2`, $28$ bp for `10xv3`, or full paired read length if untrimmed).
+
+## 4. Gotchas & Troubleshooting
+
+1. **Read 1 (Barcode + UMI) vs. Read 2 (cDNA) Asymmetry in 10x Libraries**:
+   - In 10x Chromium 3' and 5' libraries, **Read 1** encodes the synthetic cell barcode + UMI ($26\text{--}28$ bp) and naturally exhibits high sequence duplication and non-uniform per-base nucleotide composition—`FastQC` will flag Read 1 with "Per base sequence content" and "Sequence Duplication Levels" warnings, which are **normal and expected** for barcode reads.
+2. **Poly(A) / TSO Tails Lower 3' Quality in Read 2**:
+   - Read 2 sequences the biological cDNA transcript ($90\text{--}150$ bp) and frequently reads into poly(A) tails or template-switching oligos (TSO), causing a dip in Phred quality near bases $75\text{--}150$. Splice-aware aligners (`STARsolo` / `Cell Ranger`) soft-clip these tails automatically; do **not** aggressively length-trim Read 1 or you will destroy the fixed-offset UMI!
+3. **Read Pair Count Conservation (`n_reads(R1) == n_reads(R2)`)**:
+   - Paired-end single-cell counters (`cellranger`, `STARsolo`, `kb-python`) require exact 1-to-1 synchronization between `R1` and `R2` FASTQ files. Never run independent read-dropping filters on `R1` and `R2` separately.
 
 ## Dependencies
 

@@ -14,118 +14,74 @@ tags:
 - bh-fdr
 ---
 
-# proteomics-de
+# Differential Protein Abundance & Volcano Analysis (`proteomics-de`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-ttest is the CLI default; welch and mann_whitney are alternatives. Groups default to the first and second half of columns.
-Use existing search-engine tables; this skill does not search raw spectra.
+Select the statistical test and missing-value strategy according to replicate count and intensity completeness:
 
-## Use from a step
+| Experimental Design & Sample Size | Recommended Statistical Method | Upstream Package | Why |
+|---|---|---|---|
+| **Label-free (LFQ / DIA) or TMT**, $n \ge 3$ per group | **Empirical Bayes moderated $t$-test (`limma`)** or **Welch $t$-test** on $\log_2$ intensities | R `limma` / `DEqMS` or `scipy.stats.ttest_ind(..., equal_var=False)` + BH-FDR | Shrinks protein-wise variance toward a common prior (or PSM-count trend in `DEqMS`) and controls FDR |
+| **Non-Gaussian / heavy-tailed abundance ratios**, $n \ge 5$ per group | **Wilcoxon rank-sum / Mann-Whitney U** (`method="wilcoxon"`) | `scipy.stats.ranksums` / `mannwhitneyu` + BH-FDR | Distribution-free test resilient to extreme outlier intensities |
+| **Peptide-level linear mixed model** | **MSstats** (`dataProcess` + `groupComparison`) | Bioconductor `MSstats` | Models peptide-by-run effects and left-censored missing values directly without pre-aggregating to proteins |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: $\log_2$ Transformation, Left-Censored MNAR Imputation & Welch $t$-Test + BH-FDR
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('proteomics-de')
-data = library.demo_data(random_state=42)
-result = library.differential_abundance(data)
-write_output(result, 'tables/differential_abundance.csv')
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+# 1. Load protein intensity matrix (proteins x samples), replace 0 with NaN, and log2-transform
+df = pd.read_csv("tables/proteins.csv", index_col=0)
+ctrl_cols = [c for c in df.columns if c.startswith("ctrl")]
+treat_cols = [c for c in df.columns if c.startswith("treat")]
+mat = np.log2(df[ctrl_cols + treat_cols].replace(0, np.nan))
+
+# 2. Filter proteins observed in >= 50% of samples and apply Perseus-style down-shifted normal imputation
+mat = mat.loc[mat.notna().mean(axis=1) >= 0.5].copy()
+rng = np.random.default_rng(42)
+for col in mat.columns:
+    s = mat[col].dropna()
+    na_mask = mat[col].isna()
+    if na_mask.any() and len(s) > 1:
+        # Perseus MNAR defaults: mean - 1.8 * SD, width = 0.3 * SD
+        mat.loc[na_mask, col] = rng.normal(loc=s.mean() - 1.8 * s.std(ddof=1), scale=0.3 * s.std(ddof=1), size=na_mask.sum())
+
+# 3. Welch two-sample t-test + Benjamini-Hochberg FDR
+lfc = mat[treat_cols].mean(axis=1) - mat[ctrl_cols].mean(axis=1)
+_, pvals = stats.ttest_ind(mat[treat_cols].values, mat[ctrl_cols].values, axis=1, equal_var=False)
 ```
 
-For real data, use `read_input` and pass any `read_table` helper as `reader=`.
-The executable `examples/example_step.py` also checks the result and writes a Figure.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("proteomics-de")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `differential_abundance(data: pd.DataFrame, *, group1: list | None=None, group2: list | None=None, method: str='ttest') -> pd.DataFrame`
-
-Compare groups and return a new table with group2-minus-group1 log2 fold changes.
-
-:param data: Protein-indexed, sample-column linear intensities; nonpositive values are missing.
-:param group1: First group columns; None uses the first half as in the CLI.
-:param group2: Second group columns; None uses the second half as in the CLI.
-:param method: CLI default ttest; welch uses unequal variance and mann_whitney tests ranks.
-:returns: Per-protein statistics and BH-adjusted p values.
-:raises ValueError: Groups overlap, are empty, or the protein index is not unique.
-
-### `significant(results: pd.DataFrame, *, alpha: float=0.05, log2fc_threshold: float=0.0) -> pd.DataFrame`
-
-Select significant proteins from an existing comparison.
-
-:param results: Differential abundance results with padj and log2fc.
-:param alpha: CLI default 0.05; strict upper bound on BH-adjusted p values.
-:param log2fc_threshold: CLI default 0 disables the absolute fold-change filter.
-:returns: A new table retaining selected rows.
-:raises ValueError: Thresholds are outside their allowed ranges.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read comparison diagnostics.
-
-:param table: Output of differential_abundance.
-:param keep: True preserves attrs; False removes diagnostics.
-:returns: A separate diagnostic dictionary.
-:raises TypeError: The input is not a DataFrame.
-
-### `volcano_figure(results: pd.DataFrame)`
-
-Plot log2 fold change against adjusted significance.
-
-:param results: Differential abundance results.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: log2fc or padj is absent.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Generate synthetic intensities with two ordered groups.
-
-:param random_state: CLI seed 42; change for another simulation.
-:returns: Protein rows and five control then five treatment columns.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-ttest is the CLI default; welch and mann_whitney are alternatives. Groups default to the first and second half of columns.
-Functions return new DataFrames. `run_info(result)` reads diagnostic attrs;
-use `keep=False` before serialization when those attrs are not needed.
-
-## Gotchas
-
-- differential_abundance reports group2 minus group1. Nonpositive intensities do not enter the tests. significant uses BH-adjusted p values.
-- `demo_data` uses seed 42, matching the CLI; every demo is synthetic.
-- `run_info` lives in DataFrame attrs and is not preserved by CSV serialization.
-
-## Inputs and outputs
-
-The CLI reads CSV tables and writes:
-
-- tables/differential_abundance.csv
-- tables/significant.csv
-- report.md
-- result.json
-- `reproducibility/commands.sh` records the CLI invocation template.
-
-Functions return data and Figures without writing files. Steps own their outputs.
-Demo mode also writes its synthetic input when the original CLI used a file.
-
-## CLI
-
-```bash
-python skills/proteomics/proteomics-de/proteomics_de.py --demo --output /tmp/proteomics_de
+```python
+# Calling use_skill("proteomics-de") auto-injects kernel.py helpers into the python kernel:
+res_df = differential_abundance(df, group1=ctrl_cols, group2=treat_cols, method="ttest")
+sig_df = significant(res_df, alpha=0.05, log2fc_threshold=1.0)
 ```
 
-For real input replace `--demo` with `--input <table>`.
+## 3. Output Format & Verification Contract
 
+- **Full Differential Abundance Table** (`tables/differential_abundance.csv`):
+  - Contains `protein_id`, `mean_group1`, `mean_group2`, `log2fc` (`group2 - group1` on $\log_2$ scale), `stat`, `pvalue`, and `fdr` (Benjamini-Hochberg adjusted $p$-value).
+- **Significant Regulated Proteins** (`tables/significant.csv`):
+  - Subset satisfying `fdr < alpha` (default `0.05`) and `abs(log2fc) >= log2fc_threshold`.
+- **Verification Invariants**:
+  - `0 <= pvalue <= fdr <= 1.0` for all tested proteins with finite group observations.
+  - `log2fc` reflects $\log_2(\text{group2}) - \log_2(\text{group1})$ (positive = up-regulated in `group2` / treatment).
 
-## See also
+## 4. Gotchas & Troubleshooting
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
-- `proteomics-data-import` for protein-table normalization; `proteomics-de` for comparisons.
+1. **Missing Not At Random (MNAR) Left-Censored Values in Mass Spectrometry**:
+   - Unlike RNA-seq where zeros reflect Poisson sampling, MS missing values are predominantly **MNAR** (peptides below the Orbitrap/timsTOF limit of detection) mixed with **MAR** (stochastic DDA precursor selection). Mean or median imputation artificially sets absent proteins in control to the high treatment average, destroying true on/off biomarkers. Use left-censored down-shifted normal imputation (`MinProb` / Perseus `-1.8 SD, 0.3 SD` width) for MNAR and $k$NN/QRILC for hybrid missingness.
+2. **Computing Fold Changes on Raw Linear Scale vs. $\log_2$ Scale**:
+   - Raw MS intensities span $10^4 - 10^{11}$ with multiplicative log-normal noise. Taking arithmetic means on linear intensities before $\log_2$ allows a single high-intensity outlier replicate to dominate the fold change. Always $\log_2$-transform intensities **before** computing group means and $t$-statistics (unless input is already $\log_2$-transformed, typically max $< 50$).
+3. **Ratio Compression in Isobaric TMT/iTRAQ Workflows**:
+   - Co-isolation of interfering precursor ions in MS2-based TMT compresses true fold changes toward `1.0` (`log2fc -> 0`). Use a relaxed `|log2fc| >= 0.5` ($1.4\times$) cutoff for TMT compared to `|log2fc| >= 1.0` ($2\times$) for LFQ/DIA.
 
 ## Dependencies
 

@@ -14,113 +14,69 @@ tags:
 - spectronaut
 ---
 
-# proteomics-data-import
+# Proteomics Search Engine Table Import & Filtering (`proteomics-data-import`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-maxquant is the default; fragpipe, diann and generic normalize their own column names. read_table detects CSV/TSV separation.
-Use existing search-engine tables; this skill does not search raw spectra.
+Select the import parser and artifact-filtering rules according to the upstream proteomics search engine:
 
-## Use from a step
+| Search Engine & Acquisition | Primary Protein Table | Artifact Rows to Filter Out | Intensity Columns Extracted |
+|---|---|---|---|
+| **MaxQuant** (DDA LFQ / TMT) | `proteinGroups.txt` (TSV) | `Reverse == "+"`, `Potential contaminant == "+"`, `Only identified by site == "+"` | `LFQ intensity <sample>` (preferred) or `Intensity <sample>` |
+| **FragPipe / Philosopher** (DDA / DIA) | `combined_protein.tsv` | Accessions starting with `rev_` / `contam_` (`cRAP`) | `<sample> MaxLFQ Intensity` or `<sample> Intensity` |
+| **DIA-NN** (DIA library-free / spectral lib) | `report.pg_matrix.tsv` | `Contaminant` accessions (`cRAP-*`) | Sample run file columns (already MaxLFQ normalized at $1\%$ PG $q$-value) |
+| **Spectronaut / Generic CSV** | Protein matrix CSV/TSV | Decoy (`DECOY_`) & keratin/trypsin contaminant rows | Numeric sample intensity columns (`PG.Quantity` / `Intensity_*`) |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Idiomatic MaxQuant `proteinGroups.txt` Import & Decoy/Contaminant Removal
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('proteomics-data-import')
-data = library.demo_data(random_state=42)
-result = library.standardize(data)
-write_output(result, 'tables/proteins.csv')
+import numpy as np
+import pandas as pd
+
+# 1. Read MaxQuant tab-delimited proteinGroups.txt
+df = pd.read_csv("proteinGroups.txt", sep="\t", low_memory=False)
+
+# 2. Remove target-decoy reverse hits, cRAP contaminants, and site-only identifications
+for flag_col in ["Reverse", "Potential contaminant", "Only identified by site"]:
+    if flag_col in df.columns:
+        df = df[df[flag_col].fillna("") != "+"]
+
+# 3. Extract leading protein ID, gene symbol, and LFQ intensity matrix (replace 0 with NaN)
+df["protein_id"] = df["Majority protein IDs"].astype(str).str.split(";").str[0]
+lfq_cols = [c for c in df.columns if c.startswith("LFQ intensity ")]
+mat = df.set_index("protein_id")[lfq_cols].replace(0, np.nan)
+mat.columns = [c.replace("LFQ intensity ", "") for c in lfq_cols]
 ```
 
-For real data, use `read_input` and pass any `read_table` helper as `reader=`.
-The executable `examples/example_step.py` also checks the result and writes a Figure.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("proteomics-data-import")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `read_table(path: str | Path) -> pd.DataFrame`
-
-Read a CSV or TSV; pass this function as reader= to read_input.
-
-:param path: Search-engine output file; the first line selects comma or tab separation.
-:returns: Unmodified input columns as a DataFrame.
-:raises OSError: The file cannot be read.
-
-### `standardize(data: pd.DataFrame, *, format: str='maxquant') -> pd.DataFrame`
-
-Return a standardized copy of a search-engine protein table.
-
-:param data: Original protein table with engine-specific column names.
-:param format: CLI default maxquant; fragpipe, diann and generic use their own mappings.
-:returns: Protein table; MaxQuant reverse, contaminant and site-only flags are filtered.
-:raises ValueError: The format is unsupported.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read import diagnostics.
-
-:param table: Standardized protein table.
-:param keep: True preserves attrs; False removes diagnostics.
-:returns: A separate diagnostic dictionary.
-:raises TypeError: The input is not a DataFrame.
-
-### `intensity_figure(table: pd.DataFrame)`
-
-Plot numeric column medians for checking an imported table.
-
-:param table: Standardized protein table; numeric metadata is included.
-:returns: A matplotlib Figure without writing files.
-:raises TypeError: The input is not a DataFrame.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Generate a synthetic MaxQuant table in memory.
-
-:param random_state: CLI seed 42; change for another simulation.
-:returns: Two hundred protein rows, including five flagged rows.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-maxquant is the default; fragpipe, diann and generic normalize their own column names. read_table detects CSV/TSV separation.
-Functions return new DataFrames. `run_info(result)` reads diagnostic attrs;
-use `keep=False` before serialization when those attrs are not needed.
-
-## Gotchas
-
-- standardize filters MaxQuant Reverse, Potential contaminant and Only identified by site flags. Generic import does not infer those flags.
-- `demo_data` uses seed 42, matching the CLI; every demo is synthetic.
-- `run_info` lives in DataFrame attrs and is not preserved by CSV serialization.
-
-## Inputs and outputs
-
-The CLI reads CSV tables and writes:
-
-- tables/proteins.csv
-- report.md
-- result.json
-- `demo_proteinGroups.txt` is written only with `--demo`.
-
-Functions return data and Figures without writing files. Steps own their outputs.
-Demo mode also writes its synthetic input when the original CLI used a file.
-
-## CLI
-
-```bash
-python skills/proteomics/proteomics-data-import/proteomics_data_import.py --demo --output /tmp/proteomics_data_import
+```python
+# Calling use_skill("proteomics-data-import") auto-injects kernel.py helpers into the python kernel:
+raw_df = read_table("data/proteinGroups.txt")
+clean_df = standardize(raw_df, format="maxquant")
+summary = import_summary(clean_df)
 ```
 
-For real input replace `--demo` with `--input <table>`.
+## 3. Output Format & Verification Contract
 
+- **Standardized Protein Table** (`tables/proteins.csv`):
+  - Contains `protein_id` (primary accession), optional `gene_name`, and standardized numeric sample intensity columns (`Intensity_*` / `LFQ_*`), with decoy, contaminant, and site-only rows removed.
+- **Run Metadata** (`df.attrs["run_info"]`):
+  - Records `format`, `n_input_rows`, `n_retained_proteins`, `n_removed_flags`, and `sample_columns`.
+- **Verification Invariants**:
+  - Zero rows remain with `Reverse == "+"`, `Potential contaminant == "+"`, or `Only identified by site == "+"`.
+  - `n_retained_proteins > 0` and all retained intensity columns are numeric (`float64`).
 
-## See also
+## 4. Gotchas & Troubleshooting
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
-- `proteomics-data-import` for protein-table normalization; `proteomics-de` for comparisons.
+1. **Forgetting to Filter `Potential contaminant` and `Reverse` Rows**:
+   - Unfiltered MaxQuant `proteinGroups.txt` includes trypsin, human keratins, bovine serum albumin from cell culture media, and `REV__` decoy hits. Leaving them in distorts total intensity normalization and produces false top hits in differential expression.
+2. **MaxQuant Encodes Missing Values as Exact `0` Instead of `NaN`**:
+   - MaxQuant writes `0` when a protein group is unquantified in a sample. Taking `np.log2(df + 1)` without first converting `0 -> np.nan` creates an artificial spike at `0.0` that violates Gaussian assumptions in `limma` and Welch $t$-tests.
+3. **Semicolon-Delimited `Majority protein IDs` Break Downstream Pathway Joins**:
+   - Homologous isoforms sharing peptides are grouped as `P04406;P00354`. Always split on `;` and retain the leading canonical UniProt accession (`str.split(";").str[0]`) and first `Gene names` token before mapping to GO/KEGG/Reactome.
 
 ## Dependencies
 

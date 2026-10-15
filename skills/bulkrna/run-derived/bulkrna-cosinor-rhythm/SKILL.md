@@ -10,85 +10,76 @@ tags:
 - skill-scaffold
 ---
 
-# bulkrna-cosinor-rhythm
+# Bulk RNA-seq Circadian Cosinor Rhythm Analysis (`bulkrna-cosinor-rhythm`)
 
-## Purpose
+## 1. Method Decision Matrix & When to Use
 
-Use this Skill for a bulk RNA time-course CSV whose sample columns follow
-`T{hour}_R{replicate}` and require a deterministic 24-hour, single-component
-cosinor OLS fit per gene. Use another method when the period must be estimated,
-the design has covariates, or multi-harmonic/non-sinusoidal rhythms are needed.
+Select the circadian or periodic time-course modeling method based on sampling regularity, waveform shape, and replicate design:
 
-## Inputs & Outputs
+| Time-Course Design & Waveform | Method | Upstream Package / Model | Why |
+|---|---|---|---|
+| **Fixed 24-hour sinusoidal rhythm** on evenly or unevenly sampled bulk time-course (`T{hour}_R{rep}`) | Single-component linear Cosinor OLS ($y_g(t) = M + \beta_c \cos(\omega t) + \beta_s \sin(\omega t)$) | `numpy.linalg.lstsq` / `scipy.stats.f` / `CosinorPy` | Closed-form OLS estimates MESOR ($M$), amplitude ($A = \sqrt{\beta_c^2 + \beta_s^2}$), acrophase ($\phi$), $R^2$, and harmonic $F$-test $p$-value |
+| **Asymmetric / sawtooth / multi-peak circadian waveforms** | Non-parametric rank test (JTK_CYCLE / RAIN) or 2-harmonic Cosinor | R `MetaCycle` (`meta2d`) / `CosinorPy` | Detects non-sinusoidal periodic transcripts and damped oscillations |
+| **Differential rhythmicity between two conditions** (e.g., WT vs. Clock-KO) | Two-group interaction Cosinor GLM (`compare_cosinor`) | `CosinorPy` / R `limorhyde` / `dryR` | Tests amplitude change ($\Delta A$) and phase shift ($\Delta \phi$) across genotypes |
 
-**Outputs**
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-- `report.md`
-- `result.json`
-- `cosinor_results.csv`
-- `semantic_summary.json`
+### Pattern A: Idiomatic Fixed-Period 24h Cosinor OLS Regression in Python
 
-## API
+```python
+import re
+import numpy as np
+import pandas as pd
+from scipy import stats
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+# 1. Load time-course expression matrix (genes x T{hour}_R{rep} columns)
+df = pd.read_csv("data/circadian_timecourse.csv", index_col=0)
+hours = np.array([float(re.match(r"^T(\d+(?:\.\d+)?)_R\d+$", c).group(1)) for c in df.columns])
 
-### `fit(timecourse)`
+# 2. Construct 24-hour harmonic design matrix X = [1, cos(2*pi*t/24), sin(2*pi*t/24)]
+omega = 2.0 * np.pi * hours / 24.0
+X = np.column_stack([np.ones_like(hours), np.cos(omega), np.sin(omega)])
+Y = df.to_numpy(dtype=float)  # genes x samples
 
-Fit a fixed 24-hour sinusoid independently to each gene.
+# 3. Vectorized OLS fit across all genes
+betas, _, _, _ = np.linalg.lstsq(X, Y.T, rcond=None)  # 3 x genes
+mesor, b_cos, b_sin = betas[0], betas[1], betas[2]
+amplitude = np.hypot(b_cos, b_sin)
+phase_rad = np.mod(np.arctan2(b_sin, b_cos), 2.0 * np.pi)
+acrophase_hr = phase_rad * (24.0 / (2.0 * np.pi))
 
-:param timecourse: Gene-indexed DataFrame with T00_R1-style sample columns.
-:returns: Parameter DataFrame with descriptive rhythmic flags and diagnostics.
-:raises ValueError: Empty data, missing time columns or infinite expression.
-
-### `run_info(result, *, keep=True)`
-
-Read gene counts and time-column filtering decisions.
-
-:param result: DataFrame returned by fit.
-:param keep: Default True; False removes diagnostic attrs.
-:returns: Diagnostic dictionary, empty after removal.
-
-### `rhythm_figure(result)`
-
-Plot fitted amplitude against phase, without writing files.
-
-:param result: Parameter DataFrame returned by fit.
-:returns: matplotlib Figure.
-:raises KeyError: Parameter columns are missing.
-
-<!-- api:end -->
-
-## Flow
-
-1. Load `--input <csv>` or the repository-bound demo dataset via `--demo`.
-2. Parse time and replicate identities from the sample columns.
-3. Fit `mesor + beta_cos*cos(2*pi*t/24) + beta_sin*sin(2*pi*t/24)` by OLS.
-4. Derive amplitude, phase, fit statistics, and the per-gene rhythmicity verdict.
-5. Write `cosinor_results.csv`, `semantic_summary.json`, `report.md`, and the standard result envelope.
-
-## Gotchas
-
-- `cosinor_results.csv` marks rhythmic genes with descriptive thresholds (R-squared ≥ 0.8 and amplitude/mesor ≥ 0.2), not a significance test.
-- `semantic_summary.json` lists columns dropped for more than 20% missing values. Duplicate gene identifiers keep their first row; fits with insufficient observations or a singular design return missing parameters.
-- `cosinor_results.csv` uses a fixed 24-hour period; `--method` is retained as a report label, not a backend selector.
-
-## Key CLI
-
-```bash
-# Demo
-python skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/bulkrna_cosinor_rhythm.py --demo --output /tmp/bulkrna-cosinor-rhythm_demo
-
-# Real input
-python skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/bulkrna_cosinor_rhythm.py \
-  --input <data.ext> --output results/ \
-  --method fixed-period-cosinor-ols
+Y_hat = (X @ betas).T
+ss_res = np.sum((Y - Y_hat) ** 2, axis=1)
+ss_tot = np.sum((Y - Y.mean(axis=1, keepdims=True)) ** 2, axis=1)
+r_squared = np.where(ss_tot > 1e-12, 1.0 - ss_res / ss_tot, 0.0)
 ```
 
-## See also
+### Pattern B: Lightweight Micro-Helper via `use_skill("bulkrna-cosinor-rhythm")`
 
-- `references/parameters.md` — every CLI flag, per-method tunables
-- `references/methodology.md` — the WHY behind the algorithm
-- `references/output_contract.md` — `result.json` envelope + downstream paths
+```python
+# Calling use_skill("bulkrna-cosinor-rhythm") auto-injects kernel.py helpers into the python kernel:
+results_df = fit_cosinor_24h(df, r2_cutoff=0.80, rel_amp_cutoff=0.20)
+summary = summarize_rhythmic_genes(results_df)
+```
+
+## 3. Output Format & Verification Contract
+
+- **Cosinor Fit Table** (`cosinor_results.csv` / `tables/cosinor_results.csv`):
+  - Columns: `gene`, `mesor`, `beta_cos`, `beta_sin`, `amplitude`, `relative_amplitude`, `acrophase_hr`, `r_squared`, `pvalue`, `is_rhythmic`.
+- **Semantic Summary** (`semantic_summary.json`):
+  - Contains `n_genes_tested`, `n_rhythmic`, `dropped_columns`, and top rhythmic clock genes.
+- **Verification Invariants**:
+  - `amplitude >= 0`, `0 <= acrophase_hr < 24.0`, and `0 <= r_squared <= 1.0` for all valid gene fits.
+  - Sample column headers strictly match `T{hour}_R{replicate}` (e.g., `T00_R1`, `T04_R2`).
+
+## 4. Gotchas & Troubleshooting
+
+1. **Acrophase Angle Sign Convention (`atan2(beta_sin, beta_cos)`)**:
+   - Under the parametrization $y(t) = M + A\cos(\omega t - \phi) = M + A\cos\phi\cos(\omega t) + A\sin\phi\sin(\omega t)$, we have $\beta_{\cos} = A\cos\phi$ and $\beta_{\sin} = A\sin\phi$. Thus the peak phase is $\phi = \operatorname{atan2}(\beta_{\sin}, \beta_{\cos}) \pmod{2\pi}$, converted to hours via $\text{acrophase\_hr} = \phi \times \frac{24}{2\pi} \in [0, 24)$. Reversing the arguments to `atan2` or adding a minus sign shifts peak circadian times by 6–12 hours.
+2. **Minimum Sampling Density & Nyquist Limit**:
+   - Estimating a 24-hour sinusoid requires at least 3 distinct timepoints mod 24 (otherwise $\mathbf{X}^\top \mathbf{X}$ is singular), and standard circadian guidelines (Hughes et al., *J Biol Rhythms*) recommend $\ge 6$ timepoints per 24h cycle (every $\le 4\text{ h}$) across 24–48 hours.
+3. **Relative Amplitude (`amplitude / mesor`) vs. $R^2$ Alone**:
+   - Housekeeping genes with tiny technical fluctuations can achieve $R^2 > 0.80$ if replicate noise is near zero. Always combine goodness-of-fit ($R^2 \ge 0.80$ or BH-adjusted $F$-test $q < 0.05$) with a biological effect-size floor (`amplitude / abs(mesor) >= 0.20`).
 
 ## Dependencies
 

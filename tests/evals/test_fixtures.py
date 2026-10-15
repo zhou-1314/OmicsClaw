@@ -42,7 +42,8 @@ def test_a_stub_module_names_only_functions_the_real_library_has(path):
     """A stub module stands in for a skill's ``_api.py``; ``load_skill`` refuses names the library lacks."""
     import ast
 
-    real = skill_index().get(path.stem).directory / "_api.py"
+    sdir = skill_index().get(path.stem).directory
+    real = sdir / "kernel.py" if (sdir / "kernel.py").is_file() else sdir / "_api.py"
     declared = next(
         ast.literal_eval(node.value)
         for node in ast.parse(real.read_text(encoding="utf-8")).body

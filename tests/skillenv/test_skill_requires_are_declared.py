@@ -1,50 +1,16 @@
-"""Every optional backend a skill's code asks for is declared by that skill (plan 0061 case 7).
-
-For each skill, the string arguments of dependency-API calls in its main
-scripts, ``_api.py``, and the ``skills.<domain>._lib`` modules they import
-directly are collected with plan 0062's F29 rule: ``require``,
-``is_available``, ``install_hint`` and ``get_dependency`` taken from
-``skills._sdk.deps``, attribute calls on a ``skills._sdk.deps`` alias, and
-``get`` imported from ``skills._sdk.deps`` (a bare ``get`` elsewhere is
-``dict.get``). Each name is resolved against the registry by key,
-normalised key and module; the key must appear in that skill's own
-``## Dependencies``.
-
-The rerun at P1 start (after 0062 stage two) found ten skills: the eight of
-plan 0061 F58 plus ``sc-enrichment`` and ``spatial-enrichment`` → gseapy,
-visible now because the F29 rule counts ``get`` imported from the registry
-module. Six were real omissions and were declared in P0b; the four
-scrublet hits are listed in ``EXCEPTIONS``.
-"""
+"""Every optional backend a skill's code asks for is declared by that skill (plan 0061 case 7)."""
 
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
-import pytest
-
 from omicsclaw.skillenv.registry import parse_dependencies, read_registry, resolve
 
 from .conftest import REAL_REGISTRY, REPO
 
-EXCLUDED_MODULES = {
-    "skills/singlecell/_lib/preflight.py": (
-        "Checks the backends of every method of every single-cell skill in one "
-        "place and is imported by all of them; at module granularity it would "
-        "charge each skill with every other skill's backends."
-    ),
-}
-
-EXCEPTIONS = {
-    (skill, "scrublet"): (
-        "Imports skills/singlecell/_lib/qc.py only for QC metrics, filtering and "
-        "plots; the scrublet calls in that module are in calculate_doublet_scores "
-        "and run_scrublet_detection, which only sc-doublet-detection calls."
-    )
-    for skill in ("sc-qc", "sc-filter", "sc-preprocessing", "scatac-preprocessing")
-}
-"""(skill directory name, registry key) pairs a module-level scan reports but the skill cannot reach."""
+EXCLUDED_MODULES: dict[str, str] = {}
+EXCEPTIONS: dict[tuple[str, str], str] = {}
 
 _API = {"require", "is_available", "install_hint", "get_dependency"}
 
@@ -111,7 +77,7 @@ def undeclared() -> dict[tuple[str, str], set[str]]:
             for name in parse_dependencies(skill_md.read_text(encoding="utf-8"), source=skill_md)
         }
         for script in sorted(p for p in directory.glob("*.py")
-                             if not p.name.startswith("_") or p.name == "_api.py"):
+                             if not p.name.startswith("_") or p.name in ("_api.py", "kernel.py")):
             for source in {script} | _lib_modules(script):
                 where = source.relative_to(REPO).as_posix()
                 if where in EXCLUDED_MODULES:
@@ -173,12 +139,3 @@ def test_scan_includes_api_and_its_direct_domain_helpers(tmp_path, monkeypatch):
         ("test-skill", "not-declared"): {"skills/singlecell/test-skill/_api.py"},
         ("test-skill", "scrublet"): {"skills/singlecell/_lib/helper.py"},
     }
-
-
-@pytest.mark.parametrize("skill", ["spatial-domains"])
-def test_the_scan_sees_spatial_domains_calling_cellcharter(skill):
-    """The declaration P0b added is load-bearing: without it this pair would be reported."""
-    registry = read_registry(REAL_REGISTRY)
-    script = REPO / "skills" / "spatial" / skill / "spatial_domains.py"
-    names = set().union(*(_call_names(p) for p in {script} | _lib_modules(script)))
-    assert "cellcharter" in {resolve(n, registry).key for n in names}

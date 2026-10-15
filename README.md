@@ -29,14 +29,14 @@
 OmicsClaw is an AI agent for multi-omics analysis. You describe the analysis
 you want; the model picks a skill, reads its instructions and runs its Python,
 R or command-line tools in your own environment, on your machine or on a
-server. It ships 88 skills in seven domains, and the same agent answers in the
+server. It ships 88 domain skills and a skill-authoring helper, and the same agent answers in the
 terminal, in the desktop app and on chat platforms.
 
 ## What's new
 
 - [Interactive analysis](docs/core-features/notebook.md) connects chat, a persistent Notebook kernel and hosted HTML/JS apps, with approval-gated publishing and versioned interaction state for the next model request.
 - The chat stream's approval frames carry the tool's risk tier and a one-line plain-language summary of the call, the agent may close an answer with up to three suggested follow-up questions (additive  frames), and the model is prompted for exactly that — the P6 usability round's first three items, on top of the Desktop jobs plane P1 built.
-- Across seven domains, 83 skills expose function libraries and replayable examples; five remain CLI-only, including the demo-only XCMS stub, and Python/R modules support IO tracking and review before acceptance ([0074](docs/plans/0074-singlecell-skill-migration.md), [0075](docs/plans/0075-spatial-skill-migration.md), [0076](docs/plans/0076-remaining-modalities-migration.md)).
+- Domain skills now pair a four-part `SKILL.md` with a lightweight `kernel.py`; `use_skill` registers its helpers for the persistent Python kernel, replacing the former SDK step runner.
 - A real-model routing eval (`tests/evals/live/`, run by hand) measures whether the model picks the right skill for 26 seed requests, the CI unit-test job now also runs the launch shell, attachments, top-level and desktop HTTP tests, and the four consensus skills whose scripts could not start have since been deleted ([0068](docs/plans/0068-eval-hardening.md), [0070](docs/plans/0070-notebook-skill-runtime.md)).
 - The agent framework has been rebuilt around three entry points, `oc cli`, `oc desktop` and `oc channel`, and the old `oc interactive`, `oc tui`, `oc onboard` and `oc run` commands are gone ([rebuild status](docs/FRAMEWORK-REBUILD.md)).
 
@@ -62,11 +62,16 @@ checkout, also set `OMICSCLAW_SKILLS_DIR=<checkout>/skills` in `.env`.
 `oc cli --prompt "..."` answers one question and exits. If `oc` is not on
 `PATH`, use `python omicsclaw.py cli`.
 
-Skills are ordinary scripts, so you can also run one without the agent:
+`make list` prints the skill catalogue. Each skill's `SKILL.md` explains its
+methods, inputs and output checks. After `use_skill`, the agent can call its
+`kernel.py` helpers in the persistent Python session. Python users can also
+load the helper module directly:
 
-```bash
-make list    # every skill, by domain
-python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/omicsclaw_demo
+```python
+from omicsclaw.skills.sidecar import load_skill
+
+helpers = load_skill("spatial-preprocess")
+print(helpers.__all__)
 ```
 
 ## Ways to use it
@@ -77,7 +82,7 @@ python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /
 | Desktop App | the App starts `oc desktop` | Chat, approvals and file viewing in a desktop window ([below](#desktop-app)) |
 | Remote server | `oc desktop` on the server | The App reaches it through its own SSH tunnel, so the data stays on the server ([remote mode](docs/engineering/remote-execution.mdx)) |
 | Chat platforms | `oc channel --channels telegram` | Owner-only text chat on Telegram, Feishu, Slack, Discord, DingTalk, QQ or Email. `oc channel --list` shows them. Set `OMICSCLAW_APPROVAL_TIMEOUT_S` in `.env` first, or it refuses to start |
-| Skill scripts | `python <skill directory>/<script>.py` | One analysis without the agent. Each skill's `SKILL.md` documents its options |
+| Python helpers | `load_skill("<skill-name>")` | Call the skill's `kernel.py` functions in your analysis environment |
 
 Conversations and the agent's long-term notes are stored in
 `<workspace>/.omicsclaw/memory.db`. MCP servers listed in
@@ -90,9 +95,9 @@ the rest of the conversation, or always allow that exact call; `/auto` stops
 the questions about ordinary work. Dangerous commands and changes to
 `.omicsclaw/` or `.env` are still asked about. The dangerous-command check
 matches known patterns, and a command written to avoid them gets through, so if
-you let the agent work unattended, run its commands in a container without
-network access by setting `OMICSCLAW_SANDBOX=docker` and
-`OMICSCLAW_SANDBOX_IMAGE` (see [`.env.example`](.env.example)).
+you let the agent work unattended, configure its native execution sandbox and
+network access in
+[`.env.example`](.env.example) (see [sandbox settings](docs/core-features/sandbox.md)).
 
 ## Desktop App
 

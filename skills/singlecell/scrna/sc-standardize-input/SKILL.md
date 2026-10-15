@@ -12,119 +12,85 @@ tags:
 - anndata
 ---
 
-# sc-standardize-input
+# Single-Cell AnnData Input Canonicalization (`sc-standardize-input`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has a single-cell expression file from outside OmicsClaw (a public
-`.h5ad`, a 10X mtx directory, a `.loom`, etc.) and needs the canonical
-AnnData contract every downstream scRNA skill assumes: raw counts in
-`layers["counts"]` and `adata.raw`, harmonised feature names, and a
-`uns["omicsclaw_matrix_contract"]` provenance record.  Run this once before
-`sc-qc` / `sc-preprocessing` / etc.
+Use this playbook to inspect, repair, and canonicalize external single-cell files (`.h5ad`, `10x` `.h5` / `.mtx`, `.loom`, `.csv`) so that downstream single-cell skills receive a guaranteed matrix and metadata contract.
 
-## Use from a step
+| Input Source / Issue | Inspection Check | Canonicalization Action | Upstream Function |
+|---|---|---|---|
+| **Raw counts buried in `.raw` or `.layers`** | `adata.X` has non-integers (`log1p` or scaled z-scores), while integer counts live in `adata.layers["counts"]` or `adata.raw.X` | Copy true integer counts to `adata.layers["counts"]` and `adata.X` (or preserve log1p in `adata.X` with verified `layers["counts"]`) | `scipy.sparse` / `anndata` |
+| **Ensembl IDs in `adata.var_names`** | `adata.var_names[0].startswith(("ENSG", "ENSMUSG"))` while gene symbols sit in `adata.var["gene_symbols"]` or `feature_name` | Promote gene symbol column to `adata.var_names` and call `adata.var_names_make_unique()` | `adata.var_names_make_unique()` |
+| **Duplicate Barcodes or Gene Symbols** | `not adata.obs_names.is_unique` or `not adata.var_names.is_unique` | Deduplicate with `-1`, `-2` suffixes via `obs_names_make_unique()` / `var_names_make_unique()` | `AnnData.var_names_make_unique` |
+| **Dense Float64 Matrix Bloat** | `isinstance(adata.X, np.ndarray)` on a sparse count matrix | Convert to `scipy.sparse.csr_matrix` to cut memory by $10\text{--}20\times$ | `scipy.sparse.csr_matrix` |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Auditing & Canonicalizing an External `.h5ad` (`anndata` + `scipy.sparse`)
 
 ```python
-standardizer = load_skill("sc-standardize-input")
-adata = standardizer.standardize(read_input("external.h5ad"), species="human")
-write_output(adata, "intermediate/adata_standardized.h5ad")
+import numpy as np
+import scipy.sparse as sp
+import scanpy as sc
+
+def matrix_is_integer_counts(mat) -> bool:
+    data = mat.data if sp.issparse(mat) else np.asarray(mat).ravel()
+    if len(data) == 0:
+        return False
+    sample = data[:min(len(data), 20000)]
+    return bool(np.all(sample >= 0) and np.allclose(sample, np.round(sample)))
+
+# 1. Locate raw integer counts across layers["counts"], adata.raw, or adata.X
+if "counts" in adata.layers and matrix_is_integer_counts(adata.layers["counts"]):
+    counts_source = "layers['counts']"
+elif adata.raw is not None and adata.raw.shape == adata.shape and matrix_is_integer_counts(adata.raw.X):
+    adata.layers["counts"] = adata.raw.X.copy()
+    counts_source = "raw"
+elif matrix_is_integer_counts(adata.X):
+    adata.layers["counts"] = adata.X.copy()
+    counts_source = "X"
+else:
+    raise ValueError("No non-negative integer count matrix found in layers['counts'], raw, or X!")
+
+# 2. Harmonize Ensembl IDs -> gene symbols if a symbol column exists in adata.var
+for col in ("gene_symbols", "gene_symbol", "feature_name", "gene_short_name"):
+    if adata.var_names[0].startswith(("ENSG", "ENSMUSG")) and col in adata.var.columns:
+        adata.var["ensembl_id"] = adata.var_names.astype(str)
+        adata.var_names = adata.var[col].astype(str).values
+        break
+
+# 3. Enforce unique identifiers and sparse CSR storage
+adata.var_names_make_unique()
+adata.obs_names_make_unique()
+if not sp.issparse(adata.layers["counts"]):
+    adata.layers["counts"] = sp.csr_matrix(adata.layers["counts"])
 ```
 
-`standardize` returns a new AnnData. It does not filter, normalize or
-cluster. A runnable PBMC example is in `examples/example_step.py`.
+### Optional Micro-Helper (`kernel.py`)
 
-## API
+Calling `use_skill("sc-standardize-input")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `standardize(adata, species="auto", make_var_unique=True)`
+- `infer_species(adata)`
+- `contract_summary(adata)`
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+## 3. Output Format & Verification Contract
 
-### `standardize(adata, *, species: str='auto')`
+- **Canonicalized AnnData** (`intermediate/processed.h5ad`):
+  - `adata.layers["counts"]`: guaranteed non-negative count matrix aligned with `(adata.n_obs, adata.n_vars)`.
+  - `adata.var_names` and `adata.obs_names`: unique string identifiers (`adata.var_names.is_unique` and `adata.obs_names.is_unique`).
+  - `adata.uns["omicsclaw_matrix_contract"]`: provenance dictionary recording `counts_source` and inferred `species` (`"human"` or `"mouse"`).
+- **Verification Invariants**:
+  - Confirm `contract_summary(adata)["has_counts_layer"] == True` and `adata.var_names.is_unique`.
 
-Return a canonical copy with count-like X, layers['counts'] and raw.
+## 4. Gotchas & Troubleshooting
 
-Select counts from layers['counts'], aligned raw or X, in that order;
-harmonize feature names and record the matrix and input contracts.
-
-:param adata: AnnData with at least one count-like expression matrix.
-:param species: 'auto' uses infer_species; 'human' or 'mouse' overrides it.
-:returns: A new AnnData. run_info reports the selected matrix and warnings.
-:raises ValueError: The species is invalid or no count-like matrix is present.
-
-### `infer_species(adata) -> str`
-
-Infer human or mouse from feature names, defaulting to human.
-
-:param adata: AnnData whose feature names or gene-symbol metadata are examined.
-:returns: The species hint used by standardize(species="auto").
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read standardization diagnostics stored as JSON in adata.uns.
-
-:param adata: The AnnData returned by standardize.
-:param keep: False removes these diagnostics after reading; default True.
-:returns: A dictionary, or an empty dictionary before standardize runs.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-`species="auto"` uses the existing gene-name heuristic; use `human` or
-`mouse` when the organism is known. `infer_species` exposes that heuristic.
-Counts are selected from `layers["counts"]`, aligned `raw`, then `X`.
-`run_info` reports the chosen source and any warnings. This method has no
-random state or optional backend.
-
-## Inputs & Outputs
-
-**Inputs**
-
-- Input kinds: `file`, `directory`
-- Modalities: scrna
-- File types: `.h5ad`, `.h5`, `.loom`, `.csv`, `.tsv`
-
-**Outputs**
-
-- `processed.h5ad`
-- `report.md`
-- `result.json`
-- Processed AnnData (`saves_h5ad`) — adds `layers`: `counts`
-
-## Flow
-
-1. Load via the shared multi-format single-cell loader.
-2. Pre-flight: validate non-empty input; auto-detect species from gene name case (UPPER → human, Title → mouse).
-3. Pick the best count-like matrix among `layers["counts"]`, `adata.raw`, and `adata.X` (orchestrated by `canonicalize_singlecell_adata` in `skills/singlecell/_lib/adata_utils.py`, which calls the `matrix_looks_count_like` heuristic at `_lib/adata_utils.py`).
-4. Harmonise feature names (Ensembl ↔ symbol, deduplicate).
-5. Persist `uns["omicsclaw_input_contract"]` + `uns["omicsclaw_matrix_contract"]`.
-6. Save `processed.h5ad`; emit `report.md` + `result.json`.
-
-## Gotchas
-
-- **`--r-enhanced` is accepted but produces no R plots.** `sc_standardize_input.py` declares the flag for CLI consistency; this skill is input canonicalisation, not visualisation.  Pass it freely, but expect no R Enhanced figures.
-- Count-source selection uses a count-like heuristic, not file provenance.
-  Check `run_info(adata)["expression_source"]` and `warnings`, or the CLI's
-  `result.json["summary"]`, before downstream normalization.
-- **Species auto-detect is gene-case-based.** UPPER-case symbols → human, Title-case → mouse.  Non-standard gene-name conventions (Ensembl IDs only, lowercase) silently fall through to the `auto` default.  Pass `--species human` or `--species mouse` explicitly when working with non-symbol matrices.
-- **No filtering, no normalisation, no clustering.** Even if `result.json` looks complete, the output is still raw counts in canonical form — run `sc-qc` and `sc-preprocessing` next.
-
-## Key CLI
-
-```bash
-# Demo (built-in PBMC3K)
-python skills/singlecell/scrna/sc-standardize-input/sc_standardize_input.py --demo --output /tmp/sc_std_demo
-
-# Real run with species hint
-python skills/singlecell/scrna/sc-standardize-input/sc_standardize_input.py \
-  --input external.h5ad --output results/ --species mouse
-```
-
-## See also
-
-- `references/parameters.md` — every CLI flag and tuning hint
-- `references/methodology.md` — count-source heuristic, species detection logic
-- `references/output_contract.md` — exact `processed.h5ad` + `result.json` shape
-- Adjacent skills: `sc-count` (FASTQ → AnnData; skip standardisation when used), `sc-qc` (next step), `sc-preprocessing` (full normalise+cluster pipeline)
+1. **CELLxGENE & Public Atlas `.h5ad` Files Store Raw Counts in `adata.raw.X`**:
+   - Public `.h5ad` files downloaded from CZ CELLxGENE Discover or the Human Cell Atlas typically store log-normalized expression in `adata.X`,Ensembl IDs in `adata.var_names`, gene symbols in `adata.var["feature_name"]`, and raw integer counts inside `adata.raw.X`. Always check `adata.raw.X` and `adata.var["feature_name"]` before running QC or DE.
+2. **Shape Mismatch Between `adata.raw` and `adata`**:
+   - If an external `.h5ad` was subsetted to $2,000$ HVGs in `adata.X` while `adata.raw` still holds $30,000$ genes, `adata.raw.X` cannot be assigned directly to `adata.layers["counts"]` due to shape mismatch (`ValueError`). Reconstruct `adata = adata.raw.to_adata()` first to recover the full transcriptome.
+3. **Species Inference Fails on Ensembl IDs (`ENSG` / `ENSMUSG`)**:
+   - Gene-case heuristics (`UPPER` $\rightarrow$ human, `Title` $\rightarrow$ mouse) fail if `adata.var_names` are Ensembl IDs (`ENSG00000...` and `ENSMUSG00000...` are both uppercase!). Always map Ensembl IDs to gene symbols before inferring species or matching `MT-`/`mt-` mitochondrial prefixes.
 
 ## Dependencies
 

@@ -1,6 +1,6 @@
 # 计划 0074：单细胞其余 26 个 skill 迁移到函数库形态，加上 R 步骤
 
-**状态**：第 3 版已完成本地实施与验收（2026-10-07）。按 owner 的 N1 c 裁定完成 pertpy overlay 核验和 M0–M9；单细胞现有 27 个函数库、3 个 CLI_ONLY，支持混合 Python/R 步骤。Standards、Spec 独立审核各五项发现均已修复关闭，M9 六项核心验收通过。真实 GitHub Actions 与只读容器仍为外部待验，不在本地通过结论内；两条既有框架测试失败、实际后端覆盖范围及端到端的额外 prompt 偏差均见 `0074-singlecell-skill-migration-delivery.md`。实现审核见 `0074-singlecell-skill-migration-implementation-review.md`，原计划审核另保留在 `0074-singlecell-skill-migration-review.md`。
+**状态**：历史函数库迁移方案。对应实现已退役，旧交付和实现审核结果已清理；设计裁定与原计划审核保留供查阅。
 
 ### 修订说明
 
@@ -827,7 +827,7 @@ GUARDS
 
 ### M9 端到端验收与交付（约 2 天）
 
-§7 的端到端；全部示例与全部 parity 用例各跑一次；交付记录 `docs/plans/0074-singlecell-skill-migration-delivery.md`；`README.md` 的 What's new；`agent-skills.md:115` 的未迁移数。
+§7 的端到端；全部示例与全部 parity 用例各跑一次；`README.md` 的 What's new；`agent-skills.md:115` 的未迁移数。
 
 验收：
 

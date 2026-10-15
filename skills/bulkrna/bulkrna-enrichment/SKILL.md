@@ -15,64 +15,91 @@ tags:
 - pathway
 ---
 
-# Bulk pathway enrichment
+# Bulk RNA-seq Pathway & Gene Set Enrichment (`bulkrna-enrichment`)
 
-## Purpose
+## 1. Method Decision Matrix & When to Use
 
-Test differential-expression results against explicit pathway gene sets. ORA uses the union of those sets as its background; GSEA ranks all input genes. Gene identifiers must use the same namespace. R adapters are not implemented.
+Choose between threshold-free ranked enrichment (GSEA) and threshold-based Over-Representation Analysis (ORA):
 
-## Inputs & Outputs
+| Input Data & Analytical Goal | Method (`method=`) | Upstream Package | Why |
+|---|---|---|---|
+| **Full ranked DE table** (all expressed genes with `log2FoldChange` and `pvalue`) | Pre-ranked Gene Set Enrichment Analysis (`method="gsea"`) | `gseapy.prerank` | Detects coordinated pathway shifts without arbitrary `padj` / $|\text{LFC}|$ cutoffs |
+| **Discrete DEG list** (e.g., significant up/down genes or a WGCNA module) | Over-Representation Analysis (`method="ora"`) | `gseapy.enrich` or `scipy.stats.hypergeom` + BH-FDR | One-sided Fisher's exact / hypergeometric test against the measured transcriptome background |
+| **Multi-condition or sample-level pathway activity** | Single-sample GSEA / GSVA | `gseapy.ssgsea` / `decoupler` | Scores pathway activity per individual bulk sample for heatmaps or clinical regression |
 
-CLI input is a CSV with `gene`, `log2FoldChange`, `pvalue`, `padj`; `--gene-set-file` is a JSON mapping from pathway names to gene lists. The library accepts the table and mapping directly. CLI writes `tables/enrichment_results.csv`, `tables/enrichment_significant.csv`, report/result files and method-dependent figures.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-## API
+### Pattern A: Idiomatic `gseapy.prerank` (GSEA) and `gseapy.enrich` (ORA)
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+```python
+import numpy as np
+import pandas as pd
+import gseapy as gp
 
-### `enrich(de_results, *, gene_sets, method='ora', padj_cutoff=0.05, lfc_cutoff=1.0, random_state=42)`
+# 1. Load full DE results (indexed or columned by gene symbol)
+de_df = pd.read_csv("tables/de_results.csv").dropna(subset=["gene", "log2FoldChange", "pvalue"])
 
-Test pathway enrichment without choosing a reference database.
+# 2. Construct signed ranking metric: sign(LFC) * -log10(pvalue), breaking ties cleanly
+p_clipped = de_df["pvalue"].clip(lower=1e-300)
+de_df["rank_metric"] = np.sign(de_df["log2FoldChange"]) * (-np.log10(p_clipped))
+rnk = de_df.set_index("gene")["rank_metric"].sort_values(ascending=False)
 
-:param de_results: DataFrame with gene, log2FoldChange, pvalue and padj.
-:param gene_sets: Nonempty mapping from pathway names to unique gene lists.
-:param method: CLI default ora; gsea runs GSEApy prerank.
-:param padj_cutoff: CLI significance threshold, default 0.05.
-:param lfc_cutoff: Strict absolute fold-change threshold, default 1.0.
-:param random_state: Local permutation seed, legacy default 42.
-:returns: Enrichment DataFrame with execution diagnostics in attrs.
-:raises ValueError: Missing reference, invalid values or unsupported method.
+# 3A. Run pre-ranked GSEA against MSigDB Hallmark or local GMT/JSON gene sets
+pre_res = gp.prerank(
+    rnk=rnk,
+    gene_sets="MSigDB_Hallmark_2020",  # or dict[str, list[str]] / path to .gmt
+    min_size=10,
+    max_size=500,
+    permutation_num=1000,
+    seed=42,
+    outdir=None,
+    no_plot=True,
+)
+gsea_table = pre_res.res2d.sort_values("FDR q-val")
 
-### `run_info(result, *, keep=True)`
-
-Read tested terms, pathway universe and requested/executed methods.
-
-:param result: DataFrame returned by enrich.
-:param keep: Default True; False removes diagnostic attrs.
-:returns: Diagnostic dictionary; empty after removal.
-
-### `enrichment_figure(result)`
-
-Plot pathway adjusted significance without saving it.
-
-:param result: Enrichment DataFrame with term and padj columns.
-:returns: matplotlib Figure.
-:raises KeyError: Required columns are missing.
-
-<!-- api:end -->
-
-## Key CLI
-
-```bash
-python skills/bulkrna/bulkrna-enrichment/bulkrna_enrichment.py --demo --output /tmp/bulkrna-enrichment
-python skills/bulkrna/bulkrna-enrichment/bulkrna_enrichment.py --input de.csv --gene-set-file pathways.json --output results/enrichment --method ora
+# 3B. Run Over-Representation Analysis (ORA) with explicit expressed-gene background
+sig_genes = de_df.loc[(de_df["padj"] < 0.05) & (de_df["log2FoldChange"].abs() >= 1.0), "gene"].tolist()
+ora_res = gp.enrich(
+    gene_list=sig_genes,
+    gene_sets="KEGG_2021_Human",
+    background=de_df["gene"].unique().tolist(),
+    outdir=None,
+)
 ```
 
-## Gotchas
+### Pattern B: Offline Hypergeometric ORA via `use_skill("bulkrna-enrichment")`
 
-- `run_info(result)['background_genes']` is the pathway-union background, not all measured genes. Choose reference sets accordingly.
-- `run_info(result)['executed_method']` and `fallback_reason` disclose fallback calculations. The built-in GSEA fallback is a mean-rank permutation test, not GSEA; fallback emits a warning.
-- `tables/enrichment_results.csv` may be empty when no terms overlap. Demo pathways are available only with `--demo`; real input requires an explicit reference.
-- `run_info(result)['method_used']` distinguishes GSEApy and built-in calculations. The legacy `ora_r` and `gsea_r` flags now reject an unimplemented backend rather than silently changing it.
+```python
+# Calling use_skill("bulkrna-enrichment") auto-injects kernel.py helpers into the python kernel:
+ora_df = hypergeometric_ora(
+    query_genes=sig_genes,
+    gene_sets=pathway_dict,
+    background_genes=de_df["gene"].unique().tolist(),
+)
+rnk_series = build_prerank_series(de_df)
+```
+
+## 3. Output Format & Verification Contract
+
+- **Full Enrichment Table** (`tables/enrichment_results.csv`):
+  - For ORA: `term`, `overlap_count`, `term_size`, `fold_enrichment`, `pvalue`, `padj`, `overlap_genes`.
+  - For GSEA: `term`, `es`, `nes`, `pvalue`, `padj` (`FDR q-val`), `lead_genes`.
+- **Significant Pathways** (`tables/enrichment_significant.csv`):
+  - Subset with `padj < 0.05` sorted by `padj` ascending.
+- **Verification Invariants**:
+  - `0 <= pvalue <= 1` and `0 <= padj <= 1` for all tested terms.
+  - Overlap counts never exceed `len(query_genes)` or `term_size`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Always Supply the Expressed Transcriptome as the ORA Background**:
+   - Using the entire human genome (~20,000 genes) instead of the ~12,000 genes actually expressed in your tissue artificially inflates significance for tissue-specific pathways. Pass `background=de_df["gene"].unique().tolist()` to `gseapy.enrich` or `hypergeometric_ora`.
+2. **Avoid Ranking GSEA Strictly by `log2FoldChange` Without Shrinkage**:
+   - Unshrunken `log2FoldChange` from `DESeq2` places lowly expressed, high-variance genes at the extreme top and bottom of the ranked list. Either use `apeglm`/`ashr` shrunken LFCs or rank by the signed Wald statistic (`stat` column or $\text{sign}(\text{LFC}) \times -\log_{10}(p)$).
+3. **Duplicate Gene Symbols in Ranked Lists**:
+   - After Ensembl-to-symbol conversion, multiple transcripts may share a gene symbol. Deduplicate by keeping the entry with the largest $|\text{stat}|$ before calling `gseapy.prerank` (`df.sort_values("pvalue").drop_duplicates("gene")`).
+4. **Separate Up- and Down-Regulated ORA vs. Combined ORA**:
+   - Running ORA separately on up-regulated (`LFC > 1`) and down-regulated (`LFC < -1`) DEGs often reveals directional pathway activation that is diluted when both lists are pooled.
 
 ## Dependencies
 

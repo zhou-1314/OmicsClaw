@@ -13,124 +13,86 @@ tags:
 - spliced-unspliced
 ---
 
-# sc-velocity-prep
+# Single-Cell RNA Velocity Layer Preparation via Velocyto / STARsolo (`sc-velocity-prep`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
 
-This is CLI_ONLY: it runs external preparation tools or imports their files.
+Use this skill to construct or import `adata.layers["spliced"]`, `adata.layers["unspliced"]`, and optional `adata.layers["ambiguous"]` from upstream `.loom` files, STARsolo `Velocyto/raw` matrix directories, Cell Ranger BAMs, or paired FASTQs—and optionally merge those splicing layers into an already-clustered base AnnData (`--base-h5ad`) prior to running `sc-velocity`.
+
+| Upstream Input Artifact | Recommended Backend | Tool / Loader | Required Reference Assets |
+|---|---|---|---|
+| **Existing `.loom` file** (from `velocyto run10x` / `velocyto run`) | **Loom Import** | `scvelo.read_loom` / `anndata.read_loom` + `scv.utils.merge` | None (splicing matrices already quantified) |
+| **Existing STARsolo `Solo.out/Velocyto/` directory** | **STARsolo Directory Loader** (`starsolo`) | Read `spliced.mtx`, `unspliced.mtx`, `ambiguous.mtx` + `barcodes.tsv` + `features.tsv` | None (loads precomputed matrices directly) |
+| **Cell Ranger BAM (`possorted_genome_bam.bam`) + `barcodes.tsv`** | **Velocyto CLI** (`velocyto`) | `velocyto run -b barcodes.tsv -o out/ bam genes.gtf` | Reference gene annotation `--gtf` (`genes.gtf`) |
+| **Raw paired-end FASTQ (`R1`/`R2`)** | **STARsolo Velocyto** (`starsolo`) | `STAR --soloType CB_UMI_Simple --soloFeatures Gene Velocyto` | STAR genome index (`--reference`), `--chemistry` (`10xv2`/`10xv3`), barcode `--whitelist` |
+
+> **Decision Rule**: If `.loom` or `Solo.out/Velocyto/` matrices already exist on disk, load and merge them directly into your processed AnnData without re-running BAM/FASTQ alignment.
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Loading a `.loom` or STARsolo Velocyto Matrix & Merging into Base `AnnData`
 
 ```python
-from skills._sdk.notebook import run_cli
+import numpy as np
+import pandas as pd
+import scanpy as sc
+from scipy import io, sparse
 
-run_cli("sc-velocity-prep", "--input", "data/velocity.loom",
-        "--base-h5ad", "data/clustered.h5ad",
-        inputs=["data/velocity.loom", "data/clustered.h5ad"])
+# Option 1: Load STARsolo Solo.out/Velocyto/raw (or filtered) directory
+vel_dir = Path("Solo.out/Velocyto/filtered")
+barcodes = pd.read_csv(vel_dir / "barcodes.tsv", header=None, sep="\t")[0].astype(str).to_numpy()
+features = pd.read_csv(vel_dir / "features.tsv", header=None, sep="\t")
+gene_names = features[1].astype(str).to_numpy() if features.shape[1] > 1 else features[0].astype(str).to_numpy()
+
+spliced = io.mmread(vel_dir / "spliced.mtx").T.tocsr()
+unspliced = io.mmread(vel_dir / "unspliced.mtx").T.tocsr()
+ambiguous = io.mmread(vel_dir / "ambiguous.mtx").T.tocsr()
+
+# Option 2: Merge spliced/unspliced layers onto an existing processed base_adata
+# Clean barcode prefixes/suffixes (e.g. 'sample:AAACCCA...-1x' -> 'AAACCCA...') before intersecting
+clean_bc = lambda idx: pd.Index(idx).astype(str).str.replace(r"^.*:", "", regex=True).str.replace(r"(-\d+|x)$", "", regex=True)
+base_adata.obs_names = clean_bc(base_adata.obs_names)
+vel_adata.obs_names = clean_bc(vel_adata.obs_names)
+vel_adata.var_names_make_unique()
+
+common_cells = base_adata.obs_names.intersection(vel_adata.obs_names)
+common_genes = base_adata.var_names.intersection(vel_adata.var_names)
+merged = base_adata[common_cells, common_genes].copy()
+for layer in ("spliced", "unspliced", "ambiguous"):
+    if layer in vel_adata.layers:
+        merged.layers[layer] = vel_adata[common_cells, common_genes].layers[layer].copy()
 ```
 
-The demo splits PBMC3k counts into fixed 82% spliced, 14% unspliced and
-4% ambiguous layers. It checks packaging, not velocity biology or external
-tool installation. There is no `_api.py` for this skill.
+### Optional Micro-Helper (`kernel.py`)
 
-## When to use
+Calling `use_skill("sc-velocity-prep")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `merge_velocity_layers(base_adata, velocity_adata)`
+- `velocity_layer_summary(adata)`
+- `top_splicing_genes(adata, n_top=30)`
 
-The user has raw Cell Ranger output (BAM + barcodes), STARsolo output,
-or paired FASTQs and needs an AnnData with `layers["spliced"]` /
-`layers["unspliced"]` (and optional `layers["ambiguous"]`) before
-running `sc-velocity`. Two backends:
+## 3. Output Format & Verification Contract
 
-- `velocyto` (default) — runs `velocyto run` against a Cell Ranger BAM
-  using a GTF. Produces a `.loom` and reads it back into AnnData.
-- `starsolo` — re-runs alignment from FASTQ via STARsolo with the
-  Velocyto solo subworkflow, or loads existing STARsolo Velocyto
-  output directly when detected.
+- **Velocity-Ready AnnData** (`processed.h5ad` / `velocity_input.h5ad`):
+  - `adata.layers["spliced"]`: non-negative count matrix `(n_obs, n_vars)`.
+  - `adata.layers["unspliced"]`: non-negative count matrix `(n_obs, n_vars)`.
+  - Optional `adata.layers["ambiguous"]`: non-negative count matrix `(n_obs, n_vars)`.
+- **Tabular Outputs**:
+  - `tables/velocity_layer_summary.csv`: `layer`, `total_counts`, `fraction_of_total`, `mean_per_cell`, `nonzero_fraction`.
+  - `tables/top_velocity_genes.csv`: `gene`, `spliced_counts`, `unspliced_counts`, `unspliced_fraction`.
+- **Verification Invariants**:
+  - Assert `"spliced" in adata.layers and "unspliced" in adata.layers`.
+  - Assert `adata.layers["spliced"].sum() > 0` and `adata.layers["unspliced"].sum() > 0` (typical intronic `unspliced` fraction is $10\%\text{--}35\%$ of total UMI counts).
 
-`--base-h5ad` lets you merge the velocity layers into an
-already-processed AnnData (preserves `obs` / `obsm` / clustering).
+## 4. Gotchas & Troubleshooting
 
-For velocity estimation itself use `sc-velocity`. For non-velocity
-scRNA preprocessing use `sc-preprocessing`.
-
-## Inputs & Outputs
-
-**Inputs**
-
-- Input kinds: `file`, `directory`
-- Modalities: scrna
-- File types: `.loom`, `.fastq`, `.fq`
-- FASTQ structure: valid first record; `paired` layout
-- Directory layouts (any): `paired-fastq`, `cellranger-output`, `starsolo-velocity`
-
-**Outputs**
-
-- `tables/top_velocity_genes.csv`
-- `tables/velocity_layer_summary.csv`
-- `figures/velocity_gene_balance.png`
-- `figures/velocity_layer_fraction.png`
-- `figures/velocity_layer_summary.png`
-- `figures/velocity_top_genes_stacked.png`
-- `processed.h5ad`
-- `velocity_input.h5ad`
-- `figures/manifest.json`, `figure_data/manifest.json`, plot-data CSV files
-- `reproducibility/commands.sh`, `reproducibility/requirements.txt`
-- Conditional backend artifacts under `artifacts/`; imported loom/STARsolo inputs do not create new BAM files.
-- `report.md`
-- `result.json`
-- Processed AnnData — `spliced`, `unspliced` layers; `ambiguous` only when supplied by the source
-
-## Flow
-
-1. Resolve `--input` (Cell Ranger dir / STARsolo dir / FASTQ / `.loom`).
-2. For `velocyto`: locate BAM + barcodes, validate `--gtf` (or auto-pick from `resources/singlecell/references/gtf/`), run `velocyto run`, load `.loom`.
-3. For `starsolo`: detect existing STARsolo Velocyto output and load directly, OR re-run STARsolo Velocyto with `--reference` + `--chemistry` + auto-detected `--whitelist`.
-4. Optionally merge layers into `--base-h5ad`.
-5. Compute layer totals (`tables/velocity_layer_summary.csv`) and top-gene balance.
-6. Save `processed.h5ad`, tables, figures, `report.md`, `result.json`.
-
-## Gotchas
-
-- **BAM-backed velocyto needs a GTF.** `sc_velocity_prep.py` raises `ValueError("BAM-backed velocyto preparation requires a GTF file. Pass `--gtf /abs/path/to/genes.gtf`, or keep one under `resources/singlecell/references/gtf/`. ...")`. Auto-detection only fires if a project-local GTF lives at the recommended path.
-- **FASTQ-backed STARsolo needs a STAR index AND explicit chemistry.** `sc_velocity_prep.py` raises `ValueError("FASTQ-backed STARsolo velocity preparation requires a STAR genome directory. ...")` if `--reference` is missing and nothing's at `resources/singlecell/references/starsolo/`. `sc_velocity_prep.py` raises `ValueError("FASTQ-backed STARsolo velocity preparation requires an explicit `--chemistry`.")` when `--chemistry auto` is left as the default — STARsolo cannot infer 10x v2 vs v3 vs v4 from FASTQ alone.
-- **STARsolo whitelist is auto-guessed; missing → hard fail.** `sc_velocity_prep.py` raises `ValueError("Could not infer a compatible STARsolo whitelist. Pass `--whitelist /abs/path/to/3M-february-2018.txt`, or keep the whitelist under `resources/singlecell/references/whitelists/`. ...")`. The guesser uses the reference path + chemistry; a non-standard reference layout breaks it.
-- **STARsolo Velocyto matrix loader has a fallback for index-name quirks.** `sc_velocity_prep.py` is documented as "with a local fallback for index-name quirks"; `_load_starsolo_velocyto_dir_safe` raises `FileNotFoundError(f"Could not locate STARsolo Velocyto matrices under: {path}")` when nothing matches even with the fallback. Common when STARsolo finished partial / was killed mid-run.
-- **`--input` mandatory unless `--demo` (parser.error, exit code 2).** `sc_velocity_prep.py` calls `parser.error("--input required when not using --demo")`. Once provided, `main` raises `FileNotFoundError(f"Input path not found: {input_path}")` for a missing path.
-- **`--method` choices are exactly `velocyto` / `starsolo`.** `sc_velocity_prep.py` declares the choices via argparse; `kb-python` is mentioned in upstream-prep docstrings but is not a valid `--method` value here. Use the dedicated kb-python tooling outside OmicsClaw if you need that path.
-- `sc_velocity_prep.py:main` defaults to eight threads. Reference directories named in error messages are suggestions, not shipped assets. Verify the `velocyto` command can import before a long BAM run; migration preflight found `undefined symbol: __log10_finite` in the installed copy despite its presence on PATH.
-- `sc_velocity_prep.py:main` writes a new `.raw` snapshot and records `.X` as raw counts even when `--base-h5ad` contains normalized `.X`. `_lib/upstream.py:merge_velocity_layers` also replaces `layers["counts"]` with the velocity input's counts (the sum of its available splicing layers for imported data). Inspect this existing contract mismatch before treating the merged object's `.X` or `.raw` as counts; the spliced/unspliced layers remain separate.
-
-## Key CLI
-
-```bash
-# Demo (proportional PBMC3k layers; no velocyto / STARsolo)
-python skills/singlecell/scrna/sc-velocity-prep/sc_velocity_prep.py --demo --output /tmp/sc_velo_prep_demo
-
-# velocyto from a Cell Ranger run (BAM-backed)
-python skills/singlecell/scrna/sc-velocity-prep/sc_velocity_prep.py \
-  --input /data/cellranger_run/ --output results/ \
-  --method velocyto --gtf /refs/Homo_sapiens.GRCh38.gtf
-
-# Load existing STARsolo Velocyto output directly
-python skills/singlecell/scrna/sc-velocity-prep/sc_velocity_prep.py \
-  --input /data/starsolo_run/ --output results/ \
-  --method starsolo
-
-# Re-run STARsolo from FASTQ (chemistry must be explicit)
-python skills/singlecell/scrna/sc-velocity-prep/sc_velocity_prep.py \
-  --input /data/fastqs/ --output results/ \
-  --method starsolo --reference /refs/star_index --chemistry 10xv3
-
-# Merge velocity layers into an existing processed AnnData
-python skills/singlecell/scrna/sc-velocity-prep/sc_velocity_prep.py \
-  --input /data/cellranger_run/ --output results/ \
-  --method velocyto --gtf /refs/Homo_sapiens.GRCh38.gtf \
-  --base-h5ad /path/to/clustered.h5ad
-```
-
-## See also
-
-- `references/parameters.md` — every CLI flag, per-backend tunables
-- `references/methodology.md` — when velocyto vs STARsolo wins; whitelist conventions
-- `references/output_contract.md` — `layers["spliced"]` / `layers["unspliced"]` / `layers["ambiguous"]` schema
-- Adjacent skills: `sc-count` / `sc-multi-count` (upstream — produce the Cell Ranger / STARsolo output this skill consumes), `sc-velocity` (downstream — consumes `layers["spliced"]` + `layers["unspliced"]`), `sc-clustering` (parallel — pass clustered output as `--base-h5ad` to keep clusters when adding velocity layers)
+1. **Barcode Prefix/Suffix Mismatch Between `.loom` and `.h5ad`**:
+   - `velocyto` writes barcodes in the format `<sample_name>:<16bp_barcode>x`, whereas 10x Cell Ranger `.h5ad` files use `<16bp_barcode>-1`. Always strip sample prefixes and `-1`/`x` suffixes (`scv.utils.clean_obs_names` or `merge_velocity_layers`) before intersecting `obs_names`.
+2. **BAM-Backed `velocyto` Requires Matching GTF (`--gtf`)**:
+   - Running `velocyto run` on a Cell Ranger BAM requires the exact genome assembly GTF (`genes.gtf`) used during alignment; mismatched chromosome names (`chr1` vs. `1`) produce zero unspliced counts.
+3. **FASTQ-Backed `STARsolo` Requires Explicit `--chemistry` & `--whitelist`**:
+   - `STARsolo` cannot infer 10x chemistry (`10xv2` vs. `10xv3`) from FASTQ reads alone. Always pass `--reference`, `--chemistry`, and the matching 10x barcode `--whitelist`.
+4. **Preserving `.X` Normalization When Merging Into `--base-h5ad`**:
+   - When merging `spliced`/`unspliced` layers from raw velocity output into an already log-normalized and clustered `base_adata`, attach the splicing matrices into `merged.layers["spliced"]` and `merged.layers["unspliced"]` without overwriting the normalized `merged.X` or `merged.obsm["X_umap"]`.
 
 ## Dependencies
 

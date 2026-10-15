@@ -14,106 +14,64 @@ tags:
 - site-localization
 ---
 
-# proteomics-ptm
+# Post-Translational Modification (PTM) Site Localization & Analysis (`proteomics-ptm`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Class I starts at loc_threshold (default 0.75); Class II starts at 0.50. The PTM type is case-sensitive.
-Use existing search-engine tables; this skill does not search raw spectra.
+Select the PTM localization algorithm and confidence tier according to the PTM enrichment workflow:
 
-## Use from a step
+| PTM Workflow | Upstream Localization Engine | Localization Confidence Metric | Standard Cutoff |
+|---|---|---|---|
+| **MaxQuant (`Phospho (STY)Sites.txt`, `Acetyl (K)Sites.txt`)** | **Andromeda PTM Score** (Olsen et al., *Cell* 2006) | `Localization prob` ($P \in [0, 1]$) | **Class I**: $P \ge 0.75$; **Class II**: $0.50 \le P < 0.75$; **Class III**: $P < 0.25 - 0.50$ |
+| **FragPipe (`MSFragger` + `PTM-Shepherd` / `luCIpher`)** | **PTMProphet** / **Ascore** | Site localization probability ($P \ge 0.75$) or $\text{Ascore} \ge 13$ ($p \le 0.05$) | Retain localized Class I sites ($P \ge 0.75$) for motif/kinase analysis |
+| **DIA-NN / Spectronaut PTM** | `PTM.Site.Confidence` (`--var-mod UniMod:21,79.966331,STY`) | Peptidoform site confidence score | `PTM.Site.Confidence >= 0.75` and `PTM.Q.Value <= 0.01` |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Olsen Class I ($P \ge 0.75$) Site Filtering & Protein-Abundance Normalization
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('proteomics-ptm')
-data = library.demo_data(random_state=42)
-result = library.classify_sites(data)
-write_output(result, 'tables/ptm_sites.csv')
+import numpy as np
+import pandas as pd
+
+# 1. Load site table and assign Olsen et al. localization classes
+sites = pd.read_csv("Phospho_STY_Sites.csv")
+sites["site_class"] = np.where(
+    sites["localization_probability"] >= 0.75, "Class I",
+    np.where(sites["localization_probability"] >= 0.50, "Class II", "Class III"),
+)
+class1 = sites[sites["site_class"] == "Class I"].copy()
+
+# 2. Normalize log2 PTM site changes by matched global protein log2 changes (avoid protein-level confounding)
+# net_ptm_log2fc = ptm_log2fc - global_protein_log2fc
 ```
 
-For real data, use `read_input` and pass any `read_table` helper as `reader=`.
-The executable `examples/example_step.py` also checks the result and writes a Figure.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("proteomics-ptm")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `classify_sites(data: pd.DataFrame, *, loc_threshold: float=0.75) -> pd.DataFrame`
-
-Return a new PTM table with localization confidence classes.
-
-:param data: Site rows with protein and ptm_type; localization_probability is optional.
-:param loc_threshold: CLI default 0.75 for Class I; Class II starts at 0.50.
-:returns: Classified sites with summary diagnostics in attrs.
-:raises ValueError: Required columns are absent or the threshold is outside [0.5, 1].
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read PTM classification diagnostics.
-
-:param table: Classified PTM sites.
-:param keep: True preserves attrs; False removes diagnostics.
-:returns: A separate dictionary with localization threshold and summary.
-:raises TypeError: The input is not a DataFrame.
-
-### `class_figure(table: pd.DataFrame)`
-
-Plot site counts by localization class.
-
-:param table: Classified PTM sites containing site_class.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: site_class is absent.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Generate synthetic PTM sites in memory.
-
-:param random_state: CLI seed 42; change for another simulation.
-:returns: Two hundred synthetic site records.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Class I starts at loc_threshold (default 0.75); Class II starts at 0.50. The PTM type is case-sensitive.
-Functions return new DataFrames. `run_info(result)` reads diagnostic attrs;
-use `keep=False` before serialization when those attrs are not needed.
-
-## Gotchas
-
-- classify_sites returns Unknown when localization_probability is absent. tables/ptm_class_I_sites.csv can be empty.
-- `demo_data` uses seed 42, matching the CLI; every demo is synthetic.
-- `run_info` lives in DataFrame attrs and is not preserved by CSV serialization.
-
-## Inputs and outputs
-
-The CLI reads CSV tables and writes:
-
-- tables/ptm_sites.csv
-- tables/ptm_class_I_sites.csv
-- report.md
-- result.json
-- `demo_ptm_sites.csv` is written only with `--demo`.
-
-Functions return data and Figures without writing files. Steps own their outputs.
-Demo mode also writes its synthetic input when the original CLI used a file.
-
-## CLI
-
-```bash
-python skills/proteomics/proteomics-ptm/proteomics_ptm.py --demo --output /tmp/proteomics_ptm
+```python
+# Calling use_skill("proteomics-ptm") auto-injects kernel.py helpers into the python kernel:
+classified = classify_sites(sites, loc_threshold=0.75)
+class1_sites = class_i_sites(classified)
 ```
 
-For real input replace `--demo` with `--input <table>`.
+## 3. Output Format & Verification Contract
 
+- **Classified PTM Sites Table** (`tables/ptm_sites.csv`):
+  - Contains all input PTM site columns (`protein`, `ptm_type`, optional `residue`, `position`, `localization_probability`) plus `site_class` (`"Class I"`, `"Class II"`, `"Class III"`, or `"Unknown"` when `localization_probability` is absent).
+- **High-Confidence Class I Subset** (`tables/ptm_class_I_sites.csv`):
+  - Subset of rows with `site_class == "Class I"` (`localization_probability >= loc_threshold`).
+- **Verification Invariants**:
+  - `0.50 <= loc_threshold <= 1.0`.
+  - Every site with `localization_probability >= loc_threshold` is labeled `"Class I"`.
 
-## See also
+## 4. Gotchas & Troubleshooting
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
-- `proteomics-data-import` for protein-table normalization; `proteomics-de` for comparisons.
+1. **Confounding PTM Stoichiometry Changes with Host Protein Expression Changes**:
+   - A 4-fold increase in a phosphopeptide (`S473`) may simply reflect a 4-fold transcriptional induction of the total protein rather than kinase activation. Whenever a matched global proteome dataset exists, subtract the host protein's $\log_2\text{FC}$ ($\Delta\log_2\text{PTM}_{\text{net}} = \log_2\text{FC}_{\text{PTM}} - \log_2\text{FC}_{\text{protein}}$) or include total protein abundance as a covariate (`MSstatsPTM`).
+2. **Adjacent Ser/Thr/Tyr Ambiguity Without Site-Determining Fragment Ions**:
+   - A peptide containing `...SSY...` with one phosphate (+79.9663 Da) requires $b/y$ fragment ions cleaving *between* the candidate residues to localize the modification. Never feed Class II/III (`localization_probability < 0.75`) sites into sequence-logo motif finders (`motif-x`) or Kinase-Substrate Enrichment Analysis (`KSEA`).
+3. **MaxQuant Site Multiplicity (`___1`, `___2`, `___3`) Columns**:
+   - MaxQuant splits site intensities by the number of modifications on the supporting peptide (`Intensity sample___1`, `___2`, `___3`). Ensure multiplicity columns are flattened or analyzed consistently rather than dropped.
 
 ## Dependencies
 

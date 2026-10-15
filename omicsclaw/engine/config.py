@@ -44,14 +44,8 @@ class EngineConfig:
     max_turns: int = 50
     """Model calls one run may make. ``<= 0`` means no ceiling.
 
-    50 is chosen against two known points rather than picked. The
-    reference harness uses 500, tuned for unattended long-horizon coding
-    runs. The legacy OmicsClaw loop uses
-    ``OMICSCLAW_MAX_TOOL_ITERATIONS=20``, and
-    ``docs/evaluation/cross-agent-benchmark-guide.md`` records that 20 is
-    too low: it stalls the 30-turn benchmark tasks outright. 50 clears
-    that documented failure point without letting a first version run
-    away for 500 turns.
+    The default budget is 50 model calls. Deployments may raise it for
+    longer analyses or set it to zero to remove the ceiling.
 
     Counted in model calls, and checked *before* each one, so
     ``max_turns=1`` permits exactly one call.

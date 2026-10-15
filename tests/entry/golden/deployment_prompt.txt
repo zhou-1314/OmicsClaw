@@ -8,7 +8,7 @@
 ## Tool guidance
 
 - Prefer the tool that answers a question exactly: read a file with read_file rather than `cat` under bash.
-- For a complex multi-step analysis, find the domain guidance first: search the skill catalogue with `search_skills`, load the matching skill with `use_skill`, then write code.
+- For a complex multi-step analysis, find the domain guidance first: search the skill catalogue with `search_skills`, load the matching skill with `use_skill`, then run cells interactively on the session's persistent kernel with `python` (variables and loaded skill helpers persist across calls; use `live_app` for interactive views and `save_artifact` for exported tables or reports).
 - Every path is resolved inside the workspace sandbox; a path that leaves it is refused, not clamped.
 - A tool that asks for approval is waiting on a person. Its reported duration includes that wait.
 - A failed tool call is information, not an ending: read the error and correct the call.

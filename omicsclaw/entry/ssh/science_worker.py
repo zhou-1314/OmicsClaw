@@ -27,8 +27,38 @@ MAX_EVENTS_BYTES = 4 * 1024 * 1024
 MAX_EVENT_BYTES = 64 * 1024
 
 
+def write_result(value, target: Path, suffix: str) -> None:
+    """Write a scientific return using the established file-format conventions."""
+    def json_value(item):
+        if hasattr(item, "tolist"):
+            return item.tolist()
+        if hasattr(item, "item"):
+            return item.item()
+        if isinstance(item, Path):
+            return str(item)
+        raise TypeError(f"{type(item).__name__} is not JSON serialisable")
+
+    suffix = suffix.lower()
+    if suffix == ".h5ad" and hasattr(value, "write_h5ad"):
+        value.write_h5ad(target)
+    elif suffix in {".csv", ".tsv"} and hasattr(value, "to_csv"):
+        index = getattr(value, "index", None)
+        keep_index = not (index is not None and type(index).__name__ == "RangeIndex")
+        value.to_csv(target, sep="\t" if suffix == ".tsv" else ",", index=keep_index)
+    elif suffix == ".parquet" and hasattr(value, "to_parquet"):
+        value.to_parquet(target)
+    elif suffix in {".png", ".pdf", ".svg"} and hasattr(value, "savefig"):
+        value.savefig(target, dpi=150, bbox_inches="tight", format=suffix[1:])
+    elif suffix == ".json" and isinstance(value, (dict, list)):
+        target.write_text(json.dumps(value, indent=2, default=json_value) + "\n", encoding="utf-8")
+    elif suffix in {".md", ".txt"} and isinstance(value, str):
+        target.write_text(value, encoding="utf-8")
+    else:
+        raise ValueError(f"no writer for {type(value).__name__} as {suffix}")
+
+
 def persist_result(result, workspace, *, writer):
-    """Reuse the SDK serializer for an API return, inside the worker only."""
+    """Serialize a return inside the worker and publish its files atomically."""
     if hasattr(result, "write_h5ad"):
         suffix = ".h5ad"
     elif hasattr(result, "to_csv"):

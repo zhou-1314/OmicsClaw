@@ -13,86 +13,68 @@ tags:
 - tic
 ---
 
-# metabolomics-quantification
+# Metabolomics Missing-Value Imputation & Feature Quantification (`metabolomics-quantification`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Impute zeros/NaNs and normalize sample intensities while keeping feature metadata. Use metabolomics-normalization for normalization alone.
+Select the missing-value imputation and scaling pipeline according to the missingness mechanism in LC-MS/GC-MS feature tables:
 
-## Use from a step
+| Missingness Mechanism | Recommended Imputation (`impute=`) | Upstream Algorithm / Formula | Why |
+|---|---|---|---|
+| **Limit of Detection (LOD / MNAR)** — trace/absent xenobiotics or condition-specific metabolites | **Half-Minimum (`impute="min"`)** or **QRILC** | Replace `0` / `NaN` with $\frac{1}{2} \min_{i,s > 0}(I_{i,s})$ (or per-feature $1/5 \min$) | Preserves low-abundance ranking for left-censored peaks below the MS noise floor |
+| **Random Technical Dropout (MAR)** — missed peak integration or gap-filling failure | **$k$-Nearest Neighbors (`impute="knn"`)** or **Random Forest (`MissForest`)** | `sklearn.impute.KNNImputer(n_neighbors=5)` across correlated features | Borrows intensity structure from co-regulated/correlated metabolic features |
+| **Quick Baseline Exploration** | **Sample Median (`impute="median"`)** | Replace `0` / `NaN` with each sample's positive median | Simple non-parametric baseline when missingness is $< 5\%$ |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: 80%-Rule Filtering + KNN / Half-Min Imputation + TIC / PQN Normalization
 
 ```python
+import numpy as np
 import pandas as pd
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("metabolomics-quantification")
-data = read_input('features.csv', reader=pd.read_csv)
-result = library.quantify(data)
-write_output(result, 'tables/result.csv')
+from sklearn.impute import KNNImputer
+
+# 1. Treat both 0 and NaN as missing values in LC-MS feature tables
+df = pd.read_csv("data/peak_table.csv")
+sample_cols = [c for c in df.columns if c.startswith(("sample_", "intensity_", "ctrl_", "treat_"))]
+mat = df[sample_cols].replace(0, np.nan).astype(float)
+
+# 2. Apply the metabolomics "80% rule": retain features present in >= 80% of samples (or >= 80% of at least one group)
+keep_mask = mat.notna().mean(axis=1) >= 0.80
+mat = mat.loc[keep_mask]
+
+# 3. Impute remaining MAR gaps with kNN (k=5) or MNAR half-minimum, then TIC-normalize
+imputed = pd.DataFrame(KNNImputer(n_neighbors=5).fit_transform(mat.T).T, index=mat.index, columns=mat.columns)
+col_sums = imputed.sum(axis=0)
+tic_norm = imputed.div(col_sums, axis=1) * col_sums.median()
 ```
 
-[examples/example_step.py](examples/example_step.py) runs a seeded synthetic
-example through the step runner and writes a table and Figure. Computations
-return new DataFrames, leave the input unchanged and expose diagnostics through
-`run_info(result)`. Plotting functions write no files.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("metabolomics-quantification")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `quantify(data, *, impute='min', normalize='tic')`
-
-Return imputed and normalized intensities with metadata preserved.
-
-:param data: Feature table with sample/intensity columns; zeros and NaNs are missing.
-:param impute: CLI default min (half global positive minimum); median or knn also work.
-:param normalize: CLI default tic; median or log are alternatives.
-:returns: A new DataFrame with missing-value counts in attrs['run_info'].
-:raises ValueError: Samples are absent, have no positive observations or a method is unknown.
-:raises ImportError: KNN requires scikit-learn; use install_skill_deps.
-
-### `run_info(data, *, keep=True)`
-
-Read diagnostics attached to a returned table.
-
-:param data: DataFrame returned by this library.
-:param keep: Default True; use False in the CLI to remove diagnostics.
-:returns: An independent dictionary describing the run.
-:raises ValueError: The table carries no run_info.
-
-### `distribution_figure(data)`
-
-Plot sample intensities, excluding numeric feature metadata.
-
-:param data: The input or quantified feature table.
-:returns: A matplotlib Figure.
-:raises ValueError: No numeric sample columns are available.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Min imputation uses half the global positive minimum, median uses each column positive median, and KNN uses neighbouring feature rows with up to five neighbours. TIC scales column sums to their median; median scales column medians; log computes log2(x+1).
-
-## Gotchas
-
-- `quantify` detects sample/intensity prefixes, then numeric columns excluding feature_id, mz, rt, name and id. Every sample needs a positive observed intensity; completely missing samples raise ValueError for all methods.
-
-## Inputs and outputs
-
-CSV input; `tables/quantified_features.csv`, `report.md` and `result.json`. Demo mode also writes its synthetic input CSV at the output root.
-The function library returns objects; the CLI and step own file writes.
-
-## CLI
-
-```bash
-python skills/metabolomics/metabolomics-quantification/met_quantify.py --demo --output /tmp/metabolomics_quantification
+```python
+# Calling use_skill("metabolomics-quantification") auto-injects kernel.py helpers into the python kernel:
+q_df = quantify(df, impute="min", normalize="tic")
+summary = quantification_summary(q_df)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- [Parameters](references/parameters.md)
-- [Methodology](references/methodology.md)
-- [Output contract](references/output_contract.md)
+- **Quantified Feature Table** (`tables/quantified_features.csv`):
+  - Preserves non-sample metadata columns (`feature_id`, `mz`, `rt`, `name`) alongside imputed and normalized numeric sample intensity columns.
+- **Run Diagnostics** (`df.attrs["run_info"]`):
+  - Records `impute`, `normalize`, `n_features`, `n_samples`, and `n_missing_imputed` (count of `0` and `NaN` cells replaced).
+- **Verification Invariants**:
+  - Every sample column must contain at least one strictly positive ($> 0$) observed intensity prior to imputation; completely empty/zero sample columns raise `ValueError`.
+  - After `quantify`, zero `NaN` values remain in the sample intensity columns.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Always Run XCMS/MZmine Chromatographic Gap-Filling (`fillChromPeaks`) Before Statistical Imputation**:
+   - Up to 60% of missing values in raw peak tables occur simply because the peak-picker SNR threshold was slightly missed in one sample even though signal exists in the raw `mzML` chromatogram. Always integrate raw EIC area across the aligned RT window (`fillChromPeaks` in XCMS) before falling back to `min` or `knn` imputation.
+2. **Apply the "80% Rule" Per Biological Group Before Imputing**:
+   - Imputing a feature that is missing in 90% of samples fabricates artificial variance and ties in non-parametric tests. Discard features missing in $>20\%$ of QC runs and present in $<80\%$ of samples across every study group before running `knn` or `min` imputation.
+3. **Zero (`0.0`) Means Missing in Peak Pickers**:
+   - Both `XCMS` (`into` when unintegrated) and `MZmine` export `0` for undetected peaks. Never leave `0` as a literal zero intensity prior to $\log_2$ transformation or KNN imputation.
 
 ## Dependencies
 

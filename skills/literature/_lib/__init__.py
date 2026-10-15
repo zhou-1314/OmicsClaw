@@ -1,1 +1,0 @@
-"""Literature-domain extraction helpers."""

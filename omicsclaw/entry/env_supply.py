@@ -29,6 +29,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from functools import partial
+
 from omicsclaw.envsupply import (
     CORE_STACK_PACKAGES,
     DEFAULT_UV_INDEX_URL,
@@ -42,6 +44,9 @@ from omicsclaw.envsupply import (
     probe_interpreter,
     run_install_script,
 )
+from omicsclaw.envsupply.probe import default_probe_runner
+from omicsclaw.envsupply.script import default_install_runner
+from omicsclaw.tools.builtin.bash import without_control_credentials
 
 __all__ = ["EnvSupplyBinding", "PinnedEnvironmentSupply", "build_env_supply"]
 
@@ -79,8 +84,12 @@ class EnvSupplyBinding:
         self._index_url = index_url
         self._python_mirror = python_mirror
         self._install_timeout_s = float(install_timeout_s)
-        self._probe_runner = probe_runner
-        self._install_runner = install_runner
+        self._probe_runner = probe_runner or partial(
+            default_probe_runner, env_provider=without_control_credentials
+        )
+        self._install_runner = install_runner or partial(
+            default_install_runner, env_provider=without_control_credentials
+        )
 
     # ---- the Protocol ----
 

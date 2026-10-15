@@ -14,100 +14,81 @@ tags:
 - CPM
 ---
 
-# bulkrna-qc
+# Bulk RNA-seq Count Matrix Quality Control (`bulkrna-qc`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Assess raw integer count matrices before bulk differential expression. See the description for adjacent skills.
+Select the count-matrix quality control and normalization diagnostic prior to downstream differential expression or clustering:
 
-## Use from a step
+| QC Check / Diagnostic | Metric / Transformation | Standard Threshold | Why |
+|---|---|---|---|
+| **Sequencing depth & library failure** | Total mapped counts per sample ($\sum_g c_{gi}$) | $> 5\times 10^6$ reads (mRNA-seq); flag libraries $< 10\%$ of cohort median | Detects failed library prep or severe under-sequencing before size-factor estimation |
+| **Transcriptome complexity / saturation** | Detected genes ($c_{gi} > 0$ and $c_{gi} \ge 10$) & top-gene dominance | $> 10,000$ detected protein-coding genes (human/mouse); top-5 genes $< 25\%$ of reads | Identifies PCR jackpotting, rRNA/globin contamination, or degraded FFPE RNA |
+| **Sample-sample concordance & swaps** | Pairwise Pearson/Spearman correlation on $\log_2(\text{CPM} + 1)$ | Within-condition $r \ge 0.90$; flag samples with $|z_r| > 2.5$ below cohort mean | Catches mislabeled samples, batch outliers, or degraded biological replicates |
+| **Exploratory visualization matrix** | Counts Per Million ($\text{CPM}_{gi} = \frac{c_{gi}}{\sum_g c_{gi}} \times 10^6$) | Used for density/PCA plots only | Normalizes library depth for visual QC while keeping raw integer counts untouched for `pydeseq2` |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Idiomatic `pandas` / `scipy` Count Matrix QC & Outlier Detection
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("bulkrna-qc")
-# Supply DataFrames read with read_input(..., reader=...) for your CSV layout.
-result = library.assess(counts)
-write_output(result, "tables/result.csv")
+import numpy as np
+import pandas as pd
+
+# 1. Load gene-by-sample raw integer count matrix
+counts = pd.read_csv("data/counts.csv", index_col=0)
+if (counts.values < 0).any():
+    raise ValueError("Count matrix contains negative values.")
+
+# 2. Compute per-sample library size, gene detection, and CPM normalization
+lib_size = counts.sum(axis=0)
+detected_gt0 = (counts > 0).sum(axis=0)
+detected_ge10 = (counts >= 10).sum(axis=0)
+cpm = counts.div(lib_size.replace(0, np.nan), axis=1) * 1e6
+log2_cpm = np.log2(cpm + 1.0)
+
+# 3. Evaluate sample-sample Pearson correlation and flag low-correlation outliers
+corr_mat = log2_cpm.corr(method="pearson")
+mean_corr = (corr_mat.sum(axis=1) - 1.0) / max(len(corr_mat) - 1, 1)
+z_corr = (mean_corr - mean_corr.mean()) / max(mean_corr.std(ddof=1), 1e-8)
+is_outlier = (z_corr < -2.0) | (lib_size < 0.2 * lib_size.median())
+
+qc_table = pd.DataFrame({
+    "total_counts": lib_size,
+    "detected_genes": detected_gt0,
+    "expressed_genes_ge10": detected_ge10,
+    "mean_sample_corr": mean_corr,
+    "is_outlier": is_outlier,
+})
+qc_table.to_csv("tables/sample_stats.csv")
 ```
 
-The synthetic worked step is in `examples/example_step.py`.
+### Pattern B: Lightweight Micro-Helper via `use_skill("bulkrna-qc")`
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `assess(counts)`
-
-Measure library size and detection on raw counts without changing input.
-
-:param counts: Gene-by-sample nonnegative integer DataFrame with unique labels.
-:returns: Sample-indexed DataFrame with QC metrics and diagnostic attrs.
-:raises ValueError: The matrix is invalid or a sample has no counts.
-
-### `run_info(result, *, keep=True)`
-
-Read QC diagnostics and auxiliary matrices.
-
-:param result: DataFrame returned by assess.
-:param keep: Default True; False removes diagnostics from result.attrs.
-:returns: A diagnostic dictionary, empty when no record remains.
-
-### `normalized_counts(result)`
-
-Return CPM for visualization, not differential-expression input.
-
-:param result: DataFrame returned by assess with its diagnostics retained.
-:returns: New gene-by-sample CPM DataFrame.
-:raises KeyError: QC diagnostics have been removed.
-
-### `library_figure(result)`
-
-Plot total counts per sample without saving files.
-
-:param result: QC table returned by assess.
-:returns: A matplotlib Figure; the caller saves and closes it.
-:raises KeyError: total_counts is missing.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-See [parameters](references/parameters.md) and [methodology](references/methodology.md).
-
-## Gotchas
-
-- `assess` rejects empty libraries instead of producing undefined CPM.
-- `normalized_counts` returns CPM for figures, not DE input.
-- `run_info()['outlier_samples']` is correlation-based; check biological groups before removing samples.
-
-## Inputs and outputs
-
-The library returns objects without file writes. CLI inventory:
-
-**Inputs**
-
-- File types: `.csv`
-
-**Outputs**
-
-- `tables/cpm_normalized.csv`
-- `tables/sample_stats.csv`
-- `figures/expression_density.png`
-- `figures/gene_detection.png`
-- `figures/library_sizes.png`
-- `figures/sample_correlation.png`
-- `report.md`
-- `result.json`
-
-## CLI
-
-```bash
-python skills/bulkrna/bulkrna-qc/bulkrna_qc.py --demo --output /tmp/bulkrna-qc
+```python
+# Calling use_skill("bulkrna-qc") auto-injects kernel.py helpers into the python kernel:
+sample_stats = assess_count_matrix(counts)
+cpm_df = cpm_normalize(counts)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- [Output contract](references/output_contract.md)
+- **Sample QC Summary Table** (`tables/sample_stats.csv`):
+  - Indexed by `sample` with columns `total_counts`, `detected_genes`, `expressed_genes_ge10`, `mean_sample_corr`, `is_outlier`.
+- **Normalized Visualization Matrix** (`tables/cpm_normalized.csv`):
+  - Gene-by-sample CPM matrix where each column sums to $10^6$ (`np.allclose(cpm_df.sum(axis=0), 1e6)`).
+- **Verification Invariants**:
+  - Every sample column in `counts` appears in `tables/sample_stats.csv`.
+  - Zero-count libraries raise an explicit `ValueError` rather than producing `NaN` or `Inf` in `tables/cpm_normalized.csv`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Never Pass `cpm_normalized.csv` into `DESeq2` / `pydeseq2`**:
+   - `tables/cpm_normalized.csv` is generated strictly for QC density plots, heatmaps, and PCA. `pydeseq2` requires raw unmodified integer counts so its Negative Binomial dispersion model can weight Poisson shot noise accurately.
+2. **Correlation Outliers in Heterogeneous Designs**:
+   - Cohort-wide mean correlation (`mean_sample_corr`) can flag a genuinely distinct biological condition if that group has far fewer replicates than the reference group. Always inspect the full `sample_correlation` heatmap alongside condition metadata before dropping a sample.
+3. **High Mitochondrial / rRNA / Globin Gene Dominance**:
+   - If a sample has normal `total_counts` ($> 20\text{M}$) but low `detected_genes` ($< 6,000$), check what fraction of reads map to `MT-*` genes or hemoglobin (`HBA1`, `HBB`). A few hyper-abundant transcripts can consume $> 50\%$ of sequencing depth and starve the rest of the transcriptome.
 
 ## Dependencies
 

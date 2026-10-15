@@ -148,7 +148,8 @@ class FakeClient:
         self.beating = False
         return "shutdown-msg-id"
 
-    def execute(self, code: str) -> str:
+    def execute(self, code: str, *, store_history: bool = True) -> str:
+        self.history_flags = getattr(self, "history_flags", []) + [store_history]
         self.executed.append(code)
         self.sent.append(code)
         return "msg-1"
@@ -545,8 +546,9 @@ def test_a_corrupted_pid_reaches_no_signal_and_no_probe(tmp_path):
 # ---- the mid-cell channel death: re-attach, retry once, disclose --------------
 
 
+@pytest.mark.parametrize("store_history", [True, False])
 def test_a_mid_cell_channel_death_reattaches_and_retries_the_cell(
-    tmp_path: pathlib.Path,
+    tmp_path: pathlib.Path, store_history: bool,
 ):
     driver, healthy = FakeDriver(), FakeClient()
     broken = FakeClient()
@@ -574,7 +576,9 @@ def test_a_mid_cell_channel_death_reattaches_and_retries_the_cell(
         port_open=lambda port: True,
     )
     kernel.start()
-    result = kernel.execute("marker = 1\nprint('retry me')", timeout_s=30.0)
+    result = kernel.execute("marker = 1\nprint('retry me')", timeout_s=30.0, store_history=store_history)
+    assert broken.history_flags == [store_history]
+    assert healthy.history_flags == [store_history]
     assert result.status == "ok", result.stderr
     assert "retry me" in result.stdout
     # the cell was sent twice — once into the dead channel, once on the

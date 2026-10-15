@@ -14,110 +14,88 @@ tags:
 - dynamics
 ---
 
-# spatial-velocity
+# Spatial RNA Velocity & Cellular Dynamics (`spatial-velocity`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Estimate velocity from measured spliced/unspliced count layers. Use spatial-trajectory when these layers are absent, or sc-velocity for non-spatial data.
+Use this playbook to estimate directional cellular dynamics (`velocity`), transcriptional kinetic rates, and `latent_time` from `adata.layers["spliced"]` and `adata.layers["unspliced"]`, and project velocity vector fields directly onto 2D tissue space (`adata.obsm["spatial"]`):
 
-## Use from a step
+| Method (`mode=` / `method=`) | Upstream Package | Splicing Kinetic Model | Estimates `latent_time`? | Best Used When |
+|---|---|---|---|---|
+| **Stochastic Velocity** (`mode="stochastic"`) | `scvelo.tl.velocity(mode="stochastic")` | Steady-state 2nd-order moments of spliced/unspliced covariance | No (use velocity pseudotime) | Fast default screening of directional transitions on spatial count datasets |
+| **Dynamical Velocity** (`mode="dynamical"`) | `scvelo.tl.recover_dynamics` + `scvelo.tl.velocity(mode="dynamical")` | Full EM likelihood over transcription ($\alpha$), splicing ($\beta$), and degradation ($\gamma$) rates | Yes (`scv.tl.latent_time`) | Resolving transient induction/repression states and shared universal latent time |
+| **veloVI** (`velovi`) | `velovi` (`VELOVI` in `scvi-tools`) | Deep variational autoencoder modeling gene-specific splicing states end-to-end | Yes (posterior latent time + uncertainty) | Noisy/sparse spatial UMI capture or evaluating velocity uncertainty per cell |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: `scvelo` Dynamical / Stochastic Velocity Projected onto Tissue Space
 
 ```python
-from skills._sdk.notebook import load_skill
-library = load_skill("spatial-velocity")
-library.velocity(adata, method='stochastic')
+import scvelo as scv
+
+# 1. Verify spliced and unspliced layers exist
+assert "spliced" in adata.layers and "unspliced" in adata.layers, "Requires spliced & unspliced layers"
+
+# 2. Filter genes, normalize, and compute PCA-knn first/second-order moments
+scv.pp.filter_and_normalize(adata, min_shared_counts=20, n_top_genes=2000)
+scv.pp.moments(adata, n_pcs=30, n_neighbors=30)
+
+# 3. Fit dynamical splicing kinetics (or skip recover_dynamics and use mode="stochastic")
+scv.tl.recover_dynamics(adata, n_jobs=1)
+scv.tl.velocity(adata, mode="dynamical")
+scv.tl.velocity_graph(adata, n_jobs=1)
+
+# 4. Compute velocity length, coherence confidence, latent time, and project onto spatial coordinates
+scv.tl.velocity_confidence(adata)
+scv.tl.latent_time(adata)
+scv.tl.velocity_embedding(adata, basis="spatial")
+# Visualize on tissue coordinates with: scv.pl.velocity_embedding_stream(adata, basis="spatial", color="cell_type")
 ```
 
-Run `examples/example_step.py` with the step runner for a synthetic, executable example.
+### Pattern B: Deep Generative Velocity (`velovi`)
 
-## API
+```python
+import scvelo as scv
+from velovi import preprocess_data, VELOVI
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+scv.pp.filter_and_normalize(adata, min_shared_counts=20, n_top_genes=2000)
+scv.pp.moments(adata, n_pcs=30, n_neighbors=30)
+adata = preprocess_data(adata)
 
-### `velocity(adata, *, method: str='stochastic', cluster_key: str='leiden', method_params: dict | None=None, random_state: int=0)`
+VELOVI.setup_anndata(adata, spliced_layer="Ms", unspliced_layer="Mu")
+vae = VELOVI(adata)
+vae.train(max_epochs=250)
 
-Estimate velocity in place from spliced/unspliced count layers.
-
-Preprocessing filters genes, normalizes X and count layers, and builds
-PCA/neighbors/moments. Optional confidence, pseudotime and latent-time
-failures are reported in run_info warnings. VELOVI GPU results can vary
-between runs even with a fixed seed. scVelo velocity pseudotime uses an
-eigensolver without a seed argument; its results vary between runs.
-
-:param adata: AnnData containing measured spliced and unspliced layers.
-:param method: stochastic (CLI default), deterministic, dynamical or velovi.
-:param cluster_key: Annotation used in output summaries; default leiden.
-:param method_params: CLI options with underscores; None keeps defaults,
-    including velocity_min_shared_counts=30 and velocity_n_pcs=30.
-    See references/parameters.md for method-specific controls.
-:param random_state: PCA/neighbor and VELOVI training seed, default 0.
-:returns: The same AnnData with velocity layers, graph and JSON diagnostics.
-:raises ValueError: Missing layers or invalid method.
-:raises ImportError: A backend is unavailable; use install_skill_deps.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read the last velocity method's diagnostics and metric tables.
-
-:param adata: AnnData returned by velocity.
-:param keep: True retains diagnostics; False removes them for CLI serialization.
-:returns: A dictionary with effective method controls and warnings, or empty dict.
-
-### `cell_metrics(adata) -> pd.DataFrame`
-
-Return velocity speed, confidence and pseudotime for each spot.
-
-:param adata: AnnData returned by velocity.
-:returns: The last run's barcode-indexed cell table, or an empty table.
-
-### `gene_metrics(adata) -> pd.DataFrame`
-
-Return fitted velocity gene parameters and fit quality.
-
-:param adata: AnnData returned by velocity.
-:returns: The last run's gene-indexed table, or an empty table.
-
-### `velocity_figure(adata, *, color: str='velocity_speed', basis: str='spatial')`
-
-Plot a numeric velocity metric at spot coordinates without saving.
-
-:param adata: AnnData after velocity inference.
-:param color: Numeric observation metric; velocity_speed by default.
-:param basis: Coordinate key, spatial by default; X_umap is also supported.
-:returns: A matplotlib Figure owned by the caller.
-:raises KeyError: Missing coordinates or metric.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-scVelo supports stochastic (default), deterministic and dynamical fits. VELOVI uses scvi-tools. Pass CLI option names with underscores in `method_params`; defaults include 30 shared counts, 2000 HVGs, 30 PCs and 30 neighbors.
-See [parameters](references/parameters.md) and [methodology](references/methodology.md).
-
-## Gotchas
-
-- `velocity` rejects missing layers; it never constructs spliced/unspliced observations from expression.
-- `run_info()['warnings']` records optional confidence/pseudotime/latent-time failures.
-- `gene_metrics` reports fitted parameters; VELOVI marks every retained gene as a velocity gene.
-- scVelo pseudotime uses an unseeded eigensolver; results vary between runs. GPU VELOVI can also vary despite its seed.
-
-## Inputs and outputs
-
-`velocity` modifies X, count layers and the gene subset in place, then adds velocity and moment layers. `cell_metrics` and `gene_metrics` return DataFrames; `velocity_figure` returns a Figure. CLI reports, tables and plots are conditional on fitted metrics and available coordinates.
-The full file inventory and conditions are in [output contract](references/output_contract.md).
-
-## CLI
-
-```bash
-python skills/spatial/spatial-velocity/spatial_velocity.py --input input.h5ad --output results/
+adata.obsm["velocity_velovi"] = vae.get_velocity(n_samples=25, velo_statistic="mean")
+adata.obs["latent_time_velovi"] = vae.get_latent_time(n_samples=25).mean(axis=1).to_numpy()
 ```
 
-The CLI retains reports and the figure gallery. Function calls do not save files.
+### Optional Micro-Helper (`kernel.py`)
 
-## See also
+Calling `use_skill("spatial-velocity")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `run_scvelo_spatial(adata, mode="stochastic", min_shared_counts=20, n_top_genes=2000, n_pcs=30, n_neighbors=30)`
+- `velocity_summary(adata, groupby="leiden")`
 
-- `spatial-preprocess` supplies expression preprocessing.
-- [Output contract](references/output_contract.md) lists method-specific files and AnnData fields.
+## 3. Output Format & Verification Contract
+
+- **Velocity-Annotated Spatial AnnData** (`intermediate/velocity.h5ad`):
+  - `adata.layers["velocity"]`: gene-by-cell RNA velocity matrix.
+  - `adata.obs["velocity_length"]` and `adata.obs["velocity_confidence"]`: speed and local vector coherence in $[0, 1]$.
+  - `adata.obs["latent_time"]`: universal internal clock in $[0, 1]$ (when `mode="dynamical"` or `velovi`).
+  - `adata.obsm["velocity_spatial"]`: 2D velocity displacement vectors aligned with `adata.obsm["spatial"]`.
+- **Velocity Summary Table** (`tables/velocity_summary.csv`):
+  - Columns: `group` (`leiden` / `cell_type`), `velocity_length`, `velocity_confidence`, `latent_time`.
+- **Verification**:
+  - Confirm `adata.obsm["velocity_spatial"].shape == adata.obsm["spatial"].shape` and verify mean `velocity_confidence > 0.5` in active differentiation zones.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Missing `spliced` / `unspliced` Layers in Standard SpaceRanger & Probe Spatial Data**:
+   - Standard 10x `spaceranger count` and probe-hybridization spatial platforms (Xenium, CosMx, MERFISH, Visium CytAssist FFPE) do **not** quantify intronic unspliced transcripts. `spatial-velocity` applies only to poly-A capture spatial sequencing (fresh-frozen Visium, Slide-seq, Stereo-seq) processed through `velocyto`, `STARsolo --soloFeatures Velocyto`, or `kb-python --workflow lamanno`. For probe-based spatial datasets, use `spatial-trajectory` instead.
+2. **Spatial Streamlines vs. Physical Cell Migration**:
+   - `scv.tl.velocity_embedding(adata, basis="spatial")` projects transcriptional state transitions onto the directions of neighboring spots with similar future expression profiles. It visualizes **transcriptional maturation gradients across tissue anatomy**, not literal physical cell locomotion velocity.
+3. **Visium Multi-Cell Spot Admixture Blurs Phase Portraits**:
+   - When a $55\ \mu\text{m}$ Visium spot mixes multiple unrelated lineages, spliced/unspliced phase portraits become noisy superpositions. Restrict `spatial-velocity` to lineage-homogeneous domains or single-cell resolution spatial capture arrays.
 
 ## Dependencies
 

@@ -13,87 +13,69 @@ tags:
 - mzmine
 ---
 
-# metabolomics-peak-detection
+# Chromatographic Peak Detection & Feature Filtering (`metabolomics-peak-detection`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Detect peaks on tabular sample signals ordered by retention time. This is not raw mzML peak extraction; run XCMS externally for that workflow.
+Select the peak-picking engine according to whether raw centroided `mzML` spectra or pre-extracted chromatogram/feature tables are analyzed:
 
-## Use from a step
+| Input Data Format | Recommended Algorithm | Upstream Package | Key Parameters |
+|---|---|---|---|
+| **Raw centroided LC-MS `mzML` files** | **CentWave** (continuous wavelet transform on ROI EICs) | R `xcms` (`CentWaveParam`) | `ppm = 5–15`, `peakwidth = c(5, 30)` s (UPLC) or `c(10, 60)` s (HPLC), `snthresh = 10` |
+| **Raw `mzML` in Python / C++** | **FeatureFinderMetabo** (mass trace + isotope model fitting) | `pyopenms` (`MassTraceDetection` + `ElutionPeakDetection`) | `mass_error_ppm = 10.0`, `chrom_fwhm = 10.0`, `chrom_peak_snr = 5.0` |
+| **High-throughput GUI / batch CLI** | **ADAP Chromatogram Builder + Local Minimum Resolver** | `MZmine 3 / 4` | `min_highest_intensity`, `peak_duration`, MS2 pairing |
+| **Pre-tabulated `mz` / `rt` intensity profile** (this skill) | **1D Local Maxima & Prominence Filtering** (`scipy.signal.find_peaks`) | `scipy.signal.find_peaks` | `prominence = 10000.0`, `height`, `distance` (row index separation along RT-sorted profile) |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: `pyopenms` Raw `mzML` Mass Trace & Elution Peak Detection
 
 ```python
-import pandas as pd
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("metabolomics-peak-detection")
-data = read_input('features.csv', reader=pd.read_csv)
-result = library.detect_peaks(data)
-write_output(result, 'tables/result.csv')
+import pyopenms as oms
+
+# 1. Load centroided LC-MS mzML file
+exp = oms.MSExperiment()
+oms.MzMLFile().load("sample1.mzML", exp)
+
+# 2. Detect mass traces (extracted ion chromatograms within 10 ppm)
+mtd = oms.MassTraceDetection()
+mtd_params = mtd.getDefaults()
+mtd_params.setValue("mass_error_ppm", 10.0)
+mtd_params.setValue("noise_threshold_int", 1000.0)
+mtd.setParameters(mtd_params)
+mass_traces = []
+mtd.run(exp, mass_traces, 0)
+
+# 3. Deconvolve chromatographic elution peaks along each mass trace
+epd = oms.ElutionPeakDetection()
+split_traces = []
+epd.detectPeaks(mass_traces, split_traces)
 ```
 
-[examples/example_step.py](examples/example_step.py) runs a seeded synthetic
-example through the step runner and writes a table and Figure. Computations
-return new DataFrames, leave the input unchanged and expose diagnostics through
-`run_info(result)`. Plotting functions write no files.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("metabolomics-peak-detection")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `detect_peaks(data, *, sample_cols=None, prominence=10000.0, height=None, distance=5)`
-
-Detect per-sample peaks after sorting rows by retention time.
-
-:param data: DataFrame with mz, rt and numeric sample intensities.
-:param sample_cols: Explicit columns; None uses the CLI intensity/sample name detection.
-:param prominence: CLI default 10000; adjust to the intensity scale.
-:param height: CLI default None; optionally require a minimum peak height.
-:param distance: CLI default 5; minimum separation in sorted row positions, not seconds.
-:returns: A new peak DataFrame with diagnostics in attrs['run_info'].
-:raises ValueError: No sample columns match or peak parameters are invalid.
-
-### `run_info(data, *, keep=True)`
-
-Read diagnostics attached to a returned table.
-
-:param data: DataFrame returned by this library.
-:param keep: Default True; use False in the CLI to remove diagnostics.
-:returns: An independent dictionary describing the run.
-:raises ValueError: The table carries no run_info.
-
-### `peaks_figure(data)`
-
-Plot detected peak intensity against retention time.
-
-:param data: Peak table returned by detect_peaks.
-:returns: A matplotlib Figure.
-:raises KeyError: Required peak columns are absent.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-scipy.signal.find_peaks uses prominence, optional height and a row-index distance after sorting by rt. Widths are measured at half prominence in row-index units.
-
-## Gotchas
-
-- `detect_peaks` expects mz and rt plus sample/intensity columns. `distance` and `width` are row positions, not seconds. NaNs follow scipy signal semantics and are not imputed. Empty outputs keep their CSV column schema.
-
-## Inputs and outputs
-
-CSV input; `tables/detected_peaks.csv`, `report.md` and `result.json`. Demo mode also writes its synthetic input CSV at the output root.
-The function library returns objects; the CLI and step own file writes.
-
-## CLI
-
-```bash
-python skills/metabolomics/metabolomics-peak-detection/peak_detect.py --demo --output /tmp/metabolomics_peak_detection
+```python
+# Calling use_skill("metabolomics-peak-detection") auto-injects kernel.py helpers into the python kernel:
+peaks_df = detect_peaks(profile_df, prominence=10000.0, distance=5)
+summary = peak_summary(peaks_df)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- [Parameters](references/parameters.md)
-- [Methodology](references/methodology.md)
-- [Output contract](references/output_contract.md)
+- **Detected Peaks Table** (`tables/detected_peaks.csv`):
+  - Sorted by retention time (`rt`), preserving `mz`, `rt`, sample intensity columns, `mean_intensity`, and `prominence` for local apex rows passing `scipy.signal.find_peaks`.
+- **Verification Invariants**:
+  - Input table must include `mz`, `rt`, and at least one numeric sample/intensity column.
+  - Empty peak results preserve the exact input column schema plus `mean_intensity` and `prominence`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Profile-Mode vs. Centroided `mzML` Spectra**:
+   - `CentWave` (`XCMS`), `FeatureFinderMetabo` (`pyopenms`), and `ADAP` (`MZmine`) strictly require **centroided** MS1 spectra. Running them on raw profile-mode Gaussian data splits a single mass peak into dozens of adjacent $m/z$ traces and exhausts RAM. Always centroid upstream (`msconvert --filter "peakPicking true 1-"`).
+2. **Matching `peakwidth` to UPLC vs. Standard HPLC Chromatography**:
+   - Sub-2-$\mu$m UPLC columns produce narrow 3–15 s peaks, whereas standard 5-$\mu$m HPLC columns or HILIC methods produce 15–60 s peaks. Setting `peakwidth` too wide merges closely eluting isomers (e.g., leucine and isoleucine); setting it too narrow splits tailing peaks into multiple fragments.
+3. **Row-Index `distance` vs. Physical Seconds in 1D Table Peak Finding**:
+   - In `detect_peaks` on tabular profiles, `distance` specifies the minimum separation in **RT-sorted row positions** (`scipy.signal.find_peaks`), not physical seconds or minutes. Scale `distance` according to your MS1 scan acquisition rate (e.g., 2–5 Hz).
 
 ## Dependencies
 

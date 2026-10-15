@@ -1,5 +1,7 @@
 # HCA Asia 2026 Poster Abstract — OmicsClaw
 
+> Historical draft for the retired architecture. Pilot results have been removed; this draft needs revision before submission.
+
 > Target: 2026 Human Cell Atlas Asia Meeting (Fremantle, Perth, 2–4 November 2026).
 > Poster abstract deadline: **13 September 2026**. Submission: PDF following the
 > official template (presenter name + headshot, title 14 pt bold centred,
@@ -22,7 +24,7 @@
 
 **Abstract**
 
-Cell atlas studies chain many tools whose method and parameter choices shape biological conclusions. Large language model (LLM) agents could make such workflows accessible, but free-form generated code is hard to audit, and donor-derived data often cannot leave institutional infrastructure. We present OmicsClaw, an open-source agent that maps natural-language requests to 93 script-backed skills across six omics domains (53 for single-cell or spatial data), wrapping established methods including CellTypist, scVI, Harmony, cell2location, RCTD, BANKSY and LIANA. The LLM selects and parameterizes skills, which run on user-controlled machines. By design, the LLM sees metadata and summaries rather than expression matrices; locally hosted LLMs are supported. Unmatched requests fall back to a bounded code agent gated on a fresh-process rerun. Each successful skill run is checked against its declared outputs and records skill revision, input checksums, parameters and environment fingerprint for replay. Raising a skill's validation level requires version-specific evidence and human approval. Spatial domain calls from multiple methods can be merged deterministically. In a skill-only pilot (no LLM) on 2 of 44 OmicBench and 1 of 50 scAgentBench tasks, sc-preprocessing passed all grader checks and sc-pseudotime reproduced the reference trajectory graph (edge F1 = 1.0). Agent-level evaluation is ongoing.
+Cell atlas studies chain many tools whose method and parameter choices shape biological conclusions. Large language model (LLM) agents could make such workflows accessible, but free-form generated code is hard to audit, and donor-derived data often cannot leave institutional infrastructure. We present OmicsClaw, an open-source agent that maps natural-language requests to 93 script-backed skills across six omics domains (53 for single-cell or spatial data), wrapping established methods including CellTypist, scVI, Harmony, cell2location, RCTD, BANKSY and LIANA. The LLM selects and parameterizes skills, which run on user-controlled machines. By design, the LLM sees metadata and summaries rather than expression matrices; locally hosted LLMs are supported. Unmatched requests fall back to a bounded code agent gated on a fresh-process rerun. Each successful skill run is checked against its declared outputs and records skill revision, input checksums, parameters and environment fingerprint for replay. Raising a skill's validation level requires version-specific evidence and human approval. Spatial domain calls from multiple methods can be merged deterministically.
 
 ---
 
@@ -42,18 +44,12 @@ Cell atlas studies chain many tools whose method and parameter choices shape bio
 | Revision, input checksums, parameters, environment fingerprint recorded for replay | ADR 0075; `omicsclaw/skill/execution/reproducibility.py` (per-file SHA-256 / tree digest; environment identity marked `evidence-only`) |
 | Validation level raise needs version-specific evidence + human approval | ADR 0066; README (Golden Skill lifecycle slice: "The Agent cannot approve it") |
 | Spatial domain calls from multiple methods merged deterministically | `omicsclaw/runtime/consensus/sources.py` (`consensus-domains`, member `spatial-domains`); `docs/design/consensus.md` §1, §4 |
-| Skill-only pilot, 2/44 OmicBench tasks (A02 4/4, A03 3/3 by `sc-preprocessing`) and 1/50 scAgentBench tasks | `docs/evaluation/muse-three-suite-skill-lifecycle-benchmark.md` §2, §3.1; `scripts/run_three_suite_skill_lifecycle_benchmark.py` |
-| `sc-pseudotime` PAGA graph: edge F1 = 1.0 at 0.03 (aligned cosine 0.99999840; relative Frobenius error 0.0033) — OmicsClaw conformance gate, not an official suite score | same document §3.2 |
 
 ## Known limitations deliberately not overclaimed
 
-- Benchmark coverage is partial: OmicBench 2/44, scAgentBench main 1/50, BiomniBench-DA 1/50 (deterministic preflight only, no official LLM-judge score). No LLM/agent was in the loop; no `no_skill / curated_skill / self_created_skill` comparison has been run.
-- The scAgentBench adapter reproduced the suite's Paul15 (mouse) preprocessing and root cell, so agreement tests skill conformance, not autonomous analysis. The suite's published all-row-pairs cosine was 0.1086 (gold vs. gold gives the same value).
-- 94/96 skills are currently at `smoke-only` validation; 2 are `demo-validated`. ADR 0074 is still Proposed.
 - Data locality is a design property, not an enforced boundary: agent tools can return text-file content and code-agent output to a remote LLM endpoint. Only a locally hosted LLM keeps all content on site.
 - The code-agent replay gate checks that accepted cells rerun successfully in a fresh kernel; it does not compare results.
 - No quantitative consensus-vs-single-method result (e.g. DLPFC 151673) has been recorded; `sc-consensus-clustering` is a resolution sweep, not multi-method.
-- Omitted as too preliminary: the run-derived `bulkrna-cosinor-rhythm` replay (synthetic 5-gene × 12-sample input, deterministic OLS) and the Slide-seq V2 consensus-interpret case study (mouse, single LLM run, 37-row marker scaffold).
 
 ## Review log
 

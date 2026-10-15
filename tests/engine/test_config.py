@@ -39,13 +39,7 @@ def test_every_default_is_the_documented_one(field, value):
 
 
 def test_the_turn_ceiling_clears_the_legacy_twenty():
-    """Plan 0027 §4 Q6.
-
-    ``docs/evaluation/cross-agent-benchmark-guide.md`` records that the
-    legacy ``OMICSCLAW_MAX_TOOL_ITERATIONS=20`` stalls the 30-turn
-    benchmark tasks outright, and the reference harness's 500 is tuned
-    for unattended long-horizon coding.
-    """
+    """The default ceiling stays between 30 and 500 model calls."""
     assert EngineConfig().max_turns > 30
     assert EngineConfig().max_turns < 500
 

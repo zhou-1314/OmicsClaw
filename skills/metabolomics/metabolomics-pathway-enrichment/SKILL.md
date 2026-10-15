@@ -14,98 +14,66 @@ tags:
 - demo
 ---
 
-# metabolomics-pathway-enrichment
+# Metabolomics Pathway Over-Representation Analysis (`metabolomics-pathway-enrichment`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Run metabolite-name ORA against explicit pathways or nine demo pathways. External mummichog/FELLA are required for their own methods.
+Select the metabolomics pathway enrichment algorithm according to identification confidence and input data type:
 
-## Use from a step
+| Input Data Type | Recommended Algorithm | Upstream Package / Database | Why |
+|---|---|---|---|
+| **Confirmed / Annotated DE Metabolite List** (HMDB / KEGG / ChEBI IDs) | **Hypergeometric / Fisher Exact ORA** (`method="ora"`) | `scipy.stats.hypergeom.sf` / `MetaboAnalystR` / `RaMP-DB` | Tests whether significant metabolites are over-represented in KEGG/SMPDB/Reactome pathways relative to the **assay-specific metabolome background** |
+| **Continuous Metabolite Matrix** (no hard DE cutoff, sample $\times$ metabolite) | **Quantitative Enrichment Analysis (`GlobalTest` / `QEA`)** | `MetaboAnalystR` (`globaltest`) / `sspa` (Python) | Evaluates pathway-level covariance directly across sample groups |
+| **Unannotated LC-MS $m/z$ Peak Table** (`mz`, `rt`, `pvalue`, `t_stat`) | **Mummichog** / **GSEA-MS1** | `mummichog` (`MetaboAnalystR` `PerformPSEA`) | Infers pathway activity directly from putative $m/z$ empirical compounds via network permutation without requiring prior MS2 confirmation |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Hypergeometric Over-Representation Analysis (`scipy.stats.hypergeom.sf`) + BH-FDR
 
 ```python
+import numpy as np
 import pandas as pd
-import json
-from pathlib import Path
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("metabolomics-pathway-enrichment")
-data = read_input('features.csv', reader=pd.read_csv)
-pathways = read_input('pathways.json', reader=lambda path: json.loads(Path(path).read_text()))
-result = library.enrich(data['metabolite'], pathways=pathways)
-write_output(result, 'tables/result.csv')
+from scipy import stats
+
+# 1. Define query significant metabolites and reference pathway dictionary
+# pathways = {"TCA Cycle": {"kegg_id": "map00020", "metabolites": ["Citrate", "Succinate", "Malate", "Fumarate", ...]}}
+universe = {m.lower() for pw in pathways.values() for m in pw["metabolites"]}
+query = {m.lower() for m in sig_metabolites} & universe
+M = len(universe)  # Total background metabolites in reference library
+N = len(query)     # Total query hits in universe
+
+# 2. Compute hypergeometric p-value: P(X >= k) = hypergeom.sf(k - 1, M, n, N)
+for pw_name, info in pathways.items():
+    pw_members = {m.lower() for m in info["metabolites"]}
+    k = len(query & pw_members)
+    n = len(pw_members)
+    pval = stats.hypergeom.sf(k - 1, M, n, N) if k > 0 else 1.0
 ```
 
-[examples/example_step.py](examples/example_step.py) runs a seeded synthetic
-example through the step runner and writes a table and Figure. Computations
-return new DataFrames, leave the input unchanged and expose diagnostics through
-`run_info(result)`. Plotting functions write no files.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("metabolomics-pathway-enrichment")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `enrich(data, *, method='ora', pathways=None)`
-
-Test case-insensitive exact metabolite-name overlap by hypergeometric ORA.
-
-:param data: Iterable of metabolite names; duplicates count once in each overlap.
-:param method: CLI default ora, the only implemented method.
-:param pathways: Required mapping of pathway names to metabolites lists and kegg_id labels; use demo_pathways() only for demonstrations.
-:returns: A new table; BH FDR covers pathways with at least one hit, matching the CLI.
-:raises ValueError: A requested method is unimplemented or reference is empty.
-
-### `demo_pathways()`
-
-Return an independent copy of the nine illustrative pathway sets.
-
-:returns: A mapping for explicit demo use, not a complete pathway database.
-
-### `run_info(data, *, keep=True)`
-
-Read diagnostics attached to a returned table.
-
-:param data: DataFrame returned by this library.
-:param keep: Default True; use False in the CLI to remove diagnostics.
-:returns: An independent dictionary describing the run.
-:raises ValueError: The table carries no run_info.
-
-### `enrichment_figure(data, *, n_top=10)`
-
-Plot the strongest pathway overlaps by adjusted p value.
-
-:param data: Results returned by enrich.
-:param n_top: Default 10; maximum number of pathways shown.
-:returns: A matplotlib Figure.
-:raises KeyError: pathway or fdr is absent.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Matching is case-insensitive exact name equality, not substring matching. The background is the union of reference members. Hypergeometric survival probabilities and BH correction apply to pathways with at least one hit, matching the legacy CLI.
-
-## Gotchas
-
-- `enrich` requires explicit `pathways=` and implements only ora. Missing reference data and fella/mummichog requests fail. `demo_pathways()` explicitly selects the nine illustrative sets; never use these as biological evidence.
-- `tables/pathway_enrichment.csv` has a stable schema even with no overlap. `result.json` records the reference scope in `data.run_info.reference_scope`.
-
-## Inputs and outputs
-
-CSV input; `tables/pathway_enrichment.csv`, `report.md` and `result.json`. Demo mode also writes its synthetic input CSV at the output root.
-Real input also requires a JSON reference: `{"pathway name": {"kegg_id": "identifier", "metabolites": ["glucose", "pyruvate"]}}`.
-The function library returns objects; the CLI and step own file writes.
-
-## CLI
-
-```bash
-python skills/metabolomics/metabolomics-pathway-enrichment/met_pathway.py --demo --output /tmp/metabolomics_pathway_enrichment
-python skills/metabolomics/metabolomics-pathway-enrichment/met_pathway.py --input features.csv --pathway-file pathways.json --output /tmp/metabolomics_pathway_real
+```python
+# Calling use_skill("metabolomics-pathway-enrichment") auto-injects kernel.py helpers into the python kernel:
+res_df = enrich(sig_metabolites, pathways=custom_pathways, method="ora")
+summary = enrichment_summary(res_df, alpha=0.05)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- [Parameters](references/parameters.md)
-- [Methodology](references/methodology.md)
-- [Output contract](references/output_contract.md)
+- **Pathway Enrichment Table** (`tables/pathway_enrichment.csv`):
+  - Contains `pathway`, `kegg_id`, `hits` ($k$), `pathway_size` ($n$), `expected`, `fold_enrichment`, `pvalue` (hypergeometric survival function `sf(k - 1, M, n, N)`), `fdr` (BH-adjusted across pathways with $\ge 1$ hit), and `matched_metabolites`.
+- **Verification Invariants**:
+  - `pathways` dictionary must be explicitly provided; missing reference databases raise `ValueError`.
+  - Matching is case-insensitive exact metabolite identifier/name equality, deduplicating repeated query entries.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Synonym & Identifier Fragmentation (`L-Lactate` vs. `Lactic acid` vs. `HMDB0000190` vs. `C00186`)**:
+   - Chemical name string matching frequently misses 30–60% of true overlaps because search engines emit `(+/-)-Lactic acid` while KEGG lists `L-Lactate` (`C00186`). Always standardize identifiers to **KEGG Compound IDs (`Cxxxxx`)**, **HMDB 7-digit IDs (`HMDBxxxxxxx`)**, or **InChIKey first-block connectivity hashes** (`inchikey.split("-")[0]`) before running ORA.
+2. **Assay Coverage Bias (RP-LC-MS vs. HILIC vs. GC-MS)**:
+   - Reversed-phase C18 LC-MS primarily captures semi-polar and non-polar lipids/bile acids, whereas HILIC captures polar central carbon metabolites (TCA cycle, glycolysis, amino acids). Using the entire KEGG global metabolic network (including plant/microbial secondary metabolites `map01110`) as the background $M$ severely inflates pathway significance. Restrict `pathways` to organism-specific (`hsa` / `mmu`) and platform-detectable pathways.
+3. **Never Use Tiny Demo Pathway Dictionaries as Biological Evidence**:
+   - Illustrative 9-pathway demo sets are strictly for unit testing; always pass a curated KEGG/SMPDB/RaMP-DB pathway mapping in production analyses.
 
 ## Dependencies
 

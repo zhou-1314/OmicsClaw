@@ -1,11 +1,4 @@
-"""What the framework reads of a project kept by the step runner.
-
-The step runner lives in ``skills/_sdk/notebook/`` and writes every module's
-results under ``results/<NN_slug>/``. The framework does not import
-``skills.*``; it reads the files the runner writes. The layout names it relies
-on are literals here, pinned equal to ``LAYOUT`` and ``MANIFEST_SCHEMA`` in
-``skills/_sdk/notebook/contract.py`` by ``tests/sdk/notebook/test_contract.py``.
-"""
+"""Read historical step-runner results without importing retired skill code."""
 
 from __future__ import annotations
 
@@ -14,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import AppConfig, SandboxMode
+from .config import AppConfig
 
 __all__ = [
     "MANIFEST_FILE",
@@ -45,14 +38,7 @@ _MODULE = re.compile(MODULE_DIR_PATTERN)
 
 
 def step_runner_line(config: AppConfig) -> str | None:
-    """The Environment line that tells the agent how to call the step runner.
-
-    ``None`` when the skill tree has no runner. With the code baked into the
-    sandbox image the host path may not exist in the container, so the line
-    names the module instead.
-    """
-    if config.sandbox is SandboxMode.DOCKER and config.sandbox_code_in_image:
-        return "- Step runner: python -m skills._sdk.notebook"
+    """Advertise a legacy runner only when it exists in the configured tree."""
     runner = config.skills_root().joinpath(*STEP_RUNNER)
     if not runner.is_file():
         return None

@@ -14,104 +14,91 @@ tags:
 - tumor
 ---
 
-# spatial-cnv
+# Spatial Copy-Number Variation Inference (`spatial-cnv`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Infer expression-based CNV with infercnvpy, or allele-aware CNV with R Numbat. Gene coordinates and an appropriate diploid reference are needed for interpretation.
+Use this playbook to infer chromosomal copy-number variations (CNVs), aneuploidy scores, and malignant clonal architecture across tissue space:
 
-## Use from a step
+| Method (`method=`) | Upstream Library | Input Requirements | Normal Reference | Best Used When |
+|---|---|---|---|---|
+| **Sliding-Window Expression CNV** (`infercnvpy`) | `infercnvpy` (`cnv.tl.infercnv`) | Log-normalized `adata.X` + `adata.var[["chromosome", "start", "end"]]` | Non-malignant cell types (`reference_key` / `reference_cat`) or global mean | Fast spatial tumor-vs-normal aneuploidy mapping and CNV subclone clustering in Python |
+| **Haplotype-Aware Allelic CNV** (`numbat`) | R `numbat` (`run_numbat`) | Raw count matrix + phased SNP pileup allele dataframe (`df_allele`) + diploid reference profiles | Required diploid expression reference (`lambdas_ref`) | Resolving copy-neutral LOH, subclonal phylogeny, and low-purity tumor spots with B-allele frequency |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Sliding-Window Expression CNV & Subclone Clustering (`infercnvpy`)
 
 ```python
-from skills._sdk.notebook import load_skill
-library = load_skill("spatial-cnv")
-library.cnv(adata, reference_key='cell_type', reference_cat=['Normal'])
+import infercnvpy as cnv
+import scanpy as sc
+
+# Verify genomic coordinates exist in adata.var[["chromosome", "start", "end"]]
+# If missing, annotate from a GTF file: cnv.io.genomic_position_from_gtf(gtf_path, adata=adata)
+required_cols = {"chromosome", "start", "end"}
+assert required_cols.issubset(adata.var.columns), "adata.var must contain chromosome, start, end"
+
+# Run inferCNV using non-malignant microenvironment cells as diploid baseline
+cnv.tl.infercnv(
+    adata,
+    reference_key="cell_type",
+    reference_cat=["Endothelial", "Fibroblast", "T_cell", "B_cell"],
+    window_size=100,
+    step=10,
+    exclude_chromosomes=("chrX", "chrY", "chrM", "X", "Y", "MT"),
+)
+
+# Cluster spots by CNV profile and compute per-spot CNV aberration score
+cnv.tl.pca(adata)
+cnv.pp.neighbors(adata)
+cnv.tl.leiden(adata, key_added="cnv_leiden")
+cnv.tl.cnv_score(adata)
 ```
 
-Run `examples/example_step.py` with the step runner for a synthetic, executable example.
+### Pattern B: Stratifying Malignant vs. Diploid Microenvironment Domains
 
-## API
+```python
+import numpy as np
+import pandas as pd
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `cnv(adata, *, method: str='infercnvpy', reference_key: str | None=None, reference_cat: list[str] | str | None=None, window_size: int=100, step: int=10, method_params: dict | None=None, random_state: int=0, allele_counts: pd.DataFrame | None=None)`
-
-Infer CNV in place from log-normalized X or Numbat raw counts.
-
-infercnvpy needs var chromosome/start/end. Numbat needs layers['counts'],
-phased allele_counts and a diploid reference annotation. Counts and metadata
-are exchanged with R inside a temporary directory.
-
-:param adata: AnnData with expression and method-specific annotations.
-:param method: infercnvpy (CLI default) or numbat.
-:param reference_key: Observation column marking reference cells; None uses all cells.
-:param reference_cat: Reference labels; None uses the backend's global reference.
-:param window_size: Genomic smoothing window, 100 genes by default.
-:param step: Sliding-window stride, 10 genes by default.
-:param method_params: CLI options with underscores, such as infercnv_n_jobs=1;
-    None keeps defaults listed in references/parameters.md.
-:param random_state: infercnvpy PCA/graph/clustering and Numbat R seed, default 0.
-:param allele_counts: Numbat long-form DataFrame with cell/snp_id/CHROM/POS/AD/DP/GT/gene;
-    None reads the legacy obsm['allele_counts'] table. Multiple SNPs per cell are allowed.
-:returns: The same AnnData with CNV matrices, scores and JSON diagnostics.
-:raises ValueError: Missing genomic annotations, raw counts or invalid parameters.
-:raises ImportError: Missing infercnvpy or R backend; use install_skill_deps.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read the last CNV inference diagnostics.
-
-:param adata: AnnData returned by cnv.
-:param keep: True retains diagnostics; False removes them before CLI serialization.
-:returns: Method, score summary, seed and any fallback details, or an empty dict.
-
-### `scores(adata) -> pd.DataFrame`
-
-Return CNV scores and labels in observation order.
-
-:param adata: AnnData after CNV inference.
-:returns: Barcode-indexed table of available CNV score/label/uncertainty columns.
-
-### `cnv_figure(adata, *, basis: str='spatial')`
-
-Plot CNV scores over supplied coordinates without saving.
-
-:param adata: AnnData after CNV inference.
-:param basis: Coordinate key, spatial by default; X_umap is also supported.
-:returns: A matplotlib Figure owned by the caller.
-:raises KeyError: Missing coordinates or CNV score.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-infercnvpy uses log-normalized X, a 100-gene window and stride 10. Numbat uses integer layers['counts'] and phased allele counts. Pass method-specific CLI option names with underscores in `method_params`.
-See [parameters](references/parameters.md) and [methodology](references/methodology.md).
-
-## Gotchas
-
-- `cnv` rejects missing genomic `chromosome`, `start` and `end` columns for infercnvpy.
-- `cnv` requires real counts and `obsm['allele_counts']` for Numbat; the example uses explicitly synthetic coordinates only for infercnvpy.
-- `run_info` records the clustering fallback if infercnvpy cannot build Leiden groups.
-- `cnv(..., allele_counts=table)` accepts multiple SNP rows per cell; its R subprocess uses the requested random seed.
-
-## Inputs and outputs
-
-`cnv` returns the same AnnData with method-specific scores. `scores` returns a DataFrame and `cnv_figure` a Figure. CLI output includes `processed.h5ad`, reports and conditional score, bin, clone and uncertainty tables/plots.
-The full file inventory and conditions are in [output contract](references/output_contract.md).
-
-## CLI
-
-```bash
-python skills/spatial/spatial-cnv/spatial_cnv.py --input input.h5ad --output results/
+# Summarize CNV aberration score across CNV clusters and spatial coordinates
+summary_df = (
+    adata.obs.groupby("cnv_leiden", observed=True)["cnv_score"]
+    .agg(n_spots="count", mean_cnv="mean", median_cnv="median")
+    .reset_index()
+)
+# Classify high-aneuploidy subclones vs diploid stroma
+thresh = adata.obs["cnv_score"].quantile(0.75)
+adata.obs["malignancy_status"] = np.where(adata.obs["cnv_score"] >= thresh, "Malignant_CNV_High", "Diploid_Baseline")
 ```
 
-The CLI retains reports and the figure gallery. Function calls do not save files.
+### Optional Micro-Helper (`kernel.py`)
 
-## See also
+Calling `use_skill("spatial-cnv")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `run_infercnv(adata, reference_key=None, reference_cat=None, window_size=100, step=10)`
+- `cnv_summary(adata, groupby="cnv_leiden", score_key="cnv_score")`
 
-- `spatial-preprocess` supplies expression preprocessing.
-- [Output contract](references/output_contract.md) lists method-specific files and AnnData fields.
+## 3. Output Format & Verification Contract
+
+- **CNV-Annotated Spatial AnnData** (`intermediate/cnv_processed.h5ad`):
+  - `adata.obsm["X_cnv"]`: smoothed chromosomal window copy-number matrix `(n_obs, n_windows)`.
+  - `adata.uns["cnv"]`: chromosome boundary positions (`chr_pos`) and window metadata.
+  - `adata.obs["cnv_leiden"]` and `adata.obs["cnv_score"]`: CNV cluster assignment and continuous aberration amplitude.
+- **CNV Summary Table** (`tables/cnv_summary.csv`):
+  - Columns: `group` (`cnv_leiden` or `cell_type`), `n_spots`, `mean_cnv_score`, `median_cnv_score`.
+- **Verification**:
+  - Confirm that designated normal reference categories (`reference_cat`) exhibit `mean_cnv_score` near the lower baseline compared with tumor core domains.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Missing Genomic Coordinates (`adata.var[["chromosome", "start", "end"]]`)**:
+   - `infercnvpy.tl.infercnv` immediately raises a `ValueError` or skips all genes if `chromosome`, `start`, and `end` are missing or all `NaN`. Populate them via `cnv.io.genomic_position_from_gtf()` or Ensembl Biomart lookup before running.
+2. **Chromosome Naming Conventions & Sex/Mitochondrial Chromosomes**:
+   - Datasets mix `"chr1"` and `"1"` prefixes. Always exclude `"chrX"`, `"chrY"`, `"chrM"` (and `"X"`, `"Y"`, `"MT"`) so sex-linked dosage or high mitochondrial content in necrotic tumor regions is not miscalled as focal amplification.
+3. **Impure or Missing Normal Reference (`reference_cat`)**:
+   - When `reference_key=None`, `infercnvpy` subtracts the global average across all spots. If $>80\%$ of the slide is homogeneous tumor, subtracting the global mean cancels out shared clonal gains/losses. Always specify stromal/immune `reference_cat` whenever normal cells are present.
+4. **Targeted Spatial Panels Have Too Few Genes per Chromosome**:
+   - Sliding-window expression CNV (`window_size=100` expressed genes) requires transcriptome-scale coverage (Visium, Stereo-seq, Slide-seq, $>3,000$ detected genes). Do not run `infercnvpy` on 300-gene targeted Xenium panels.
 
 ## Dependencies
 

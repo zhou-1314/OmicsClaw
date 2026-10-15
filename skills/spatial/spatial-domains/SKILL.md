@@ -18,105 +18,92 @@ tags:
 - louvain
 ---
 
-# spatial-domains
+# Spatial Tissue Domain & Niche Identification (`spatial-domains`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Find tissue domains from expression and coordinates. Use spatial-annotate for named cell labels and spatial-genes for variable genes.
+Use this playbook to segment tissue into spatially coherent anatomical domains or microenvironmental niches by jointly modeling gene expression and physical 2D/3D coordinates:
 
-## Use from a step
+| Method (`method=`) | Upstream Package | Graph / Spatial Formulation | Target Number of Domains | Best Used When |
+|---|---|---|---|---|
+| **Spatially Weighted Leiden / Louvain** (`leiden` / `louvain`) | `scanpy` + `squidpy` | Convex combination $(1 - w) A_{\text{expr}} + w A_{\text{spatial}}$ | Controlled by `resolution` | Fast, deterministic baseline domain discovery on any spatial platform |
+| **CellCharter** (`cellcharter`) | `cellcharter` (`cc.gr.aggregate_neighbors` + `cc.tl.Cluster`) | Multi-hop neighborhood latent feature concatenation + GMM | Auto-stability selection or fixed $K$ | Multi-sample spatial niche discovery across Xenium, CosMx, and Visium cohorts |
+| **BANKSY** (`banksy`) | `pybanksy` | Own expression + local neighborhood mean + azimuthal Gabor gradient | Leiden resolution on augmented matrix | Distinguishing cell-typing ($\lambda \approx 0.2$) vs tissue-domain segmentation ($\lambda \approx 0.8$) |
+| **STAGATE** (`stagate`) | `STAGATE_pyG` | Graph attention auto-encoder over spatial radius/KNN graph | `mclust` fixed $K$ (`n_domains`) or Leiden | Resolving laminar cortical layers and smooth anatomical boundaries |
+| **SpaGCN** (`spagcn`) | `SpaGCN` | Spatial coordinates + H&E RGB histology graph convolution | Fixed $K$ (`n_domains`) via Louvain initialization | When H&E histology color/texture boundaries complement transcriptomics |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Spatially Weighted Graph Clustering (`scanpy` + `squidpy`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("spatial-domains")
-data = read_input("input.h5ad")
-data = library.identify(data, method="leiden", spatial_weight=0.3)
-write_output(library.domain_counts(data), "tables/results.csv")
+import scanpy as sc
+import squidpy as sq
+
+# 1. Build expression KNN graph on PCA and spatial neighbor graph on coordinates
+if "connectivities" not in adata.obsp:
+    sc.pp.neighbors(adata, n_neighbors=15, use_rep="X_pca", random_state=0)
+sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
+
+# 2. Blend expression and spatial connectivities (spatial_weight = 0.3)
+w = 0.3
+blended_adj = (1.0 - w) * adata.obsp["connectivities"] + w * adata.obsp["spatial_connectivities"]
+
+# 3. Cluster the blended graph with Leiden
+sc.tl.leiden(
+    adata,
+    resolution=0.8,
+    adjacency=blended_adj,
+    key_added="spatial_domain",
+    flavor="igraph",
+    n_iterations=2,
+    random_state=0,
+)
 ```
 
-Run [examples/example_step.py](examples/example_step.py) through the step runner.
+### Pattern B: Multi-Ring Neighborhood Niche Discovery (`cellcharter`)
 
-## API
+```python
+import cellcharter as cc
+import squidpy as sq
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+# Build Delaunay spatial graph (pass library_key="slide_id" for multi-slide datasets)
+sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
+cc.gr.remove_long_links(adata)
 
-### `identify(adata, *, method: str='leiden', resolution: float=1.0, spatial_weight: float=0.3, refine: bool=False, random_state: int | None=None, **parameters)`
+# Aggregate latent embeddings (e.g., X_pca or X_scVI) across 3 spatial neighbor rings
+cc.gr.aggregate_neighbors(adata, n_layers=3, use_rep="X_pca", out_key="X_cellcharter")
 
-Identify domains in place and return the same AnnData.
-
-Reads log-normalized X, X_pca and spatial coordinates; graph methods reuse
-existing expression neighbors. SpaGCN, STAGATE and BANKSY results vary
-between runs because their training wrappers do not expose every RNG.
-
-:param adata: Preprocessed spatial AnnData; expression values are retained.
-:param method: CLI default leiden, or louvain/spagcn/stagate/graphst/banksy/cellcharter.
-:param resolution: Graph-clustering resolution, CLI default 1.0.
-:param spatial_weight: Spatial graph weight for Leiden/Louvain, CLI default 0.3.
-:param refine: False by default; True smooths labels using spatial KNN.
-:param random_state: None preserves CLI defaults: backend seed 42 for STAGATE,
-    GraphST and CellCharter, otherwise 0; PCA uses 0. An explicit integer
-    overrides both PCA and supported backend seeds. Existing PCA is reused.
-:param parameters: Backend options listed in references/parameters.md;
-    fixed-K methods use n_domains=7 unless supplied.
-:returns: The same AnnData with spatial_domain and JSON run diagnostics.
-:raises ValueError: Unsupported method or invalid graph parameters.
-:raises ImportError: A backend is missing; use install_skill_deps with the named package.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read the method, domain sizes, refinement status and effective seeds.
-
-pca_random_state is None when identify reused existing PCA coordinates.
-
-:param adata: AnnData returned by identify.
-:param keep: True retains diagnostics; False removes them before CLI serialization.
-:returns: Diagnostic dict, or an empty dict before analysis.
-
-### `domain_counts(adata)`
-
-Count observations and percentages per domain.
-
-:param adata: AnnData with spatial_domain labels; X is not read.
-:returns: DataFrame with domain, n_cells and proportion (percent).
-:raises KeyError: Domain labels are absent.
-
-### `domain_figure(adata)`
-
-Plot domain labels in spatial coordinates.
-
-:param adata: AnnData with spatial_domain and spatial coordinates; X is not read.
-:returns: A matplotlib Figure without writing files.
-:raises KeyError: Domain labels are absent.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Leiden/Louvain combine expression and spatial graphs. SpaGCN, STAGATE, GraphST, BANKSY and CellCharter remain optional. Fixed-K methods default to seven domains.
-See [parameters](references/parameters.md) and [methodology](references/methodology.md).
-
-## Gotchas
-
-- `identify` reuses expression neighbors. SpaGCN, STAGATE and BANKSY results vary between runs. `spatial_weight=0` uses expression-only graph clustering.
-- `run_info(keep=False)` removes library diagnostics before CLI serialization.
-
-## Inputs and outputs
-
-The library returns AnnData, DataFrames or Figures without file writes. The CLI
-keeps reports, result.json, tables and conditional gallery outputs. See the
-complete [output contract](references/output_contract.md) for filenames and conditions.
-
-## CLI
-
-```bash
-python skills/spatial/spatial-domains/spatial_domains.py --input data.h5ad --output results/spatial-domains
+# Cluster aggregated microenvironment profiles with Gaussian Mixture Model
+gmm = cc.tl.Cluster(n_clusters=7, random_state=42)
+gmm.fit(adata, use_rep="X_cellcharter")
+adata.obs["spatial_domain"] = gmm.predict(adata, use_rep="X_cellcharter")
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- [Methodology](references/methodology.md)
-- [Parameters](references/parameters.md)
-- [Output contract](references/output_contract.md)
+Calling `use_skill("spatial-domains")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `spatial_leiden(adata, spatial_weight=0.3, resolution=1.0, n_neighbors=15, coord_type="generic", key_added="spatial_domain", random_state=0)`
+- `domain_summary(adata, key="spatial_domain")`
+
+## 3. Output Format & Verification Contract
+
+- **Domain-Annotated Spatial AnnData** (`intermediate/domains.h5ad`):
+  - `adata.obs["spatial_domain"]`: categorical domain/niche label for each spot/cell.
+  - `adata.obsp["spatial_connectivities"]` and `adata.obsp["spatial_distances"]`: spatial graph matrices.
+- **Domain Counts Table** (`tables/domain_counts.csv`):
+  - Columns: `domain`, `n_spots`, `proportion`.
+- **Verification**:
+  - Verify `adata.obs["spatial_domain"].nunique() >= 2` and inspect spatial coherence via `sq.gr.nhood_enrichment(adata, cluster_key="spatial_domain")` (diagonal self-enrichment $z$-scores should be strongly positive).
+
+## 4. Gotchas & Troubleshooting
+
+1. **Multi-Slide Coordinate Collision in `sq.gr.spatial_neighbors`**:
+   - When `adata` contains multiple slides concatenated together, running `sq.gr.spatial_neighbors(adata)` without `library_key="slide_id"` connects spots from different slides that happen to share similar `(x, y)` pixel values. Always pass `library_key` for multi-slide objects.
+2. **Long-Range Edge Artifacts in Delaunay Triangulation**:
+   - At concave tissue borders or lumens, Delaunay triangulation (`delaunay=True`) creates long edges spanning empty space. Prune them with `cellcharter.gr.remove_long_links(adata)` or use `coord_type="grid", n_neighs=6` on hexagonal Visium arrays.
+3. **Over-Smoothing with High `spatial_weight`**:
+   - Setting `spatial_weight > 0.5` forces contiguous geometric blocks even when transcriptomic profiles differ sharply (e.g., erasing tertiary lymphoid structures inside tumor stroma). Keep `spatial_weight` in `0.2–0.35`.
 
 ## Dependencies
 

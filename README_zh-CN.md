@@ -32,7 +32,7 @@ skill，读它的说明，再在你自己的环境里（本机或服务器）运
 
 ## 最新动态
 
-- 27 个计算型单细胞 skill 均有函数库，3 个原始输入处理 skill 保留 CLI，课题模块可混合 Python 和 R 步骤，记录读写并经过重放、审查和用户确认后验收（[0074](docs/plans/0074-singlecell-skill-migration.md)）。
+- 技能采用四段式 `SKILL.md` 和轻量 `kernel.py`；`use_skill` 注册函数，并在持久 Python 内核中注入，替代旧 SDK 步骤执行器。
 - agent 框架已经重写，入口改为 `oc cli`、`oc desktop` 和 `oc channel` 三个，`oc interactive`、`oc tui`、`oc onboard`、`oc run` 等旧命令已移除（[重写进展](docs/FRAMEWORK-REBUILD.md)）。
 - [桌面 App v0.1.8](https://github.com/TianGzlab/OmicsClaw/releases/tag/v0.1.8) 已发布 macOS、Windows 和 Linux 安装包，支持 Desktop v3、SSH 会话恢复，以及每条回复完成后的可选“独立审查”按钮。
 - agent 会告诉你当前环境缺哪些 skill 需要的包；设置 `OMICSCLAW_SKILL_ENV=install` 后，它可以在你批准后把这些包装进独立的 overlay 环境，基础环境保持不变（[0061](docs/plans/0061-adaptive-env-provisioning.md)）。
@@ -57,11 +57,13 @@ DeepSeek、OpenAI、Anthropic、Gemini、DashScope 上的 Qwen、Ollama 以及�
 `OMICSCLAW_SKILLS_DIR=<检出目录>/skills`。`oc cli --prompt "..."` 只回答一个问题就退出。
 如果 `oc` 不在 `PATH` 里，用 `python omicsclaw.py cli`。
 
-skill 本身就是普通脚本，也可以不经过 agent 直接运行：
+`make list` 按领域列出技能。每个 `SKILL.md` 说明方法选择、输入和输出检查；加载后，agent 可在持久 Python 内核中直接调用 `kernel.py` 的函数。Python 用户也可以直接加载：
 
-```bash
-make list    # 按领域列出全部 skill
-python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /tmp/omicsclaw_demo
+```python
+from omicsclaw.skills.sidecar import load_skill
+
+helpers = load_skill("spatial-preprocess")
+print(helpers.__all__)
 ```
 
 ## 使用方式
@@ -72,7 +74,7 @@ python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /
 | 桌面 App | 由 App 启动 `oc desktop` | 在桌面窗口里对话、处理审批、查看文件（见[下文](#桌面-app)） |
 | 远程服务器 | 在服务器上运行 `oc desktop` | App 通过自己的 SSH 隧道连过去，数据留在服务器上（[远程模式](docs/engineering/remote-execution.mdx)） |
 | 聊天平台 | `oc channel --channels telegram` | 仅限 owner 的文本对话，支持 Telegram、飞书、Slack、Discord、钉钉、QQ、Email。`oc channel --list` 列出这些平台。需要先在 `.env` 里设置 `OMICSCLAW_APPROVAL_TIMEOUT_S`，否则无法启动 |
-| 直接跑 skill 脚本 | `python <skill 目录>/<script>.py` | 不经过 agent 跑一次分析。每个 skill 的 `SKILL.md` 写明了参数 |
+| Python 函数 | `load_skill("<skill-name>")` | 在分析环境中调用该技能的 `kernel.py` 函数 |
 
 对话记录和 agent 的长期笔记存在 `<workspace>/.omicsclaw/memory.db`。`<workspace>/.mcp.json`
 里列出的 MCP 服务器会在启动时连接，它们的工具也会交给 agent 使用。
@@ -80,8 +82,8 @@ python skills/spatial/spatial-preprocess/spatial_preprocess.py --demo --output /
 agent 在运行 shell 命令、写入或修改文件、访问网络、调用 MCP 工具之前会先问你。在终端里可以只允许这一次、
 在本次对话里允许这个工具，或者永远允许这条完全相同的调用；`/auto` 会停止对普通操作的询问。
 危险命令以及对 `.omicsclaw/`、`.env` 的改动仍然每次都问。危险命令检查靠的是一份模式清单，
-刻意构造的命令可以绕过它。所以如果让 agent 无人值守地工作，请设置 `OMICSCLAW_SANDBOX=docker`
-和 `OMICSCLAW_SANDBOX_IMAGE`，让它的命令在没有网络的容器里运行（见 [`.env.example`](.env.example)）。
+刻意构造的命令可以绕过它。所以如果让 agent 无人值守地工作，请设置 `OMICSCLAW_SANDBOX=auto`
+并核对原生沙箱的有效隔离等级和出站网络策略（见 [`.env.example`](.env.example)）。
 
 ## 桌面 App
 

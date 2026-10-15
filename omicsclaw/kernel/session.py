@@ -661,6 +661,7 @@ class SessionKernel:
         *,
         timeout_s: float = 1800.0,
         callbacks: KernelCallbacks | None = None,
+        store_history: bool = True,
     ) -> CellResult:
         """Run one cell to ``status: idle`` and return its outcome.
 
@@ -695,7 +696,7 @@ class SessionKernel:
             return forward
 
         self._interrupted = False
-        msg_id = self._kc.execute(code)
+        msg_id = self._kc.execute(code, store_history=store_history)
         deadline = began + max(1.0, float(timeout_s))
         interrupted_at: float | None = None
         alive_checks = 0
@@ -803,7 +804,8 @@ class SessionKernel:
             "cpu_s": self.cpu_seconds(),
             "peak_rss_kb": self.peak_rss_kb(),
         }
-        self.cells += 1
+        if store_history:
+            self.cells += 1
         if callbacks.on_usage is not None:
             try:
                 callbacks.on_usage(result.usage)

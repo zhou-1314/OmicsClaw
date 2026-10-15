@@ -13,171 +13,100 @@ tags:
 - cosg
 ---
 
-# sc-markers
+# Single-Cell Cluster Marker Gene Ranking & Specificity Scoring (`sc-markers`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user already has clustering / cell-type labels in `obs` (typically
-`leiden`, `louvain`, or `cell_type`) and wants ranked marker genes per
-group as evidence for downstream annotation or interpretation. Four
-methods: `wilcoxon` (default rank-sum), `t-test` (Welch), `logreg`
-(multinomial logistic regression — discriminative ranking), `cosg`
-(fast cosine-specificity scoring without p-values). This is for
-**cluster markers**, not condition contrasts — for treatment-vs-control
-DE with replicates use `sc-de`.
+Select a cluster marker discovery algorithm based on cluster count, dataset size, and whether statistical $p$-values or pure expression specificity are needed:
 
-## Use from a step
+| Method (`--method` / `method=`) | Upstream Package | Ranking Criterion | Outputs $p$-Values? | Best Used When |
+|---|---|---|---|---|
+| **Wilcoxon Rank-Sum** (`method="wilcoxon"`) | `scanpy.tl.rank_genes_groups` | Non-parametric Mann-Whitney U test Z-score + BH `pvals_adj` | Yes (`pvals`, `pvals_adj`) | **Default general-purpose marker test**; robust to outliers and skewed single-cell distributions |
+| **COSG Specificity** (`method="cosg"`) | `cosg` (`cosg.cosg`) | Cosine similarity in cell-expression space with specificity penalty $\mu$ (`mu=1.0`) | No (`scores` only) | Identifying highly selective cell-type markers that are strictly silent in off-target clusters; scales to $>10^6$ cells |
+| **Welch's $t$-test** (`method="t-test"`) | `scanpy.tl.rank_genes_groups` | Welch's variance-adjusted two-sample $t$-statistic | Yes (`pvals`, `pvals_adj`) | Fast exploratory marker scan on very large atlases |
+| **Logistic Regression** (`method="logreg"`) | `scanpy.tl.rank_genes_groups` (`sklearn`) | Multivariate $L_2$-penalized classification coefficient | No (`scores` only) | Selecting a minimal, non-redundant gene panel across $\ge 3$ clusters |
+
+> **Scope Distinction**: Use `sc-markers` for **one-vs-rest cluster characterization** (`leiden`, `cell_type`). For **multi-donor condition-vs-control differential expression**, use `sc-de` (pseudobulk `pydeseq2`).
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Scanpy Wilcoxon Ranking with Expression-Fraction Filtering
 
 ```python
-markers = load_skill("sc-markers")
-adata = read_input("results/02_cluster/intermediate/adata_clustered.h5ad")
-table = markers.find_markers(adata, groupby="leiden")
-write_output(table, "tables/markers_all.csv")
-write_output(markers.top_markers(table), "tables/markers_top.csv")
-write_output(markers.run_info(table), "tables/marker_run.json")
+import scanpy as sc
+import pandas as pd
+
+# 1. Rank genes per cluster on log1p-normalized expression (always set pts=True and use_raw=False)
+sc.tl.rank_genes_groups(
+    adata,
+    groupby="leiden",
+    method="wilcoxon",
+    pts=True,          # Populates pct_nz_group and pct_nz_reference
+    use_raw=False,
+)
+
+# 2. Filter for specific markers (expressed in >=25% of target cluster, <=50% of rest, log2FC >= 0.25)
+sc.tl.filter_rank_genes_groups(
+    adata,
+    min_in_group_fraction=0.25,
+    min_fold_change=0.25,
+    max_out_group_fraction=0.50,
+)
+
+markers_all = sc.get.rank_genes_groups_df(adata, group=None)
+markers_top10 = (
+    markers_all.dropna(subset=["names"])
+    .query("pvals_adj < 0.05 and logfoldchanges >= 0.25")
+    .groupby("group", observed=True)
+    .head(10)
+)
 ```
 
-A complete step on log-normalized PBMC expression is in `examples/example_step.py`.
+### Pattern B: High-Specificity Marker Discovery with `COSG`
 
-## API
+```python
+import cosg
+import scanpy as sc
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `find_markers(adata, *, groupby: str, method: str='wilcoxon', n_genes: int | None=None, min_in_group_fraction: float=0.25, min_fold_change: float=0.25, max_out_group_fraction: float=0.5, mu: float=1.0) -> pd.DataFrame`
-
-Rank marker genes for each group against the rest using adata.X.
-
-X should contain normalized expression. Computation uses a copy, so the
-input's matrices, obs and uns are unchanged. Scanpy methods apply the
-expression-fraction and fold-change filters; when filtering fails or
-removes every row, the unfiltered ranking is returned and run_info records
-filter_fallback and its reason. COSG scores specificity without p-values.
-
-:param groupby: The obs column defining clusters or cell types.
-:param method: wilcoxon (default), t-test, logreg or cosg.
-:param n_genes: Genes ranked per group. None means all genes for Scanpy
-    methods and 50 for COSG, matching the CLI defaults.
-:param min_in_group_fraction: Minimum expressing fraction within a group.
-    Default 0.25; unused by COSG.
-:param min_fold_change: Fold-change filter passed to Scanpy. Default 0.25;
-    unused by COSG.
-:param max_out_group_fraction: Maximum expressing fraction outside a group.
-    Default 0.5; unused by COSG.
-:param mu: COSG specificity penalty. Default 1.0; unused by Scanpy methods.
-:returns: A DataFrame with group, names, scores and method-dependent effect,
-    p-value and fraction columns. COSG pvals and pvals_adj are NaN. The
-    table's attrs hold the run record; use run_info before CSV export.
-:raises ValueError: Unknown method or missing grouping column.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Return the method, grouping and filter-fallback record attached to a marker table.
-
-:param keep: False removes the record from table.attrs; default True keeps it.
-:returns: A copy of the run record, or an empty dict for an unrecorded table.
-    CSV files do not preserve attrs; write this record separately if needed.
-
-### `top_markers(table: pd.DataFrame, *, n_top: int=10) -> pd.DataFrame`
-
-Return the top n_top rows per group, using adjusted p-value then effect.
-
-Tables without finite adjusted p-values, including COSG, use scores.
-Otherwise logfoldchanges is the effect when available, falling back to scores.
-
-### `cluster_summary(table: pd.DataFrame) -> pd.DataFrame`
-
-Return n_markers, top_gene, top_effect, median_effect and effect_metric per group.
-
-The top gene uses the same ordering as top_markers. top_effect is the
-group's maximum effect, not necessarily that gene's effect. Use a row
-from top_markers when reporting a gene together with its effect size.
-Effect statistics use all returned markers in the group.
-
-### `marker_dotplot_figure(adata, table: pd.DataFrame, *, groupby: str, n_top: int=5)`
-
-Return a matplotlib Figure of marker expression in adata.X by group.
-
-Dot size shows the expressing fraction; color shows mean expression.
-The top n_top markers per group are selected with top_markers.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-The four methods and their interpretation are described in
-`references/methodology.md`. `find_markers` uses `X` with `use_raw=False`.
-For `pbmc3k_processed` or `pbmc68k_reduced`, take `adata.raw.to_adata()` to
-use their log-normalized matrix; their X is scaled.
-
-- `groupby` explicitly names the labels to compare.
-- `method="wilcoxon"` preserves the CLI default; `t-test` uses Welch's test,
-  `logreg` gives a discriminative ranking, and `cosg` gives specificity scores.
-- `n_genes=None` ranks all genes for Scanpy methods and 50 per group for COSG.
-- The CLI's post-filter defaults are `min_in_group_fraction=0.25`,
-  `min_fold_change=0.25` and `max_out_group_fraction=0.5`.
-- `mu=1.0` preserves the COSG specificity penalty; the other methods ignore it.
-- `top_markers(..., n_top=10)` preserves the CLI's compact-summary size.
-
-## Gotchas
-
-- In `tables/cluster_summary.csv`, `top_effect` is the group's maximum, not
-  necessarily the effect of `top_gene`. Use the same row from `top_markers`
-  for a gene and its effect size (`_api.py:132`, `cluster_summary`).
-- `run_info(table)["filter_fallback"]` is true when post-filtering failed or
-  removed every row. The function then returns the unfiltered ranking, as the
-  CLI did previously; read `fallback_reason` before interpreting the table.
-- COSG's `pvals` and `pvals_adj` columns in `tables/markers_all.csv` contain NaN.
-  `top_markers` ranks those rows by `scores`; p-value filters must handle missing values.
-- `_api.py:21` (`find_markers`) uses X without checking that it is log-normalized.
-  Supply the intended expression matrix explicitly.
-- `sc_markers.py:134` (`_resolve_groupby`) can choose a recognized label column for
-  the CLI. The function API requires `groupby` explicitly.
-- Binary `logreg` can return a Scanpy table without `group`, causing
-  `_api.py:91` to raise `KeyError`. Use `wilcoxon`, `t-test` or COSG
-  for two groups; this existing Scanpy-wrapper limitation is unchanged.
-- CSV export drops DataFrame attrs. Save `run_info(table)` separately when
-  keeping the fallback record matters; the CLI stores it at
-  `result.json["data"]["run_info"]`.
-
-## Inputs and outputs
-
-`find_markers` reads X and the selected obs column, computes on a copy and
-returns a DataFrame. The input AnnData is unchanged, including its uns entries.
-`top_markers` and `cluster_summary` return tables; `marker_dotplot_figure`
-returns a matplotlib Figure from X. These functions do not write files.
-
-The CLI writes `processed.h5ad`, `report.md`, `result.json`,
-`tables/markers_all.csv`, `tables/markers_top.csv`, `tables/cluster_summary.csv`,
-and figure-data copies of those tables. Conditional figures and R outputs are
-listed in `references/output_contract.md`.
-
-## Key CLI
-
-```bash
-# Demo (built-in PBMC3K with leiden labels)
-python skills/singlecell/scrna/sc-markers/sc_markers.py --demo --output /tmp/sc_markers_demo
-
-# Default Wilcoxon on leiden clusters
-python skills/singlecell/scrna/sc-markers/sc_markers.py \
-  --input clustered.h5ad --output results/ --groupby leiden
-
-# COSG fast specificity ranking on a labelled AnnData
-python skills/singlecell/scrna/sc-markers/sc_markers.py \
-  --input annotated.h5ad --output results/ \
-  --groupby cell_type --method cosg --mu 1.0
-
-# Strict marker filtering (high fold-change, low out-group fraction)
-python skills/singlecell/scrna/sc-markers/sc_markers.py \
-  --input clustered.h5ad --output results/ \
-  --min-fold-change 1.0 --max-out-group-fraction 0.2
+cosg.cosg(
+    adata,
+    key_added="cosg",
+    mu=1.0,                        # Specificity penalty (higher mu penalizes expression in other clusters)
+    expressed_pct=0.1,
+    remove_lowly_expressed=True,
+    n_genes_user=50,
+    groupby="leiden",
+    use_raw=False,
+)
+cosg_markers = sc.get.rank_genes_groups_df(adata, key="cosg", group=None)
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- `references/parameters.md` — every CLI flag and per-method tuning hint
-- `references/methodology.md` — Wilcoxon vs t-test vs logreg vs COSG; when each wins
-- `references/output_contract.md` — `markers_all.csv` column schema; figures' figure_data CSVs
-- Adjacent skills: `sc-clustering` (upstream — produces the `leiden` / `louvain` column), `sc-cell-annotation` (downstream — uses these markers as evidence for label assignment), `sc-de` (parallel — replicate-aware condition contrasts, NOT cluster markers)
+Calling `use_skill("sc-markers")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `find_markers(adata, groupby="leiden", method="wilcoxon", min_in_group_fraction=0.25, min_fold_change=0.25, max_out_group_fraction=0.5)`
+- `top_markers(markers_df, n_top=10)`
+- `cluster_marker_summary(markers_df, fdr=0.05)`
+
+## 3. Output Format & Verification Contract
+
+- **Marker Tables** (`tables/markers_all.csv`, `tables/markers_top.csv`, `tables/cluster_summary.csv`):
+  - `markers_all.csv` / `markers_top.csv` columns: `group`, `names`, `scores`, `logfoldchanges`, `pvals`, `pvals_adj`, `pct_nz_group`, `pct_nz_reference`.
+  - `cluster_summary.csv` columns: `group`, `n_markers`, `top_gene`, `max_lfc`.
+- **Verification Invariants**:
+  - Confirm every cluster in `adata.obs[groupby].unique()` is represented in `markers_top.csv`.
+  - Confirm top markers exhibit positive `scores` and `pct_nz_group > pct_nz_reference`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Never Run `rank_genes_groups` on Zero-Centered `sc.pp.scale` Matrices**:
+   - `sc.tl.rank_genes_groups` computes `logfoldchanges` assuming `adata.X` holds non-negative $\log_e(1 + \text{CP10K})$ expression. Running on `sc.pp.scale`d matrices (which contain negative z-scores) produces `NaN` log-fold changes and corrupts `pts` (`pct_nz_group` counts any z-score $> 0$ as "expressed"). If `adata.X` was scaled, pass `layer="log1p"` or restore `adata = adata.raw.to_adata()`.
+2. **`filter_rank_genes_groups` Replaces Rejected Genes with `NaN` Names**:
+   - `sc.tl.filter_rank_genes_groups` does not shorten the arrays in `adata.uns["rank_genes_groups_filtered"]`; instead it replaces filtered-out gene names with `NaN`. Always call `.dropna(subset=["names"])` on the resulting DataFrame.
+3. **`COSG` and `logreg` Produce Specificity Scores Without $p$-Values**:
+   - Neither `cosg` nor `method="logreg"` computes frequentist $p$-values (`pvals` and `pvals_adj` are `NaN` or absent). Sort and threshold their outputs by `scores` rather than `pvals_adj < 0.05`.
+4. **Two-Group `method="logreg"` Shape Quirk in Scanpy**:
+   - In binary classification ($2$ groups), `sklearn.linear_model.LogisticRegression.coef_` has shape `(1, n_genes)` rather than `(2, n_genes)`, causing `sc.get.rank_genes_groups_df(adata, group=None)` to omit the second group. Use `method="wilcoxon"` or `cosg` when comparing exactly two groups.
 
 ## Dependencies
 

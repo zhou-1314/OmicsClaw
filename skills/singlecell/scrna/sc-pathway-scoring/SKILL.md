@@ -14,179 +14,108 @@ tags:
 - decoupler
 ---
 
-# sc-pathway-scoring
+# Single-Cell Per-Cell Pathway & Signature Scoring (`sc-pathway-scoring`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has a normalised scRNA AnnData and a gene-set library (GMT
-file or one of the built-in DB aliases: `hallmark`, `kegg`, `reactome`,
-`go_bp`, ...) and wants per-cell scores quantifying how active each
-gene set is. Three methods:
+Select a per-cell gene-set activity scoring algorithm based on sensitivity to library-size dropout, background control strategy, and runtime:
 
-- `aucell_r` (default) — R-backed AUCell via `decoupler-py`-style
-  bridge. Best statistical foundation; requires R env.
-- `aucell_py` — Python AUCell (`--aucell-py-auc-threshold`). Pure
-  Python.
-- `score_genes_py` — Scanpy `tl.score_genes` per gene set. Lightest
-  and fastest.
+| Method (`--method` / `method=`) | Upstream Package | Scoring Mechanism | Input Matrix Required | Best Used When |
+|---|---|---|---|---|
+| **AUCell (Python / R)** (`method="aucell_py"` / `"aucell_r"`) | `decoupler.run_aucell` / R `AUCell` | Area Under the Recovery Curve across the top $5\%$ (`auc_threshold=0.05`) highest-expressed genes within each cell | Raw counts or log1p-normalized `adata.X` (rank-invariant per cell) | **Gold standard for single-cell signatures**; completely independent of cross-cell normalization or other cells in the dataset |
+| **Scanpy Module Score** (`method="score_genes_py"`) | `scanpy.tl.score_genes` (Seurat `AddModuleScore` equivalent) | Mean expression of signature genes minus mean of expression-binned random control genes (`ctrl_size=50`, `n_bins=25`) | Log1p-normalized `adata.X` | Fast, lightweight signature scoring on normalized expression matrices |
+| **Univariate Linear Model (ULM)** | `decoupler.run_ulm` | $t$-value of linear regression between cell expression profile and pathway weights | Log1p-normalized `adata.X` | Weighted gene sets / signed PROGENy pathway footprints (`+1` activating, `-1` inhibitory) |
 
-Output: `tables/enrichment_scores.csv` (cells × gene_sets), plus
-group-mean / group-high-fraction tables when `--groupby` is provided.
+> **Scope Distinction**: Use `sc-pathway-scoring` to assign a **continuous activity score to every individual cell** (`cells × pathways`). For bulk-style ORA/GSEA $p$-values on a DE gene table, use `sc-enrichment`.
 
-For *bulk-style* condition-vs-control GSEA / ORA on a DE table use
-`sc-enrichment`. For de-novo gene-program discovery use
-`sc-gene-programs`.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-## Use in an analysis step
-
-Use `load_skill` from the notebook SDK; write returned objects with
-`write_output`. This runnable example is also in `examples/example_step.py`.
-The CLI remains available for standalone reports and galleries.
+### Pattern A: Control-Subtracted Module Scoring (`scanpy.tl.score_genes`)
 
 ```python
-# Score PBMC lineage gene sets with the Python AUCell implementation.
-# Reads pbmc3k_processed and uses its log-normalized raw snapshot.
-# Calls sc-pathway-scoring: score_gene_sets, group_scores, score_distribution_figure.
+import scanpy as sc
+import pandas as pd
 
-from skills._sdk.notebook import load_demo, load_skill, write_output
-
-pathways = load_skill('sc-pathway-scoring')
-adata = load_demo('pbmc3k_processed').raw.to_adata()
+# Ensure adata.X contains log1p-normalized expression (use adata.raw.to_adata() if adata.X was scaled)
 gene_sets = {
-    'B_cell': ['MS4A1', 'CD79A', 'CD79B', 'CD74', 'HLA-DRA'],
-    'T_cell': ['CD3D', 'CD3E', 'CD3G', 'TRAC', 'IL7R'],
-    'Myeloid': ['LYZ', 'S100A8', 'S100A9', 'FCN1', 'CTSS'],
+    "T_cell_cytotoxicity": ["PRF1", "GZMB", "GZMA", "GNLY", "NKG7", "IFNG"],
+    "IFN_alpha_response": ["ISG15", "IFI6", "IFIT1", "IFIT3", "MX1", "OAS1"],
+    "Glycolysis": ["HK2", "PFKP", "ALDOA", "GAPDH", "PKM", "LDHA"],
 }
 
-scores = pathways.score_gene_sets(adata, gene_sets, method='aucell_py')
-write_output(scores, 'tables/pathway_scores.csv')
-write_output(pathways.group_scores(adata, scores, groupby='louvain'), 'tables/group_scores.csv')
-write_output(pathways.score_distribution_figure(scores), 'figures/score_distribution.png')
+score_cols = {}
+for pathway, genes in gene_sets.items():
+    matched = [g for g in genes if g in adata.var_names]
+    if len(matched) >= 2:
+        col = f"enrich__{pathway}"
+        sc.tl.score_genes(
+            adata,
+            gene_list=matched,
+            ctrl_size=min(50, max(len(matched), 1)),
+            n_bins=25,
+            score_name=col,
+            random_state=42,
+            use_raw=False,
+        )
+        score_cols[pathway] = adata.obs[col]
 
-assert scores.index.equals(adata.obs_names)
-assert set(scores.columns) == set(gene_sets)
-assert scores.max().max() > 0
-assert scores.min().min() >= 0
+scores_df = pd.DataFrame(score_cols, index=adata.obs_names)
+group_means = scores_df.groupby(adata.obs["leiden"], observed=True).mean()
 ```
 
-## Inputs & Outputs
+### Pattern B: Rank-Based AUCell Scoring (`decoupler` or `numpy`)
 
-Input is an AnnData and gene sets keyed by name. The CLI reads H5AD plus a
-GMT file or an Enrichr library. Python scoring returns a cell-by-set
-DataFrame; `attach_scores` returns a copy with `obs["enrich__..."]` columns.
+```python
+import numpy as np
+import pandas as pd
 
-The CLI writes `processed.h5ad`, `report.md`, `result.json`, and
-`tables/enrichment_scores.csv`, `gene_set_overlap.csv`, `top_pathways.csv`.
-Grouped runs also write `group_mean_scores.csv` and
-`group_high_fraction.csv`. Plot source tables live under `figure_data/`,
-not `tables/`. R exchange matrices and AUCell CSVs are temporary.
+# Pure-Python AUCell recovery curve over top 5% expressed genes per cell
+dense = adata.X.toarray() if hasattr(adata.X, "toarray") else np.asarray(adata.X)
+k = max(int(np.ceil(0.05 * adata.n_vars)), 1)
+top_ranks = np.argsort(-dense, axis=1)[:, :k]
+gene_idx = {g: i for i, g in enumerate(adata.var_names)}
 
-## Flow
+aucell_scores = {}
+for pathway, genes in gene_sets.items():
+    cols = [gene_idx[g] for g in genes if g in gene_idx]
+    if cols:
+        hits = np.isin(top_ranks, cols)
+        aucell_scores[pathway] = hits.cumsum(axis=1).sum(axis=1) / float(len(cols) * k)
 
-1. Load AnnData (`--input`) or build a demo.
-2. Load gene sets: parse `--gene-sets` GMT, OR fetch via `--gene-set-db <alias>` and write a resolved GMT.
-3. Validate: at least one gene-set member overlaps the input features (`feature_label_source` chosen from `var_names` / `var["gene_symbol"]` / etc.).
-4. Run preflight; resolve `--groupby` (auto-pick from `leiden` / `louvain` / `cell_type` if unset).
-5. Dispatch to method:
-   - `aucell_r`: shell out to bundled R script via `RScriptRunner`.
-   - `aucell_py`: AUCell-Python with `--aucell-py-auc-threshold`.
-   - `score_genes_py`: Scanpy `tl.score_genes` per gene set.
-6. Compute group-aware aggregates if `--groupby` is set.
-7. Save tables, figures, `processed.h5ad`, `report.md`, `result.json`.
-
-## Gotchas
-
-- `run_info(scores)["skipped_gene_sets"]` lists sets with no matching features. Inspect `tables/gene_set_overlap.csv` before interpreting scores; all-unmatched Python input raises.
-- `score_gene_sets(..., method="score_genes_py")` requires normalized X. AUCell ranks expression and can also use counts.
-- `load_gene_sets` downloads named libraries through gseapy. Local GMT/JSON avoids network access. This skill's mouse `kegg` alias is `KEGG_2021_Mouse`, intentionally separate from sc-enrichment's aliases.
-- `aucell_r` needs AUCell and GSEABase. Its temporary result must contain a `Cell` column; otherwise the API raises instead of misaligning rows.
-- API scoring uses seed 42 by default. The CLI preserves its historical `score_genes_py` seed 0; its AUCell seed defaults to 42. Set `random_state=0` for API/CLI score_genes comparisons.
-- `processed.h5ad` adds an `enrich__` obs column per gene set. `attach_scores` copies its input; `score_gene_sets` leaves it unchanged.
-- CLI `--demo` slices the first 60 feature names into four arbitrary sets. They exercise the pipeline, not biological pathways. The step below uses named PBMC lineage genes.
-
-## Key CLI
-
-```bash
-# Demo (built-in gene sets)
-python skills/singlecell/scrna/sc-pathway-scoring/sc_pathway_scoring.py --demo --output /tmp/sc_pw_demo
-
-# AUCell-R with MSigDB Hallmark, grouped by cell type
-python skills/singlecell/scrna/sc-pathway-scoring/sc_pathway_scoring.py \
-  --input clustered.h5ad --output results/ \
-  --gene-set-db hallmark --groupby cell_type
-
-# AUCell-Python (no R needed) with custom GMT
-python skills/singlecell/scrna/sc-pathway-scoring/sc_pathway_scoring.py \
-  --input clustered.h5ad --output results/ \
-  --method aucell_py --gene-sets pathways.gmt --groupby leiden
-
-# Scanpy score_genes for fast prototyping
-python skills/singlecell/scrna/sc-pathway-scoring/sc_pathway_scoring.py \
-  --input clustered.h5ad --output results/ \
-  --method score_genes_py --gene-sets pathways.gmt
+scores_df = pd.DataFrame(aucell_scores, index=adata.obs_names)
 ```
 
-## See also
+### Optional Micro-Helper (`kernel.py`)
 
-- `references/parameters.md` — every CLI flag, library aliases
-- `references/methodology.md` — AUCell vs score_genes; gene-symbol expectations
-- `references/output_contract.md` — `enrichment_scores.csv` schema; per-method differences
-- Adjacent skills: `sc-clustering` / `sc-cell-annotation` (upstream — produce `--groupby` column for group-aware aggregates), `sc-enrichment` (parallel — bulk-style GSEA/ORA on DE tables, NOT per-cell scoring), `sc-gene-programs` (parallel — de-novo factorisation, NOT supervised scoring against curated sets), `sc-grn` (parallel — TF-target regulons; AUCell is shared underlying tech)
+Calling `use_skill("sc-pathway-scoring")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `score_gene_sets(adata, gene_sets, method="score_genes_py", auc_threshold=0.05, ctrl_size=50, random_state=42)`
+- `group_scores(adata, scores_df, groupby="leiden")`
+- `top_pathways(scores_df, n_top=20)`
+
+## 3. Output Format & Verification Contract
+
+- **Cell-by-Pathway Score Matrix** (`tables/enrichment_scores.csv` or `tables/pathway_scores.csv`):
+  - Index matches `adata.obs_names` (`scores_df.index.equals(adata.obs_names)`), columns correspond to scored gene sets.
+  - Annotated `AnnData` (`intermediate/processed.h5ad`) stores scores in `adata.obs["enrich__<pathway>"]`.
+- **Group & Overlap Summaries** (`tables/group_mean_scores.csv`, `tables/gene_set_overlap.csv`, `tables/top_pathways.csv`):
+  - Mean score per cluster/cell-type group and matched gene count per signature.
+- **Verification Invariants**:
+  - For `aucell_py` / `aucell_r`, all scores are bounded in $[0, 1]$ (`scores.min().min() >= 0.0` and `scores.max().max() <= 1.0`).
+  - Confirm at least $1$ gene per retained pathway matched `adata.var_names`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Do Not Run `score_genes` or `AUCell` on HVG-Subsetted `adata` (`2,000` Genes)**:
+   - If `adata` was subsetted in-place to $2,000$ highly variable genes, housekeeping metabolic genes and $70\text{--}80\%$ of pathway members will be missing from `adata.var_names`, severely degrading AUCell rankings and `score_genes` expression bins. Always score against the full filtered transcriptome (or `adata.raw.to_adata()`).
+2. **`score_genes` Can Produce Negative Scores (`AUCell` Is Strictly Non-Negative)**:
+   - `sc.tl.score_genes` subtracts the mean expression of binned control genes, so cells expressing a pathway below the background bin average receive **negative** scores. By contrast, `AUCell` measures area under the top-$5\%$ recovery curve and is strictly in $[0, 1]$.
+3. **Gene Symbol Namespace & Species Casing (`MSigDB` Human vs. Mouse)**:
+   - MSigDB GMT files use uppercase human HGNC symbols (`IFNG`, `STAT1`). When scoring mouse `AnnData` (`Ifng`, `Stat1`), convert gene-set symbols to title case or map orthologous symbols before calling `score_gene_sets`, and always inspect `gene_set_overlap` first.
+4. **Tie-Breaking in Sparse Zero-Inflated Rankings**:
+   - Because $>85\%$ of genes in a single cell have $0$ UMI counts, setting `auc_threshold` higher than the fraction of detected genes per cell ($>0.10$) forces `AUCell` to rank arbitrary zero-count ties. Keep `auc_threshold=0.05` (top $5\%$ of genes).
 
 ## Dependencies
 
 Python packages this skill's script needs. They are not installed for you — check before a long run.
 
 `anndata`, `gseapy`, `matplotlib`, `numpy`, `pandas`, `scanpy`, `scipy`, `seaborn`
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `score_gene_sets(adata, gene_sets, *, method: str='aucell_r', auc_max_rank: int | None=None, auc_threshold: float=0.05, ctrl_size: int=50, n_bins: int=25, random_state: int=42) -> pd.DataFrame`
-
-Return cell-by-gene-set scores without changing adata.
-
-aucell_py ranks X, breaking ties with random_state; auc_threshold is the
-fraction of ranked genes used. score_genes_py requires normalized X and
-uses Scanpy control genes. aucell_r requires AUCell/GSEABase and uses
-normalized X or an aligned raw matrix. R exchange files are temporary.
-Gene sets with no matched features are skipped; all-unmatched input fails.
-API seeds default to 42. The historical score_genes CLI uses seed 0.
-
-### `load_gene_sets(source, *, species: str='human') -> dict[str, list[str]]`
-
-Read a GMT or JSON file, or download an Enrichr library.
-
-Aliases belong to this skill: mouse KEGG resolves to KEGG_2021_Mouse.
-Named libraries require gseapy and network access; local files do not.
-
-### `attach_scores(adata, scores: pd.DataFrame)`
-
-Return a copy with enrich__ columns and the scoring run record in uns.
-
-### `gene_set_overlap(adata, gene_sets) -> pd.DataFrame`
-
-Return matched feature counts and identifiers for every requested gene set.
-
-### `group_scores(adata, scores: pd.DataFrame, *, groupby: str) -> pd.DataFrame`
-
-Return mean scores per obs group, retaining every scored gene set.
-
-### `top_pathways(scores: pd.DataFrame, *, n: int=20) -> pd.DataFrame`
-
-Rank gene sets by mean absolute cell score, breaking ties by name.
-
-### `score_summary(adata, scores_df: pd.DataFrame, *, groupby: str | None, top_pathways: int) -> dict[str, object]`
-
-Return top pathways, grouped means, high fractions and long-form scores.
-
-### `score_distribution_figure(scores: pd.DataFrame)`
-
-Return a boxplot of per-cell scores without writing files.
-
-### `run_info(result, *, keep: bool=True) -> dict`
-
-Return scoring provenance; keep=False removes the AnnData or table run record.
-
-<!-- api:end -->

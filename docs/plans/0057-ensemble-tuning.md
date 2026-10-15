@@ -4,9 +4,7 @@
 
 **2026-10-07 补记**：ensemble 层已于 2026-10-02 删除，代码存档在 tag `archive/ensemble-before-removal`。本计划已被取代，不再实施或维护。
 
-**前置**：0056 基础层已实施、未 commit（`docs/plans/0056-ensemble-foundation-delivery.md`）；面板偏差研究四节已完成
-（`docs/plans/0056-panel-bias-report.md`，下称"0056 报告"）。本计划是 0056–0060 系列的第二份，输出接口给 0058（§3.14），并为 0059
-预登记确证设计（§4.9）。
+**前置**：本计划曾接续 0056 ensemble 基础层，输出接口供 0058 使用，并为 0059 预登记确证设计。旧面板偏差、开发集和留出集报告已清理。
 
 **给实现者的一条硬要求**：新代码的函数、类与模块 docstring 只写"是什么、做什么、参数与返回、会抛什么"，以及会
 改变调用方式的行为说明（例如"超出预算时拒绝并返回已用/上限"）。**不写计划编号、裁定编号、决策叙事、与旧
@@ -804,7 +802,7 @@ marker。policy `LOW`、`AUTO`、`read_only=True`、`concurrency_safe=True`。
 
 - 一条命令 `run_holdout.py --freeze … --root <验证根目录>`：依次定义 CosMx 总体、预处理、探测、A0/A0k、各调参臂各重复；每个"单元 × 臂 × 重复"一个独立 workspace（§3.12）。
 - 真值只在全部运行结束后由 `evaluate.py` 读取（CosMx 总体划分只读 niche 种类数与占比，例外已预登记）。
-- 报告 `docs/plans/0057-holdout-report.md`，固定表格：
+- 留出集报告的固定表格（历史规格，旧结果已清理）：
   1. 逐单元：数据集、单元、K*、各方法 A0 ARI、A0k、`median def`、`max def`、各臂 chosen_k 与 `fin` ARI、每方法 `tun_m` ARI（标 `fallback_default`）、失败；
   2. 主要估计量 D1、D2：均值、中位数、t 区间、BCa 区间、符号翻转 p；每方法 D1_m；方法剔除与失败计分的敏感性；**无效停止线判定**；
   3. 次要估计量：D3 与各对照；
@@ -916,7 +914,7 @@ cassette 回放一致。
    的 A0 逐 spot 比对标签（重新编号后完全相同，即 ARI = 1.0）。不一致 → 停下查原因（非确定性、参数渲染差异），修正前不得冻结。
 2. 真实 LLM 在 151673/151674 上跑全部臂与重复；§4.6 的一次性面板比较（含同方法组单列）；默认预处理敏感性；预热块跑通。
 3. 测量成本并按 §4.8 外推；按开发集 A3 token 分布的 p95 定上限；粗估 sd_d。
-4. 写 `docs/plans/0057-dev-report.md`；生成 `freeze.json`、环境锁定与冻结附录 → **owner 签字**。
+4. 写开发集报告；生成 `freeze.json`、环境锁定与冻结附录 → **owner 签字**。
 
 **T11 删除旧 autoagent**：
 

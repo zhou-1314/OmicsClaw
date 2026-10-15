@@ -13,105 +13,60 @@ tags:
 - spectral-counting
 ---
 
-# proteomics-quantification
+# Peptide-to-Protein Rollup Quantification (LFQ, iBAQ, Spectral Count) (`proteomics-quantification`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-lfq sums intensities; spectral_count counts PSM rows; ibaq divides by supplied theoretical counts or a sequence-derived tryptic count.
-Use existing search-engine tables; this skill does not search raw spectra.
+Select the peptide-to-protein rollup algorithm according to whether relative inter-sample comparison or absolute intra-sample stoichiometry is needed:
 
-## Use from a step
+| Quantification Goal | Method (`method=`) | Upstream Algorithm / Formula | Why |
+|---|---|---|---|
+| **Relative abundance across samples** (DDA / DIA) | **MaxLFQ** / Intensity Rollup (`method="lfq"`) | `iq` (R) / `directLFQ` (Python) / intensity summation | Delayed normalization of pairwise peptide ratios preserves inter-sample fold changes even with missing peptides |
+| **Absolute stoichiometry / molar ranking within a sample** | **iBAQ** (`method="ibaq"`) | $\text{iBAQ}_p = \frac{\sum_{i \in p} I_i}{N_{\text{theoretical tryptic peptides}}(6 \le L \le 30)}$ | Normalizes summed intensity by protein size/detectability so 200-kDa and 15-kDa subunits can be compared on a molar scale |
+| **Low-precision / AP-MS pull-down screening** | **Spectral Counting** (`method="spectral_count"`) | $\text{PSM count per protein}$ (or length-normalized `NSAF`) | Simple non-parametric count of MS2 identifications when precursor XIC peak integration is unavailable |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: `directLFQ` / `iBAQ` Tryptic Peptide Normalization in Python
 
 ```python
-from skills._sdk.notebook import load_skill, write_output
-library = load_skill('proteomics-quantification')
-data = library.demo_data(random_state=42)
-result = library.quantify(data)
-write_output(result, 'tables/protein_abundance.csv')
+import re
+import pandas as pd
+
+# 1. Count theoretical observable tryptic peptides (cleave after K/R not followed by P, length 6..30 aa)
+def count_tryptic_peptides(seq: str, min_len: int = 6, max_len: int = 30) -> int:
+    frags = re.split(r"(?<=[KR])(?!P)", str(seq).upper())
+    return sum(1 for f in frags if min_len <= len(f) <= max_len)
+
+# 2. Compute iBAQ = summed precursor intensity / theoretical tryptic peptides
+peptides = pd.read_csv("data/peptides.csv")
+summed = peptides.groupby("protein", as_index=False)["intensity"].sum()
 ```
 
-For real data, use `read_input` and pass any `read_table` helper as `reader=`.
-The executable `examples/example_step.py` also checks the result and writes a Figure.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("proteomics-quantification")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `quantify(peptides: pd.DataFrame, *, method: str='lfq') -> pd.DataFrame`
-
-Return a new protein abundance table without changing the peptides.
-
-:param peptides: PSM rows with protein and method-specific intensity or sequence columns.
-:param method: CLI default lfq sums intensity; spectral_count counts rows; ibaq divides by theoretical peptides.
-:returns: Protein abundances with diagnostics in attrs.
-:raises ValueError: Required columns or positive theoretical counts are missing.
-
-### `run_info(table: pd.DataFrame, *, keep: bool=True) -> dict`
-
-Read the diagnostics attached to a returned table.
-
-:param table: Table returned by quantify.
-:param keep: True preserves attrs; the CLI uses False before serialization.
-:returns: A separate diagnostic dictionary.
-:raises TypeError: The input is not a DataFrame.
-
-### `abundance_figure(table: pd.DataFrame)`
-
-Plot the distribution of protein abundance.
-
-:param table: Output of quantify, including abundance.
-:returns: A matplotlib Figure; no files are written.
-:raises KeyError: The abundance column is absent.
-
-### `demo_data(*, random_state: int=42) -> pd.DataFrame`
-
-Generate synthetic peptide data in memory.
-
-:param random_state: CLI seed 42; change to generate another simulation.
-:returns: Synthetic peptides with protein sequences for iBAQ.
-:raises ValueError: The seed is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-lfq sums intensities; spectral_count counts PSM rows; ibaq divides by supplied theoretical counts or a sequence-derived tryptic count.
-Functions return new DataFrames. `run_info(result)` reads diagnostic attrs;
-use `keep=False` before serialization when those attrs are not needed.
-
-## Gotchas
-
-- quantify rejects iBAQ without sequence or n_theoretical_peptides. LFQ is intensity summation, not MaxLFQ normalization.
-- `demo_data` uses seed 42, matching the CLI; every demo is synthetic.
-- `run_info` lives in DataFrame attrs and is not preserved by CSV serialization.
-
-## Inputs and outputs
-
-The CLI reads CSV tables and writes:
-
-- tables/protein_abundance.csv
-- report.md
-- result.json
-- `reproducibility/commands.sh` records the CLI invocation template.
-
-Functions return data and Figures without writing files. Steps own their outputs.
-Demo mode also writes its synthetic input when the original CLI used a file.
-
-## CLI
-
-```bash
-python skills/proteomics/proteomics-quantification/proteomics_quantification.py --demo --output /tmp/proteomics_quantification
+```python
+# Calling use_skill("proteomics-quantification") auto-injects kernel.py helpers into the python kernel:
+lfq_df = quantify(peptides, method="lfq")
+ibaq_df = quantify(peptides, method="ibaq")
 ```
 
-For real input replace `--demo` with `--input <table>`.
+## 3. Output Format & Verification Contract
 
+- **Protein Abundance Table** (`tables/protein_abundance.csv`):
+  - Contains `protein`, `n_peptides` (or PSM count), `abundance`, and `log10_abundance`, sorted descending by `abundance`.
+- **Verification Invariants**:
+  - `method` is one of `{"lfq", "ibaq", "spectral_count"}`.
+  - For `method="ibaq"`, every protein must have a positive theoretical tryptic peptide count (`theoretical_peptides > 0` or computable from `protein_sequence`).
 
-## See also
+## 4. Gotchas & Troubleshooting
 
-- `references/methodology.md`
-- `references/parameters.md`
-- `references/output_contract.md`
-- `proteomics-data-import` for protein-table normalization; `proteomics-de` for comparisons.
+1. **Comparing Raw `LFQ` Intensities Across Different Proteins Within One Sample**:
+   - A 250-kDa protein yields 10$\times$ more tryptic peptides than a 20-kDa protein at the exact same molar concentration. `LFQ` is designed strictly for comparing **the same protein across different samples**; use **iBAQ** (or `TPA` / histone proteomic ruler) when comparing the molar abundance of Protein A vs. Protein B within the same sample.
+2. **Shared (Razor) Peptides Distort Homologous Isoform Quantification**:
+   - Summing shared peptides into multiple paralogs double-counts MS1 precursor signal. Assign shared peptides via parsimony (razor protein with the largest number of unique peptides) or quantify exclusively on unique peptides when resolving paralog-specific regulation.
+3. **Keil Rule (`[KR]` followed by `P`) in In-Silico Tryptic Digestion**:
+   - Trypsin cleavage is sterically blocked when Lys (`K`) or Arg (`R`) is immediately followed by Proline (`P`). Use regex `(?<=[KR])(?!P)` and restrict to observable mass-spec peptide lengths ($6 \le L \le 30$ aa) when calculating iBAQ denominators.
 
 ## Dependencies
 

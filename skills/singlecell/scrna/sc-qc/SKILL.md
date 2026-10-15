@@ -12,149 +12,69 @@ tags:
 - ribosomal
 ---
 
-# sc-qc
+# Single-Cell RNA-seq Quality Control Metrics (`sc-qc`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-The user has a single-cell AnnData (post-counting / post-standardisation)
-and wants to *review* cell quality — counts, detected genes, mitochondrial
-percentage, ribosomal percentage — before any filtering.  This skill
-**reports**, it does not remove cells.  Use `sc-filter` to actually drop
-cells based on these metrics.
+Use this playbook to compute and inspect per-cell and per-gene quality control (QC) distributions (`n_genes_by_counts`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`, `pct_counts_hb`) on raw single-cell `AnnData` before choosing filtering cutoffs.
 
-## Use from a step
+| QC Metric | Biological Meaning | Typical Flagging Threshold | Adaptive MAD Alternative |
+|---|---|---|---|
+| `n_genes_by_counts` | Transcriptomic complexity per barcode | $< 200$ (empty droplet / debris) or $> 6,000$ (putative doublet) | $> 3	ext{--}5$ MAD below median on $\log_{10}$ scale |
+| `total_counts` | Library size (total UMIs per cell) | $< 500$ UMIs | $> 3	ext{--}5$ MAD below median on $\log_{10}$ scale |
+| `pct_counts_mt` | Mitochondrial transcript leakage | $> 15	ext{--}20\%$ (PBMC/solid tissue); $> 5\%$ for single-nucleus (`snRNA-seq`) | $> 3$ MAD above sample median |
+| `pct_counts_hb` | Ambient erythrocyte contamination | $> 5\%$ in non-erythroid tissues | Inspect per-sample distribution |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
 
 ```python
-qc = load_skill("sc-qc")
-adata = qc.calculate_qc(read_input("data/pbmc.h5ad"), species="human")
-write_output(qc.qc_summary(adata), "tables/qc_metrics_summary.csv")
-write_output(qc.qc_figure(adata), "figures/qc_histograms.png")
-write_output(adata, "intermediate/adata_qc.h5ad")
+import scanpy as sc
+import numpy as np
+import pandas as pd
+
+# 1. Flag mitochondrial, ribosomal, and hemoglobin gene families (species-aware)
+adata.var["mt"] = adata.var_names.str.startswith(("MT-", "mt-"))
+adata.var["ribo"] = adata.var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl"))
+adata.var["hb"] = adata.var_names.str.contains("^HB[^(P)]|^Hb[^(p)]", regex=True)
+
+# 2. Compute QC metrics in-place
+sc.pp.calculate_qc_metrics(
+    adata,
+    qc_vars=["mt", "ribo", "hb"],
+    percent_top=None,
+    log1p=True,
+    inplace=True,
+)
+
+# 3. Summarize per-cell distributions
+qc_summary = {
+    "n_cells": int(adata.n_obs),
+    "n_genes": int(adata.n_vars),
+    "median_genes": float(adata.obs["n_genes_by_counts"].median()),
+    "median_umis": float(adata.obs["total_counts"].median()),
+    "median_mt_pct": float(adata.obs["pct_counts_mt"].median()),
+}
 ```
 
-A complete step that runs on demo data: `examples/example_step.py`.
+### Optional Micro-Helper (`kernel.py`)
 
-## API
+Calling `use_skill("sc-qc")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `calculate_qc(adata, species="human")`
+- `qc_summary(adata)`
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+## 3. Output Format & Verification Contract
 
-### `calculate_qc(adata, *, species: str='human', calculate_ribo: bool=True)`
+- **Annotated AnnData** (`intermediate/qc_annotated.h5ad`):
+  - `adata.obs` contains `n_genes_by_counts`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`, `pct_counts_hb`.
+  - `adata.var` contains `n_cells_by_counts`, `total_counts`, `mean_counts`, `pct_dropout_by_counts`.
+- **QC Summary Table** (`tables/qc_summary.json` or `tables/qc_metrics.csv`): cell count and quantiles (`median`, `IQR`, `95th percentile`) for each QC metric.
 
-Bring the input into the OmicsClaw scRNA contract and add per-cell QC metrics to ``obs``.
+## 4. Gotchas & Troubleshooting
 
-The count-like matrix becomes ``X`` and ``layers['counts']``, ``raw`` keeps a
-counts snapshot, and gene names are made unique. Then scanpy's
-``calculate_qc_metrics`` adds ``n_genes_by_counts``, ``total_counts``,
-``pct_counts_mt`` and ``pct_counts_ribo`` (when the gene prefixes match), plus
-``log10_total_counts`` and ``log10_n_genes_by_counts``; ``var`` gets ``mt`` and
-``ribo`` flags. How the input was read is recorded for :func:`run_info`.
-
-:param species: ``"human"`` (``MT-``, ``RPS``/``RPL`` prefixes) or ``"mouse"``
-    (``mt-``, ``Rps``/``Rpl``). Default ``"human"``, the CLI default. Set it to the
-    organism of the data: with the wrong one no mitochondrial gene matches and
-    ``pct_counts_mt`` is not computed at all.
-:param calculate_ribo: Also compute ``pct_counts_ribo``. Default ``True``, as the CLI does.
-:returns: A new AnnData (the standardized copy), with the metrics in ``obs``.
-:raises ValueError: no count-like matrix can be found in ``X``, ``layers`` or ``raw``.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-What :func:`calculate_qc` recorded about the input it prepared.
-
-Keys: ``species``, ``calculate_ribo``, ``expression_source`` (the matrix used
-as counts), ``gene_name_source``, ``warnings``, ``input_contract``,
-``matrix_contract`` and ``qc_obs_columns``.
-
-:param keep: Leave the record in ``adata.uns``; ``False`` removes it.
-:returns: The record, or an empty dict when ``calculate_qc`` has not run on *adata*.
-
-### `qc_summary(adata) -> pd.DataFrame`
-
-One row per QC metric with ``min``, ``max``, ``mean``, ``median``, ``std``, ``q25`` and ``q75``.
-
-:returns: Columns ``metric``, ``min``, ``max``, ``mean``, ``median``, ``std``, ``q25``,
-    ``q75``, for the metrics :func:`calculate_qc` added.
-
-### `qc_metrics_table(adata) -> pd.DataFrame`
-
-The per-cell QC metrics, one row per cell.
-
-:returns: Column ``cell_id`` followed by the QC metrics present in ``obs``.
-
-### `highest_expressed_genes(adata, *, n_top: int=20) -> pd.DataFrame`
-
-The genes with the highest mean expression in ``X``.
-
-A few genes dominating the counts (mitochondrial, ribosomal, MALAT1) point
-to stressed cells or ambient RNA.
-
-:param n_top: How many genes to return. Default 20, the CLI's table length.
-:returns: Columns ``gene`` and ``mean_expression``, highest first.
-
-### `barcode_rank_table(adata) -> pd.DataFrame`
-
-Library sizes ranked from largest to smallest, for a barcode-rank (knee) plot.
-
-:returns: Columns ``rank``, ``total_counts``, ``log10_rank`` and ``log10_total_counts``.
-:raises KeyError: ``total_counts`` is not in ``obs``; run :func:`calculate_qc` first.
-
-### `qc_correlation_table(adata, *, metrics: list[str] | None=None) -> pd.DataFrame`
-
-Pearson correlations between QC metrics across cells.
-
-:param metrics: The ``obs`` columns to correlate. Default: the QC metrics present.
-:returns: A square table with a ``metric`` column naming each row.
-
-### `qc_figure(adata, *, metrics: list[str] | None=None)`
-
-Histograms of the QC metrics, one panel per metric, with the median marked.
-
-:param metrics: The ``obs`` columns to plot. Default: the QC metrics present.
-:returns: A matplotlib Figure.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-There is one method: scanpy's `calculate_qc_metrics` on the count matrix,
-after the input is brought into the OmicsClaw scRNA contract (counts in `X`
-and `layers['counts']`, a counts snapshot in `raw`, unique gene names).
-
-| Parameter | Default | Where it comes from | When to change it |
-|---|---|---|---|
-| `species` | `"human"` | the CLI default | Always set it to the organism of the data. It picks the gene prefixes: `MT-` and `RPS`/`RPL` for human, `mt-` and `Rps`/`Rpl` for mouse. Ask the user when the organism is not in the data description. |
-| `calculate_ribo` | `True` | the CLI's fixed behaviour | Leave it on; set `False` only when ribosomal content is irrelevant to the question. |
-| `n_top` of `highest_expressed_genes` | 20 | the CLI's table length | Raise it to look for more contaminating genes. |
-
-QC thresholds are not chosen here. Read `qc_summary` and the figure, then
-choose thresholds for `sc-filter` or `sc-preprocessing` with the user; the
-usual starting points per tissue are in `references/methodology.md`.
-
-## Gotchas
-
-- **No filtering happens here.** `calculate_qc` keeps every cell and gene. Filtering is `sc-filter` (or the thresholds of `sc-preprocessing`).
-- **A wrong `species` loses the mitochondrial metric.** With no gene matching the prefix, `pct_counts_mt` is not computed at all, and `qc_summary` has no row for it. Check that the row is there before reporting mitochondrial content.
-- **`run_info(adata)["expression_source"]` says which matrix was used as counts**: `layers.counts`, `adata.raw` or `adata.X`. QC fractions only mean something on a count-like source; report it when the input came from outside OmicsClaw.
-- **`calculate_qc` returns a new object.** Keep the return value (`adata = qc.calculate_qc(adata)`); the input AnnData is left as it was.
-- **Non-count input raises `ValueError`.** A log-normalised `X` with no `counts` layer or count-like `raw` cannot be QC'd; ask for the raw counts.
-
-## Inputs and outputs
-
-- `calculate_qc` reads the count-like matrix from `layers['counts']`, `raw` or `X`, and gene names from `var` (a gene-symbol column when there is one). It writes `obs`: `n_genes_by_counts`, `total_counts`, `pct_counts_mt`, `pct_counts_ribo`, `log10_total_counts`, `log10_n_genes_by_counts`; `var`: `mt`, `ribo`; `layers['counts']`, `raw`, and the contract entries in `uns`.
-- The table functions read those `obs` columns and return DataFrames; `qc_figure` returns a matplotlib Figure.
-
-## CLI
-
-`sc_qc.py` runs the same functions outside a project and writes a report,
-figures, tables and `processed.h5ad`: `python <skill directory>/sc_qc.py --help`.
-`--demo` runs it on PBMC3K.
-
-## See also
-
-- `references/parameters.md` — every CLI flag and tuning hint
-- `references/methodology.md` — mt/ribo gene-pattern detection, scanpy QC parameters, tissue thresholds
-- `references/output_contract.md` — the CLI's table column schemas and figure roles
-- Adjacent skills: `sc-standardize-input` (upstream — required if input is external), `sc-filter` (next step — actually removes cells), `sc-doublet-detection` (parallel — finds doublets)
+1. **Single-Nucleus RNA-seq (`snRNA-seq`) vs. Whole-Cell `scRNA-seq`**:
+   - Intact nuclei should contain virtually zero cytoplasmic mitochondria; in `snRNA-seq`, `pct_counts_mt > 5%` indicates cytoplasmic stripping/ambient contamination, whereas metabolically active cardiomyocytes or tumor cells in whole-cell `scRNA-seq` may legitimately reach `20–30%`.
+2. **Verify Mitochondrial Gene Matching**:
+   - Always check `int(adata.var["mt"].sum()) > 0`. If `0` mitochondrial genes matched, check whether `adata.var_names` uses Ensembl IDs (`ENSG...`) instead of HGNC/MGI gene symbols.
 
 ## Dependencies
 

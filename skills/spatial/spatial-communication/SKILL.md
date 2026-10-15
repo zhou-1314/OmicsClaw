@@ -8,117 +8,75 @@ tags:
 - ligand-receptor
 ---
 
-# Spatial communication
+# Spatial Cell-Cell & Ligand-Receptor Communication (`spatial-communication`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Infer ligand-receptor interactions between annotated populations. LIANA is
-the default; CellPhoneDB and FastCCC need a local CellPhoneDB database.
-CellChat runs in an R subprocess. These methods do not constrain interactions
-by spatial distance: coordinates support the CLI maps, not the inference.
+Use this playbook to infer ligand-receptor (L-R) interactions and spatially constrained signaling between annotated cell types or spatial domains:
 
-## API
+| Method (`--method` / `method=`) | Upstream Package | Spatial Constraint | Best Used When |
+|---|---|---|---|
+| `method="liana"` (`--method liana`) | `liana` (`li.mt.rank_aggregate` / `li.mt.bivariate`) | Global cluster L-R consensus + spatially weighted bivariate Moran's $R$ | Consensus rank aggregation across CellPhoneDB, NATMI, Connectome, LogFC, SingleCellSignalR |
+| `method="squidpy"` (`--method squidpy`) | `squidpy.gr.ligrec` | Cluster permutation test (`sq.gr.ligrec`) paired with `sq.gr.nhood_enrichment` | Fast permutation-based L-R screening on `AnnData` |
+| `method="cellchat"` (`--method cellchat`) | R `CellChat` | Spatial distance-weighted mass action | Multi-subunit receptor complexes and signaling pathway-level aggregation |
 
-Use `load_skill("spatial-communication")` in an analysis step.
-`examples/example_step.py` uses real PBMC expression with explicitly synthetic
-coordinates. The CLI demo uses synthetic expression and is not biological evidence.
+## 2. How to Run (Idiomatic Upstream Patterns)
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+### Pattern A: LIANA Consensus Ligand-Receptor Inference (`method="liana"`)
 
-### `communicate(adata, *, method='liana', cell_type_key='leiden', species='human', random_state=None, **parameters)`
+```python
+import liana as li
+import scanpy as sc
 
-Infer ligand-receptor interactions and return the same AnnData.
+# Ensure cell-type / domain labels are categorical and log1p expression is in adata.X
+adata.obs["cell_type"] = adata.obs["cell_type"].astype(str).astype("category")
 
-LIANA uses raw when present, otherwise X. Other backends read normalized
-X. Coordinates support CLI maps; these methods do not impose distance filters.
-
-:param adata: Log-normalized expression with cell-type labels; modified in place.
-:param method: CLI default liana; cellphonedb, fastccc or cellchat_r also supported.
-:param cell_type_key: CLI default leiden; obs column defining populations.
-:param species: CLI default human; mouse supported by LIANA and CellChat.
-:param random_state: None keeps LIANA seed 1337 and CellChat seed 1; CellPhoneDB uses 0.
-:param parameters: Native backend keywords in references/parameters.md.
-:returns: The same AnnData with canonical ccc_results and role summaries in uns.
-:raises ValueError: Method, labels, species or numeric controls are invalid.
-:raises ImportError: Optional backend is missing; use install_skill_deps.
-:raises FileNotFoundError: CellPhoneDB/FastCCC's local database is missing.
-
-### `interactions(adata, *, significant_only=False)`
-
-Return ligand-receptor scores; unmeasured p values remain missing.
-
-:param adata: AnnData returned by communicate.
-:param significant_only: Default False; True selects real p values below 0.05.
-:returns: A new DataFrame with ligand, receptor, source, target, score and pvalue.
-:raises ValueError: No run is recorded.
-
-### `run_info(adata, *, keep=True)`
-
-Read the last run's diagnostics and optional backend tables.
-
-:param adata: AnnData returned by communicate.
-:param keep: Default True; False removes transient diagnostics for CLI serialization.
-:returns: Summary dictionary including tested/significant counts and extra_tables.
-:raises ValueError: No communication run is recorded.
-
-### `roles_figure(adata, *, n_top=20)`
-
-Plot population sender and receiver scores without file writes.
-
-:param adata: AnnData returned by communicate.
-:param n_top: Default 20 populations; use fewer for a smaller figure.
-:returns: A matplotlib Figure, explicitly labelled when no scores exist.
-:raises ValueError: No run is recorded or n_top is not positive.
-
-<!-- api:end -->
-
-## Key CLI
-
-```bash
-python skills/spatial/spatial-communication/spatial_communication.py \
-  --input processed.h5ad --output results/communication \
-  --cell-type-key cell_type --method liana --liana-n-perms 1000
-python skills/spatial/spatial-communication/spatial_communication.py \
-  --demo --output /tmp/communication_demo
+# Run LIANA consensus rank aggregation (resource_name="consensus" for human, "mouseconsensus" for mouse)
+li.mt.rank_aggregate(
+    adata,
+    groupby="cell_type",
+    resource_name="consensus",
+    expr_prop=0.1,
+    use_raw=False,
+    verbose=False,
+)
+lr_df = adata.uns["liana_res"].copy()
+# Columns include: source, target, ligand_complex, receptor_complex, magnitude_rank, specificity_rank
 ```
 
-## Inputs & Outputs
+### Pattern B: Spatially Constrained Bivariate L-R (`liana` + `squidpy`)
 
-Input is log-normalized AnnData with at least two populations in
-`obs[cell_type_key]` (default `leiden`). LIANA reads `raw` when present;
-other methods read `X`. Use gene symbols, not synthetic feature identifiers.
-LIANA and CellChat support human and mouse; the other wrappers support human.
+```python
+import squidpy as sq
+import liana as li
 
-The API mutates and returns the same object, preserving observation and
-feature order. It stores `uns["ccc_results"]`, method-specific results,
-`communication_summary`, `communication_signaling_roles`, and diagnostics.
-`interactions` returns a new DataFrame; `roles_figure` returns a Figure.
-Library calls do not create report directories. Optional external tools use
-temporary files that are removed after execution.
+# Build spatial neighbor graph from adata.obsm["spatial"]
+sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
 
-The CLI writes `processed.h5ad`, `report.md`, `result.json`, reproducibility
-commands, figure-data CSVs, and conditional tables/figures.
-See [output inventory](references/output_contract.md) for exact conditions.
+# Compute spatially weighted bivariate ligand-receptor scores
+li.mt.bivariate(
+    adata,
+    resource_name="consensus",
+    local_name="cosine",
+    n_perms=100,
+    use_raw=False,
+     key_added="local_scores",
+)
+```
 
-## Gotchas
+## 3. Output Format & Verification Contract
 
-- `_api.py:communicate` rejects absent labels and populations with fewer than
-  two distinct labels; it does not substitute a different annotation.
-- `uns["ccc_results"]` has missing p values when the backend supplies no
-  statistical test. LIANA specificity ranks are not p values.
-- `tables/lr_interactions.csv` is absent when no interactions are returned;
-  an empty result does not establish absence of biological communication.
-- `_api.py:communicate` raises an install hint for missing backends.
-  CellPhoneDB/FastCCC also require a local database; no substitute is generated.
-- `rscripts/cellchat.R` needs Rscript, Matrix and CellChat, not rpy2.
-- `_api.py:communicate` defaults to LIANA seed 1337, CellPhoneDB 0 and
-  CellChat 1; FastCCC has no seed argument.
+- **Interaction Table** (`tables/lr_interactions.csv`):
+  - Columns: `source`, `target`, `ligand_complex` (or `ligand`), `receptor_complex` (or `receptor`), interaction score/magnitude (`lr_means`, `magnitude_rank`), and specificity/permutation $p$-value (`pvalue`, `specificity_rank`).
+- **Verification**:
+  - Verify that top-ranked source-target pairs are physically co-localized in tissue space using `sq.gr.nhood_enrichment(adata, cluster_key="cell_type")` so distant, non-interacting regions are not over-interpreted as paracrine signaling.
 
-## References
+## 4. Gotchas & Troubleshooting
 
-- [Parameters](references/parameters.md): CLI-to-library keyword mapping.
-- [Methodology](references/methodology.md): matrix and statistical semantics.
-- [Output contract](references/output_contract.md): files and AnnData keys.
+1. **Species Resource Selection (`consensus` vs. `mouseconsensus`)**:
+   - LIANA's default `resource_name="consensus"` uses uppercase human HGNC gene symbols. For mouse datasets (`TitleCase` gene symbols), either pass `resource_name="mouseconsensus"` or convert gene symbols; otherwise 0 ligand-receptor pairs will match.
+2. **Scanpy `use_raw` Default in `liana` and `squidpy`**:
+   - Both `li.mt.rank_aggregate` and `sq.gr.ligrec` default to `use_raw=True` if `adata.raw` exists. Pass `use_raw=False` explicitly when `adata.X` holds your log1p-normalized expression.
 
 ## Dependencies
 

@@ -555,7 +555,7 @@ make skill-index      # = OMICSCLAW_WRITE_SKILL_INDEX=1 pytest tests/skills/test
 ## 14. 测试
 
 ```bash
-/opt/conda/envs/rapids_singlecell/bin/python -m pytest tests/skills -q     # 430 passed（2026-09-23）
+/opt/conda/envs/rapids_singlecell/bin/python -m pytest tests/skills -q
 ```
 
 | 测试文件 | 覆盖 |

@@ -14,89 +14,72 @@ tags:
 - biomarker
 ---
 
-# metabolomics-de
+# Differential Metabolite Abundance, PCA & VIP Analysis (`metabolomics-de`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Run Welch tests and treatment/control fold changes using ctrl/treat sample prefixes. Use metabolomics-statistics for another test backend.
+Select the univariate or multivariate differential framework according to study design and collinearity among metabolic features:
 
-## Use from a step
+| Analytical Goal | Recommended Method | Upstream Package | Decision Thresholds |
+|---|---|---|---|
+| **Univariate two-group false-discovery control** (`ctrl` vs. `treat`) | **Welch's $t$-test** on $\log_2$ intensities + **Benjamini-Hochberg FDR** | `scipy.stats.ttest_ind(..., equal_var=False)` + BH-FDR | `fdr < 0.05` and `$|\log_2\text{FC}| \ge 0.58 - 1.0$` ($1.5\times - 2.0\times$) |
+| **Multivariate collinear feature ranking** (e.g., lipidomics / untargeted LC-MS) | **PLS-DA / OPLS-DA Variable Importance in Projection (VIP)** + permutation test | `scikit-learn` (`PLSRegression`) / R `ropls` | $\text{VIP} > 1.0$ **paired with** cross-validated $Q^2 > 0.5$ and permutation $p < 0.05$ |
+| **Unsupervised batch & QC drift check** | **PCA on Pareto- or UV-scaled $\log_2$ matrix** | `sklearn.decomposition.PCA` | Pooled QC samples must cluster tightly near the origin $(0,0)$ relative to biological groups |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Univariate Welch $t$-Test + BH-FDR Paired with Multivariate PLS-DA VIP & PCA
 
 ```python
+import numpy as np
 import pandas as pd
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("metabolomics-de")
-data = read_input('features.csv', reader=pd.read_csv)
-result = library.differential_expression(data)
-write_output(result, 'tables/result.csv')
+from scipy import stats
+from sklearn.cross_decomposition import PLSRegression
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
+# 1. Load feature-by-sample table and split ctrl vs. treat columns
+df = pd.read_csv("data/metabolite_matrix.csv", index_col=0)
+ctrl_cols = [c for c in df.columns if c.startswith("ctrl")]
+treat_cols = [c for c in df.columns if c.startswith("treat")]
+log_mat = np.log2(df[ctrl_cols + treat_cols].clip(lower=0) + 1.0)
+
+# 2. Univariate Welch t-test + log2 fold change
+lfc = log_mat[treat_cols].mean(axis=1) - log_mat[ctrl_cols].mean(axis=1)
+_, pvals = stats.ttest_ind(log_mat[treat_cols].values, log_mat[ctrl_cols].values, axis=1, equal_var=False)
+
+# 3. Multivariate PCA scores on Z-score standardized (samples x features) matrix
+X_scaled = StandardScaler().fit_transform(log_mat.T)
+pca = PCA(n_components=2, random_state=0).fit(X_scaled)
+scores = pca.transform(X_scaled)
 ```
 
-[examples/example_step.py](examples/example_step.py) runs a seeded synthetic
-example through the step runner and writes a table and Figure. Computations
-return new DataFrames, leave the input unchanged and expose diagnostics through
-`run_info(result)`. Plotting functions write no files.
+### Pattern B: Lightweight `kernel.py` Micro-Helper (`use_skill("metabolomics-de")`)
 
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `differential_expression(data, *, group_a_prefix='ctrl', group_b_prefix='treat')`
-
-Return Welch tests, treatment/control log2 fold changes and BH FDR.
-
-:param data: Feature table whose first column identifies features; other columns contain intensities.
-:param group_a_prefix: CLI default ctrl; prefix selecting control samples.
-:param group_b_prefix: CLI default treat; prefix selecting treatment samples.
-:returns: A new differential table with group sizes in attrs['run_info'].
-:raises ValueError: A group is absent or groups overlap.
-
-### `run_info(data, *, keep=True)`
-
-Read diagnostics attached to a returned table.
-
-:param data: DataFrame returned by this library.
-:param keep: Default True; use False in the CLI to remove diagnostics.
-:returns: An independent dictionary describing the run.
-:raises ValueError: The table carries no run_info.
-
-### `pca_figure(data, *, group_a_prefix='ctrl', group_b_prefix='treat', random_state=0)`
-
-Plot sample PCA from untransformed intensities; NaNs become zero.
-
-:param data: Feature table with the same sample columns as differential_expression.
-:param group_a_prefix: CLI default ctrl; control prefix.
-:param group_b_prefix: CLI default treat; treatment prefix.
-:param random_state: Default 0; seed forwarded to sklearn PCA.
-:returns: A matplotlib Figure with sample labels and explained variance axes.
-:raises ImportError: Install scikit-learn with install_skill_deps if unavailable.
-:raises ValueError: Groups are absent, overlap or the matrix is invalid.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Welch tests use raw supplied intensities, with BH FDR and a fixed CLI significance threshold of 0.05. PCA uses untransformed intensities and converts NaNs to zero.
-
-## Gotchas
-
-- `differential_expression` treats the first column as feature IDs. Both groups must be nonempty and disjoint. `tables/significant_features.csv` uses fdr < 0.05. The CLI logs optional PCA failures.
-
-## Inputs and outputs
-
-CSV input; `tables/differential_features.csv`, `report.md` and `result.json`. The CLI also writes `tables/significant_features.csv` and, when PCA succeeds, `figures/pca_scores.png`. Demo mode also writes its synthetic input CSV at the output root.
-The function library returns objects; the CLI and step own file writes.
-
-## CLI
-
-```bash
-python skills/metabolomics/metabolomics-de/met_diff.py --demo --output /tmp/metabolomics_de
+```python
+# Calling use_skill("metabolomics-de") auto-injects kernel.py helpers into the python kernel:
+de_df = differential_expression(df, group_a_prefix="ctrl", group_b_prefix="treat")
+sig_df = significant_features(de_df, alpha=0.05, lfc_threshold=0.58)
 ```
 
-## See also
+## 3. Output Format & Verification Contract
 
-- [Parameters](references/parameters.md)
-- [Methodology](references/methodology.md)
-- [Output contract](references/output_contract.md)
+- **Full Differential Features Table** (`tables/differential_features.csv`):
+  - Contains `feature_id`, `mean_a`, `mean_b`, `log2fc` ($\log_2(\text{treat}) - \log_2(\text{ctrl})$), `t_stat`, `pvalue`, and `fdr` (Benjamini-Hochberg FDR).
+- **Significant Features Subset** (`tables/significant_features.csv`):
+  - Subset satisfying `fdr < 0.05`.
+- **Verification Invariants**:
+  - Control (`group_a_prefix`) and treatment (`group_b_prefix`) column sets are non-empty and strictly disjoint.
+  - All returned `pvalue` and `fdr` entries lie in $[0.0, 1.0]$.
+
+## 4. Gotchas & Troubleshooting
+
+1. **PLS-DA / OPLS-DA Overfitting When $p \gg n$**:
+   - In untargeted metabolomics ($p = 5,000$ features, $n = 12$ samples), supervised PLS-DA will **always** produce a visually separated 2D score plot even on pure random Gaussian noise. Never trust a PLS-DA plot or `VIP > 1.0` unless validated by $k$-fold cross-validation ($R^2Y, Q^2Y$) and a 200-label permutation test, and require dual significance (`VIP > 1.0` AND univariate `fdr < 0.05`).
+2. **Autoscaling (Unit Variance) vs. Pareto Scaling ($rac{x - ar{x}}{\sqrt{s}}$) in PCA/PLS-DA**:
+   - Unit-variance (`StandardScaler`) scaling gives noisy baseline trace peaks the exact same weight as abundant core metabolites, whereas unscaled PCA is dominated by the 5 highest-intensity lipids/sugars. **Pareto scaling** (dividing by $\sqrt{\sigma}$ on $\log_2$-transformed intensities) balances biological signal against baseline noise.
+3. **Direction of `log2fc` Sign (`group_b / group_a`)**:
+   - `differential_expression` defines `log2fc` as `group_b` (`treat`) minus `group_a` (`ctrl`) on the $\log_2$ scale, so positive `log2fc` indicates accumulation in `treat`.
 
 ## Dependencies
 

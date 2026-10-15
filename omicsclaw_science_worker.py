@@ -1,13 +1,6 @@
-"""Scientific process bootstrap binding the original SDK at the payload boundary."""
+"""Launch a verified scientific payload in its selected worker process."""
 
-from omicsclaw.entry.ssh.science_worker import main
-
-
-def write_result(value, path, suffix):
-    from skills._sdk.notebook._io import _default_writer
-
-    _default_writer(value, path, suffix)
-
+from omicsclaw.entry.ssh.science_worker import main, write_result
 
 if __name__ == "__main__":
     main(result_writer=write_result)

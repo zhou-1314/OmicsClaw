@@ -2,13 +2,17 @@
 
 这三层合起来检查 agent 是否按预期工作。
 
+旧架构的测试汇总和真实模型冒烟结果已清理。当前验证以本次检出的代码、解释器和实际执行命令为准；生成报告放在 `build/` 或仓库外，不将历史通过数作为当前基线。
+
 ```
 开发阶段 ──→ Test（确定性测试）      ScriptedProvider + Assertion
-CI 阶段  ──→ Eval（脚本化用例集）    31 个用例 + Quality Gate（全部通过）
+CI 阶段  ──→ Eval（脚本化用例集）    当前启用用例 + Quality Gate
 生产阶段 ──→ Observability（追踪）  OTEL Traces + Metrics → Langfuse
 ```
 
 Test 和 Eval 共用 `omicsclaw/evals/` 这一个包：Test 是包本身和它的单元测试，Eval 是建在包上、按类别组织、会出通过率报告的用例集。Observability 在 `omicsclaw/observability/`，细节见 [observability.md](observability.md)，本文只写它和 eval 的交点。
+
+旧步骤执行器的 `skill_routing` 用例已停用，本文涉及步骤记账和 CLI 路由的示例保留为历史设计。它们不覆盖当前 sidecar 流程；当前技能契约由 `tests/skills/test_claude_science_contract.py` 和 `tests/skills/test_sidecar_validation.py` 验证。
 
 设计参照 harness9 的 `internal/evals`。和它相比有这些不同：
 
@@ -42,7 +46,7 @@ omicsclaw/evals/
 └── live.py         真实模型路由 eval：RecordingProvider、routing_policy、live_case、judge、报告与 compare（兼作命令行）
 ```
 
-`omicsclaw/evals` 只 import `omicsclaw.entry` 及以下各层，框架里没有别的模块 import 它（`tests/evals/test_evals_is_not_imported.py` 检查）。它也不 import `skills.*`（`tests/sdk/test_boundary.py` 检查）。
+`omicsclaw/evals` 只 import `omicsclaw.entry` 及以下各层，框架里没有别的模块 import 它（`tests/evals/test_evals_is_not_imported.py` 检查）。它也不 import `skills.*`。
 
 ### 1.2 ScriptedProvider
 
@@ -253,9 +257,10 @@ def test_case(case, tmp_path, eval_results):
 
 ## 2. Eval 子系统：用例集
 
-### 2.1 当前用例（31 个）
+### 2.1 用例清单
 
 用例在 `tests/evals/dataset/test_<category>.py`，写成 Python 代码。每条默认都带 `NoWriteOutside()`。
+下表保留包含退役 `skill_routing` 用例的清单；实际启用与跳过状态以测试输出为准。
 
 | 类别 | 用例 | 验证目标 |
 |---|---|---|
@@ -272,7 +277,7 @@ def test_case(case, tmp_path, eval_results):
 | `error_handling` | `max_turns_ceiling` | 达到 `max_turns=3` 时引擎停在 `MAX_TURNS`，不算错误 |
 | `error_handling` | `unknown_tool_is_observation` | 调用不存在的工具得到 `is_error` 观测，内容列出可用工具，不出审批，下一轮收敛 |
 | `memory` | `write_then_search` | `memory_write` 写入的偏好能被 `memory_search` 搜到 |
-| `memory` | `precis_reaches_next_exchange` | 写入的记忆出现在下一次交换系统提示的 "## Long-term memory" 一节 |
+| `memory` | `precis_reaches_next_exchange` | 写入的记忆出现在下一次交换的用户上下文中，系统提示不重复携带 |
 | `compaction` | `large_result_offloaded` | 大的 `read_file` 结果离开保留尾部后，在 `WARN` 档被 offload 成占位，模型能按占位路径取回 |
 | `compaction` | `summary_replaces_head` | 到 `FULL` 档时历史开头换成摘要，system 消息保留，摘要器只调用一次 |
 | `compaction` | `degraded_truncation_keeps_requests_and_recent_rounds` | 摘要器返回空串，`SOFT` 档走降级截断：那次请求里两次交换的请求都在，最新读的文件在、最旧读的不在，没有占位结果，压缩记录不写回 |
@@ -291,14 +296,14 @@ def test_case(case, tmp_path, eval_results):
 | `safety` | `protected_dotenv_asked_in_auto_mode` | auto-approve 下 `write_file(".env")` 仍然要审批，拒绝后 `.env` 不存在 |
 | `safety` | `subagent_approval_reaches_session` | ask 模式下 sub-agent 的 `bash` 审批作为 `APPROVAL_REQUIRED` 到达父会话，拒绝后 sub-agent 写结论，主线收敛 |
 
-`skill_routing` 测的是步骤执行这条路：执行器真跑、kernel 真起，`load_skill` 换成核对过的桩，Runner 从记账里读出发生了什么。它不测模型会不会选对 skill，那是真实模型路由 eval（§2.4）的事，种子在 `tests/evals/fixtures/live_routing_seed.json`（26 条）。原先 7 个域各一条的 CLI 路由用例已从门禁中去掉；`bash` 打桩层仍在，live eval 和 `tests/evals/test_stubs.py` 继续用它。每条命令都用当前解释器调执行器，所以跑用例集的环境要装 `nbclient` 和 `ipykernel`（CI 的 eval job 已加）。
+退役的 `skill_routing` 用例曾启动步骤执行器和内核，以桩替换 `load_skill`，再从步骤记账中判定结果。执行器删除后，这些用例跳过执行。CLI 路由评测的历史种子仍在 `tests/evals/fixtures/live_routing_seed.json`，`bash` 打桩层由 `tests/evals/test_stubs.py` 检查；这些结果不能作为当前 sidecar 路由的证据。
 
 ### 2.2 运行
 
 ```bash
-PY=/opt/conda/envs/rapids_singlecell/bin/python   # 本机；CI 里是 setup-python 的 3.11
+PY=python   # 使用已安装项目依赖的 Python 3.11+
 
-# 全部用例（约 30 秒，其中 skill 用例要起 kernel；不需要 API key）
+# 当前用例集（不需要 API key；退役用例会显示 skipped）
 $PY -m pytest -q tests/evals/dataset -m scripted_eval
 
 # 只跑一类
@@ -365,8 +370,6 @@ provider 与模型：读仓库根的 `.env` 合并 `os.environ`，经 `resolve_c
 
 报告：`live_report.json`（`meta` 记 commit、provider、model、base_url、temperature、次数、种子文件 sha256；每次试验的判分、模型调用数、输入、缓存命中与输出 token、耗时；每域通过率、混淆表、被拒命令、token 合计）和 `live_report.md`。`compare` 打印每条种子通过率与 `chosen` 的变化，provider、model 或 base_url 不同时首行警告。基线不提交进仓库。
 
-冒烟实测（2026-09-30，deepseek-v4-flash，2 条种子各 1 次）：2 条都判为 `correct`（都靠第一次 `use_skill`，6 轮内没有执行脚本），8 次模型调用，输入 116,186 token（缓存命中 95,616），输出 3,134，约 35 秒。完整的 26 × 3 由 owner 手动触发。
-
 局限：
 - 种子只覆盖 88 个 skill 里的 22 个，query 全是英文。
 - 输入是 0 字节占位，模型读它会看到空文件；`Input:` 行是 eval 加的。
@@ -410,7 +413,7 @@ unit-tests job 跑一份目录白名单：框架层的 `engine`、`entry`、`pro
 - 普通条目是 `strict=True`。测试修好后会以 XPASS 让运行变红，逼着把它从清单里删掉，所以清单只会变短。
 - 带 `env` 的条目只在部分环境失败（例如缺 scanpy），是非 strict 的。它们修好后不会自动报警，需要人工清理。
 
-目前清单里有 3 条 strict、3 条 env。2026-09-30 在模拟 CI 的 venv（job 的整张 pip 列表加 fastapi httpx uvicorn）里把整个白名单跑了一次：6847 passed、42 skipped、6 xfailed，没有 XPASS，用时约 350 秒。白名单外的旧测试已按计划 0068 清理：依赖已删模块的测试删掉，`tests/runtime/consensus` 当时留下的 8 个文件已于 2026-10-02 随 consensus 运行时一起删除。
+已知失败的当前条目以 `tests/ci_known_failures.txt` 为准。依赖已删除模块的旧测试按计划 0068 清理，consensus 测试也已随其运行时删除。
 
 job 装了 fastapi、httpx 和 uvicorn，desktop HTTP 的测试（`tests/entry/test_desktop_*.py`，约 560 条）随 job 运行。`tests/launch/test_surfaces.py` 以前装了 fastapi 会起服务挂住，现在由 `no_web_server` fixture 挡住。两个 `setup-python` 步骤的 pip 缓存按 `pyproject.toml` 计算缓存键。
 
@@ -443,15 +446,14 @@ eval 这边用 Runner 验证可观测层接到了生产装配上。`tests/evals/
 
 ## 5. 已知限制
 
-- 真实模型路由 eval（§2.4）只手动本地运行，还没有 nightly，也没有提交进仓库的基线。它只判选没选对 skill，不判回答质量，局限见 §2.4。完整的 26 × 3 运行还没做过，只做过 2 条种子的冒烟。
-- skill 的科学正确性不在这里测，它归 skill 自己的测试。
+- 真实模型路由 eval（§2.4）手动运行，没有提交进仓库的当前基线。它只判选没选对 skill，不判回答质量，局限见 §2.4。
+- skill 的科学正确性不在这里测，需要按实际科学流程验证。
 - 打桩只认 `python <skill 目录>/<script>.py` 这一种调用形式。`cd <skill 目录> && python x.py`、`bash -c '…'`、`python -X utf8 …` 识别不了：脚本化用例的命令是作者写的，不受影响；真实模型 eval 里这类写法被审批策略拒绝，记为 `unmatched_skill_command`，出现多少次看报告。需要大段工具输出的用例改用预置文件加 `read_file`。
 - `bash._locally` 是私有函数，打桩依赖这个名字。`tests/evals/test_stubs.py` 有钉子测试，改名时会先失败。
 - 模型调用的重试退避基数是 1 秒，Runner 不调小它，所以 `transient_error_retried` 会真的等这 1 秒。
 - 两个压缩用例的 `trigger_tokens` 是按脚本实测估出来的，改了脚本或 token 估算器要重估。系统提示变长只影响 `B`，超过 `3G` 时报 `headroom_infeasible`；压缩提前写回时报 `headroom_missed`。没有自动标定。
-- `eval.yml` 只在本地模拟验证过（job2 故意改坏一条用例看退出码与 Step Summary；job1 的整个白名单在模拟 CI 的 venv 里跑过一次），还没在 GitHub Actions 上真跑过。
 - 仓库里有 30 多个测试文件各自实现假 provider，还没迁移到 `ScriptedProvider`。新测试应当用共享实现。
-- `skills/*/tests` 不在 CI 里跑：它们要 scanpy 等重依赖，只能在装齐依赖的本地环境里跑。
+- 当前 CI 验证技能说明和 sidecar 契约，不执行完整的科学分析。
 
 ---
 

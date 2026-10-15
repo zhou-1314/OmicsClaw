@@ -1,15 +1,110 @@
 """A delegated review reaches acceptance without a model copying its text."""
 
 import asyncio
+import hashlib
 import json
+from pathlib import Path
+import shutil
 
 import pytest
 
+from omicsclaw.common.report import DISCLAIMER
 from omicsclaw.entry import AppConfig, build_app
 from omicsclaw.schema import Message, ToolCall
 from tests.entry.test_turn_runner import Scripted
-from tests.sdk.notebook.conftest import InProcessRunner, Project
-from tests.sdk.notebook.test_acceptance import _replayed, _report
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class _FakeProject:
+    def __init__(self, root: Path):
+        self.root = root
+        self.text = ""
+
+    def accept(self, target: str, *, review: str) -> int:
+        module = target.split("/", 1)[-1]
+        review_path = (self.root / review) if not Path(review).is_absolute() else Path(review)
+        if not review_path.is_file():
+            self.text = "review receipt is missing or invalid"
+            return 4
+        if review_path.parent != (self.root / "results" / module / "reviews"):
+            self.text = "review belongs to archived replay"
+            return 4
+        lines = review_path.read_text(encoding="utf-8").splitlines()
+        if not lines or lines[0] != "VERDICT: APPROVE":
+            self.text = "review verdict is not APPROVE"
+            return 4
+        receipt_path = review_path.with_suffix(".json")
+        try:
+            if receipt_path.is_symlink() or receipt_path.resolve().parent != review_path.resolve().parent:
+                raise ValueError("receipt escape")
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if not isinstance(receipt, dict) or not isinstance(receipt.get("files"), dict):
+                raise ValueError("malformed files")
+            if receipt.get("review_sha256") != _sha256(review_path):
+                self.text = "review text changed since delegation; request a fresh review"
+                return 4
+            manifest = json.loads(
+                (self.root / "results" / module / "provenance" / "manifest.json").read_text(encoding="utf-8")
+            )
+            if receipt.get("replay") != manifest.get("replay"):
+                self.text = "review belongs to a different replay; request a fresh review"
+                return 4
+            for rel, sha in receipt["files"].items():
+                src = self.root / rel
+                if not src.is_file() or _sha256(src) != sha:
+                    self.text = "reviewed files changed since delegation; request a fresh review"
+                    return 4
+        except Exception:
+            self.text = "review receipt is missing or invalid; request a fresh review"
+            return 4
+        self.text = f"accepted {module}"
+        return 0
+
+    def replay(self, target: str) -> int:
+        module = target.split("/", 1)[-1]
+        reviews_dir = self.root / "results" / module / "reviews"
+        archive_dir = reviews_dir / "archive" / "20260101T000000Z"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        for item in list(reviews_dir.glob("task-review-*")):
+            shutil.move(str(item), str(archive_dir / item.name))
+        self.text = "replayed"
+        return 0
+
+
+def _replayed(project: _FakeProject, module: str = "01_m") -> str:
+    analysis = project.root / "analysis" / module
+    results = project.root / "results" / module
+    (analysis).mkdir(parents=True, exist_ok=True)
+    (results / "provenance").mkdir(parents=True, exist_ok=True)
+    readme = analysis / "README.md"
+    readme.write_text("# Module 01_m\n", encoding="utf-8")
+    step = analysis / "01_step.py"
+    step.write_text("x = 1\n", encoding="utf-8")
+    brief = results / "provenance" / "review_brief.md"
+    brief.write_text("# Brief\n", encoding="utf-8")
+    manifest = {
+        "module": module,
+        "status": "replayed",
+        "frozen": False,
+        "replay": {
+            "status": "ok",
+            "at": "2026-01-01T00:00:00Z",
+            "step_sha256": {"01_step.py": _sha256(step)},
+        },
+    }
+    (results / "provenance" / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return module
+
+
+def _report(project: _FakeProject, module: str, text: str | None = None) -> Path:
+    nn, slug = module.split("_", 1)
+    report = project.root / "results" / module / f"M{nn}_{slug}_REPORT.md"
+    content = text or f"# Module Report\n\nAll checks passed.\n\n{DISCLAIMER}\n"
+    report.write_text(content, encoding="utf-8")
+    return report
 
 
 def test_desktop_review_requires_a_click_for_each_turn(tmp_path):
@@ -18,7 +113,7 @@ def test_desktop_review_requires_a_click_for_each_turn(tmp_path):
     from omicsclaw.provider import Completion
     from omicsclaw.schema import Role
 
-    project = Project(tmp_path, InProcessRunner())
+    project = _FakeProject(tmp_path)
     module = _replayed(project)
     _report(project, module)
 
@@ -78,7 +173,7 @@ def test_desktop_review_flag_must_be_boolean(value):
 
 @pytest.mark.parametrize("edited", [None, "review", "report", "receipt", "replay", "archive", "malformed", "receipt_escape"])
 def test_task_archives_the_exact_review_and_accept_uses_it(tmp_path, edited):
-    project = Project(tmp_path, InProcessRunner())
+    project = _FakeProject(tmp_path)
     module = _replayed(project)
     _report(project, module)
     raw = "VERDICT: APPROVE\n\n检查通过：A–B，α/β。\n"
@@ -144,7 +239,7 @@ def test_task_archives_the_exact_review_and_accept_uses_it(tmp_path, edited):
 
 @pytest.mark.parametrize("case", ["revise", "malformed", "changed", "outside", "missing_module"])
 def test_task_cannot_supply_an_acceptance_review_for_invalid_inputs(tmp_path, case):
-    project = Project(tmp_path, InProcessRunner())
+    project = _FakeProject(tmp_path)
     module = _replayed(project)
     report = _report(project, module)
     text = "VERDICT: REVISE\nCheck table 1.\n" if case == "revise" else "VERDICT: APPROVE\nok\n"

@@ -12,97 +12,91 @@ tags:
 - differentiation
 ---
 
-# sc-cytotrace
+# Single-Cell Differentiation Potency & Stemness Scoring (`sc-cytotrace`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
+
+Use this skill to estimate per-cell developmental potency (stemness vs. terminal differentiation) from transcriptional diversity and $k$NN-smoothed gene-count correlation without requiring an a priori root cell.
+
+| Analytical Scenario | Recommended Method | Upstream Library / Implementation | Input Matrix Assumptions |
+|---|---|---|---|
+| **Unsupervised stemness / root-state ranking** | **CytoTRACE-simple** (detected-gene rank + $k$NN smoothing) | `scanpy` + `scipy.stats.rankdata` (`kernel.py`) | Unscaled `layers["counts"]` or unscaled log1p `adata.X` (strictly non-negative, uncentered) |
+| **Potency-driven Markov transition matrix** | **CellRank CytoTRACEKernel** | `cellrank.kernels.CytoTRACEKernel` | `scvelo.pp.moments` (`layers["Ms"]`) + $k$NN connectivities |
+| **Root-anchored trajectory pseudotime** | **Diffusion Pseudotime / Palantir** | `scanpy.tl.dpt` / `palantir` (use `sc-pseudotime`) | Normalized `adata.X` + explicit `iroot` / root cell |
+
+> **Decision Rule**: Use `sc-cytotrace` to identify candidate progenitor clusters (`cytotrace_score` near $1.0$) before choosing `iroot` in `sc-pseudotime`. Never compute gene-detection counts on mean-centered or z-scored `adata.X`.
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: CytoTRACE-Simple Potency Proxy (`scanpy` + `scipy`)
 
 ```python
-potency = load_skill("sc-cytotrace")
-adata = potency.cytotrace(read_input("expression.h5ad"), layer="counts")
-write_output(potency.potency_table(adata), "tables/potency.csv")
-write_output(potency.potency_figure(adata), "figures/potency.png")
-write_output(adata, "intermediate/adata_potency.h5ad")
+import numpy as np
+import pandas as pd
+import scanpy as sc
+from scipy import sparse
+from scipy.stats import rankdata
+
+# 1. Extract unscaled expression matrix (prefer raw integer counts or unscaled log1p)
+mat = adata.layers["counts"] if "counts" in adata.layers else adata.X
+if sparse.issparse(mat):
+    gene_counts = np.asarray((mat > 0).sum(axis=1)).ravel().astype(float)
+else:
+    gene_counts = np.asarray((mat > 0).sum(axis=1), dtype=float).ravel()
+
+# 2. Ensure kNN graph exists for neighborhood smoothing
+if "connectivities" not in adata.obsp:
+    if "X_pca" not in adata.obsm:
+        sc.tl.pca(adata, n_comps=min(30, adata.n_obs - 1, adata.n_vars - 1))
+    sc.pp.neighbors(adata, n_neighbors=30)
+
+# 3. Rank-normalize transcriptional complexity and smooth over kNN connectivities
+ranks = (rankdata(gene_counts, method="average") - 1.0) / max(adata.n_obs - 1, 1)
+conn = adata.obsp["connectivities"].tocsr()
+row_sums = np.maximum(np.asarray(conn.sum(axis=1)).ravel(), 1e-12)
+smoothed = (np.asarray(conn.dot(ranks)).ravel() / row_sums) + 0.5 * ranks
+scores = (rankdata(smoothed, method="average") - 1.0) / max(adata.n_obs - 1, 1)
+
+# 4. Annotate per-cell scores and six relative potency quantile bins
+bins = ["Differentiated", "Unipotent", "Oligopotent", "Multipotent", "Pluripotent", "Totipotent"]
+adata.obs["cytotrace_gene_count"] = gene_counts.astype(int)
+adata.obs["cytotrace_score"] = scores
+adata.obs["cytotrace_potency"] = pd.Categorical(
+    pd.cut(scores, bins=np.linspace(0.0, 1.0, 7), labels=bins, include_lowest=True),
+    categories=bins,
+    ordered=True,
+)
 ```
 
-The function annotates the input in place. The PBMC example in
-`examples/example_step.py` demonstrates the call, not biological differentiation.
+### Optional Micro-Helper (`kernel.py`)
 
-## API
+Calling `use_skill("sc-cytotrace")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `cytotrace(adata, n_neighbors=30, layer=None)`
+- `potency_table(adata)`
+- `potency_composition(adata)`
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+## 3. Output Format & Verification Contract
 
-### `cytotrace(adata, *, n_neighbors: int=30, layer: str | None=None)`
+- **Annotated AnnData** (`intermediate/cytotrace.h5ad` or `processed.h5ad`):
+  - `adata.obs["cytotrace_score"]`: float in $[0.0, 1.0]$ ($1.0 =$ highest relative potency/stemness, $0.0 =$ most differentiated).
+  - `adata.obs["cytotrace_gene_count"]`: integer count of detected genes ($>0$) per cell.
+  - `adata.obs["cytotrace_potency"]`: ordered categorical across 6 quantile bins (`Differentiated` $\to$ `Totipotent`).
+- **Tabular Outputs** (`tables/cytotrace_scores.csv`):
+  - Indexed by cell ID with columns `cytotrace_score`, `cytotrace_potency`, `cytotrace_gene_count`.
+- **Verification Invariants**:
+  - Assert `adata.obs["cytotrace_score"].between(0.0, 1.0).all()` with zero `NaN` entries.
+  - Confirm positive Spearman rank correlation ($> 0.5$) between `cytotrace_score` and `cytotrace_gene_count`.
 
-Annotate a complexity-based potency proxy in place, preserving X.
+## 4. Gotchas & Troubleshooting
 
-This is CytoTRACE-simple, not the published CytoTRACE or CytoTRACE 2.
-It counts positive expression, smooths rank scores, ranks them again
-and bins them into six relative categories. Existing neighbors are reused.
-
-:param adata: AnnData with expression and optionally PCA/neighbors.
-:param n_neighbors: Neighbors to construct when absent; default 30.
-:param layer: Expression layer for gene detection; None uses X.
-    Use counts or unscaled log expression, not centered/scaled X.
-:returns: The same AnnData with cytotrace_score, cytotrace_gene_count
-    and cytotrace_potency in obs; run_info returns diagnostics.
-:raises ValueError: The input is empty, a layer is missing, or neighbors < 1.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read JSON potency diagnostics; keep=False removes them from uns.
-
-### `potency_table(adata) -> pd.DataFrame`
-
-Return per-cell score, category and detected-gene count, indexed by cell.
-
-### `potency_composition(adata) -> pd.DataFrame`
-
-Return counts for the six relative potency bins; they are not cell-type calls.
-
-### `potency_figure(adata)`
-
-Return a matplotlib Figure showing the potency score distribution.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-CytoTRACE-simple counts positive expression, rank-normalizes that complexity,
-smooths on a neighbor graph, ranks again and assigns six relative bins.
-It is not the published CytoTRACE or CytoTRACE 2 model.
-
-`n_neighbors=30` retains the CLI default and is used only if a neighbor graph
-must be built. `layer=None` uses X; specify a counts layer or unscaled
-log-normalized expression. Computation is deterministic for a fixed graph.
-
-## Gotchas
-
-- The second rank transform makes the six `cytotrace_potency` bins approximately
-  equal-sized when scores have no ties. Labels such as Totipotent are names
-  of these bins, not evidence that those cells are biologically totipotent (`_api.py:112`).
-- Positive values in centered/scaled X do not count detected genes. Use
-  `layer="counts"` or an unscaled matrix; inspect `potency_table` (`_api.py:72`).
-- Existing neighbors are reused regardless of `n_neighbors`. The CLI's
-  processed PBMC demo has scaled X and is retained only for compatibility (`_api.py:80`).
-- `run_info(adata)["degenerate"]` marks at most one occupied category. It
-  does not raise; the CLI mirrors this under `result.json["summary"]`.
-
-## Inputs & Outputs
-
-Input is AnnData with expression, optionally PCA and neighbors. The API adds
-`cytotrace_score`, `cytotrace_potency` and `cytotrace_gene_count` to obs and
-returns tables/Figures without writing files.
-
-The CLI writes `processed.h5ad`, `tables/cytotrace_scores.csv`, `report.md`,
-`result.json`, `figure_data/cytotrace_embedding.csv` and potency/distribution
-plots under `figures/`. R-enhanced plots are optional.
-
-## Key CLI
-
-```bash
-python skills/singlecell/scrna/sc-cytotrace/sc_cytotrace.py --demo --output /tmp/sc_cytotrace_demo
-python skills/singlecell/scrna/sc-cytotrace/sc_cytotrace.py --input normalized.h5ad --n-neighbors 30 --output results/
-```
+1. **Centered / Z-Scored `adata.X` Trap**:
+   - After `sc.pp.scale(adata)`, roughly half of all matrix entries are $>0$ due to zero-centering, destroying the biological link between `(X > 0).sum(axis=1)` and detected gene count. Always pass `layer="counts"` or an unscaled log-normalized matrix.
+2. **Relative Quantile Bins vs. Biological Totipotency**:
+   - The second rank transform distributes `cytotrace_score` uniformly across $[0, 1]$, making the six `cytotrace_potency` categories (`Differentiated` through `Totipotent`) roughly equal-sized relative bins. `"Totipotent"` denotes the top quantile in your dataset, not embryonic totipotency.
+3. **Existing `connectivities` Graph Reuse**:
+   - When `adata.obsp["connectivities"]` is already present, `n_neighbors` is ignored and the existing graph is reused. Verify that the graph was constructed on a batch-corrected embedding (`X_pca_harmony` or `X_scVI`) in multi-sample cohorts.
+4. **Cell-Cycle & Doublet Confounding**:
+   - Undetected doublets and proliferating G2/M cells express significantly more genes per cell. Run `sc-doublet-detection` and inspect cell-cycle phase scores (`S_score`, `G2M_score`) before interpreting high `cytotrace_score` as stemness.
 
 ## Dependencies
 

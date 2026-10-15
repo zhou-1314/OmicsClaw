@@ -941,8 +941,13 @@ class SkillApiRunner:
         module_name = "omicsclaw_jobs_." + re.sub(
             r"[^0-9a-zA-Z_]", "_", str(skill_directory.relative_to(root))
         )
+        entry_path = (
+            skill_directory / "kernel.py"
+            if (skill_directory / "kernel.py").is_file()
+            else skill_directory / "_api.py"
+        )
         spec = importlib.util.spec_from_file_location(
-            module_name, skill_directory / "_api.py"
+            module_name, entry_path
         )
         if spec is None or spec.loader is None:
             raise JobFailure(

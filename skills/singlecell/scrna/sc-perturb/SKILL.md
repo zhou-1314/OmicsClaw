@@ -14,82 +14,91 @@ tags:
 - pertpy
 ---
 
-# sc-perturb
+# Single-Cell CRISPR / Perturb-seq Perturbation Signature & Mixscape Analysis (`sc-perturb`)
 
-Classify observed Perturb-seq cells with pertpy Mixscape. Guide labels and a
-non-targeting control group must already exist; otherwise use `sc-perturb-prep`.
-This is not an in-silico knockout predictor.
+## 1. Method Decision Matrix & When to Use
 
-## Key CLI
+Use this skill to compute local perturbation signatures, separate genuinely perturbed (`KO` / `OE`) cells from escaped non-perturbed (`NP`) cells that received a guide RNA without exhibiting a transcriptomic phenotype, and quantify perturbation strength on an AnnData that already has guide/target labels (otherwise run `sc-perturb-prep` first).
 
-```bash
-python skills/singlecell/scrna/sc-perturb/sc_perturb.py --demo --seed 0 --output /tmp/sc_perturb_demo
-python skills/singlecell/scrna/sc-perturb/sc_perturb.py --input prepared.h5ad --pert-key perturbation --control NT --split-by replicate --seed 0 --output results/perturb
+| Analytical Goal | Recommended Method | Upstream Library | Key Assumptions |
+|---|---|---|---|
+| **Separate true KO/OE responders from escaped (`NP`) cells** | **Mixscape** (`mixscape`) | `pertpy.tl.Mixscape` (`perturbation_signature` + `mixscape`) | Normalized `adata.X`, `X_pca`, target column (`pert_key`), and non-targeting control label (`control="NT"`) |
+| **Global distance between perturbation & control distributions** | **Energy Distance (E-test)** | `pertpy.tl.Distance` (`metric="edistance"`) | Latent space (`X_pca` / `X_scVI`) + non-targeting control group |
+| **Attach barcode $\to$ sgRNA table to expression AnnData** | **Guide Mapping Prep** | `sc-perturb-prep` | Raw expression + barcode-to-guide TSV/CSV |
+
+> **Decision Rule**: Pooled CRISPR screens routinely contain $20\%\text{--}60\%$ escaped cells (`NP`) due to in-frame indels or inefficient editing. Always run `Mixscape` to filter out `NP` cells before downstream target-level differential expression (`sc-de`).
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Perturbation Signature & Gaussian Mixture Classification (`pertpy.tl.Mixscape`)
+
+```python
+import pertpy as pt
+import scanpy as sc
+
+# 1. Ensure log-normalized expression in adata.X and PCA embedding in adata.obsm["X_pca"]
+if "counts" not in adata.layers:
+    adata.layers["counts"] = adata.X.copy()
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+if "X_pca" not in adata.obsm:
+    sc.tl.pca(adata, n_comps=min(50, adata.n_obs - 1, adata.n_vars - 1))
+
+# 2. Subtract local non-targeting (NT) control neighborhood signature
+ms = pt.tl.Mixscape()
+ms.perturbation_signature(
+    adata,
+    pert_key="perturbation",
+    control="NT",
+    split_by="replicate",   # Or None to use kNN nearest-neighbor controls across the dataset
+    n_neighbors=20,
+)
+
+# 3. Classify cells into KO (or OE), NP (non-perturbed), and NT via Gaussian mixture model
+ms.mixscape(
+    adata,
+    labels="perturbation",
+    control="NT",
+    new_class_name="mixscape_class",
+    logfc_threshold=0.25,
+    pval_cutoff=0.05,
+    perturbation_type="KO",
+)
+# Outputs: adata.obs["mixscape_class"], adata.obs["mixscape_class_global"], adata.obs["mixscape_class_p_ko"]
 ```
 
-`mixscape` (`--method mixscape`) is the only method. Tune `--n-neighbors`,
-`--logfc-threshold`, `--pval-cutoff` and `--perturbation-type KO|OE` explicitly.
+### Optional Micro-Helper (`kernel.py`)
 
-## Workflow
+Calling `use_skill("sc-perturb")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `mixscape(adata, pert_key="perturbation", control="NT", split_by=None, logfc_threshold=0.25, pval_cutoff=0.05, perturbation_type="KO")`
+- `class_counts(adata)`
+- `global_class_counts(adata)`
 
-Upstream: `sc-perturb-prep`, or an AnnData with verified screen labels. Validate
-labels, supply/compute PCA, build perturbation signatures, then classify cells.
-Both pertpy stages receive `--seed` (API `random_state`, default 0).
-Downstream: `sc-de` or `sc-enrichment` after reviewing target-level calls.
+## 3. Output Format & Verification Contract
 
-## Matrix Contract
+- **Annotated AnnData** (`intermediate/mixscape.h5ad` or `processed.h5ad`):
+  - `adata.obs["mixscape_class"]`: target-specific classification (e.g., `"STAT1 KO"`, `"STAT1 NP"`, `"NT"`).
+  - `adata.obs["mixscape_class_global"]`: global call (`"KO"`, `"NP"`, `"NT"`).
+  - `adata.obs["mixscape_class_p_ko"]` (or `mixscape_class_p_oe`): posterior probability $\in [0, 1]$ of true perturbation.
+  - `adata.layers["X_pert"]`: local control-subtracted perturbation signature matrix.
+- **Tabular Outputs**:
+  - `tables/mixscape_cell_classes.csv`: per-cell perturbation, `mixscape_class`, `mixscape_class_global`, and posterior probability.
+  - `tables/mixscape_class_counts.csv`: cell counts per target-specific class.
+  - `tables/mixscape_global_class_counts.csv`: cell counts per `global_class` (`KO`, `NP`, `NT`).
+- **Verification Invariants**:
+  - Assert `control in adata.obs[pert_key].values` before running.
+  - Verify `tables/mixscape_global_class_counts.csv` contains $>0$ `KO`/`OE` cells for positive-control targets (an all-`NP` result indicates weak effect size or mislabelled control group).
 
-Uses normalized expression. Count-like X is saved in `layers['counts']` and
-log-normalized. Existing `X_pca` is reused; otherwise PCA is computed before the
-legacy normalization step. Prefer an upstream PCA on appropriate normalized
-features for real screens. The API leaves its input unchanged.
+## 4. Gotchas & Troubleshooting
 
-## Inputs & Outputs
-
-Input: `.h5ad` with a perturbation column, control label and optional split key.
-The CLI writes `processed.h5ad`, `report.md`, `result.json`,
-`reproducibility/commands.sh`, `tables/mixscape_cell_classes.csv`,
-`tables/mixscape_class_counts.csv`, `tables/mixscape_global_class_counts.csv`
-and `figures/mixscape_global_classes.png`. Plot data and their manifest are in
-`figure_data/`; R-enhanced figures are optional.
-
-## Gotchas
-
-- `result.json` → `data.params.split_by` records the CLI's resolved split key. A missing CLI split column warns and disables splitting; the API instead raises unless you pass `split_by=None`.
-- `tables/mixscape_global_class_counts.csv` must contain biological signal before you interpret a run. Exit 0 alone does not establish an effect; the example asserts KO detection in both known-effect groups.
-- `tables/mixscape_cell_classes.csv` preserves target-specific and global classes plus `mixscape_class_p_ko` (or `_oe`). Posterior probabilities are not experimental validation.
-- For pertpy 1.0.3, split-based signatures use controls within each split rather than nearest-neighbour selection. `n_neighbors` affects the `split_by=None` path.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `mixscape(adata, *, pert_key='perturbation', control='NT', split_by='replicate', n_neighbors=20, logfc_threshold=0.25, pval_cutoff=0.05, perturbation_type='KO', random_state=0)`
-
-Return an AnnData copy with Mixscape classes and posterior probabilities.
-
-Uses normalized expression, preserving count-like X in layers['counts']
-before log-normalization. split_by=None selects nearest-neighbour controls.
-Both pertpy stages receive random_state; a missing control or split column
-raises ValueError. Requires pertpy (validated with 1.0.3 and sklearn 1.7.2).
-
-### `run_info(adata, *, keep: bool=True)`
-
-Return method, seed and output columns; keep=False removes the run record.
-
-### `class_counts(adata)`
-
-Return class and n_cells columns for target-specific Mixscape labels.
-
-### `global_class_counts(adata)`
-
-Return global_class and n_cells columns for control, KO/OE and NP cells.
-
-### `global_class_figure(adata)`
-
-Return a Figure of global Mixscape cell counts without saving files.
-
-<!-- api:end -->
+1. **Missing Control Label (`control="NT"`)**:
+   - `Mixscape` requires non-targeting control cells whose label in `adata.obs[pert_key]` exactly matches `control`. Standardize control labels (`"NT"`, `"NTC"`, `"non-targeting"`) via `sc-perturb-prep` before running `sc-perturb`.
+2. **`split_by` Behavior in `pertpy`**:
+   - Passing `split_by="replicate"` computes perturbation signatures against control cells within each replicate; if the specified `split_by` column is absent or a replicate lacks control cells, pass `split_by=None` so `n_neighbors` nearest-neighbor controls are used globally.
+3. **Zero `KO` Calls (`100% NP`) Is Not a Pipeline Crash**:
+   - If a target gene has fewer than 5 DE genes passing `logfc_threshold` and `pval_cutoff` against `NT`, Mixscape assigns every cell of that guide to `NP`. Inspect `logfc_threshold` and verify guide on-target knockdown efficiency (`adata[:, target_gene].X`).
+4. **Dependency Compatibility (`pertpy` + `statsmodels` + `filelock`)**:
+   - `pertpy==1.0.3` imports `filelock` at module load time and expects `statsmodels<=0.14.6`. Ensure both are installed when running full `pertpy` workflows.
 
 ## Dependencies
 

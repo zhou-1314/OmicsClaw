@@ -12,134 +12,96 @@ tags:
 - aggregation
 ---
 
-# sc-multi-count
+# Multi-Sample Single-Cell Count Matrix Aggregation (`sc-multi-count`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
+
+Use this playbook to concatenate multiple single-sample raw count `AnnData` objects into a unified multi-sample `AnnData` with collision-free cell barcodes and explicit sample provenance before `sc-qc` and `sc-batch-integration`.
+
+| Concatenation Mode | Parameter (`join=`) | Feature Alignment Behavior | Best Used When |
+|---|---|---|---|
+| **Union of Features (Default)** | `anndata.concat(..., join="outer", fill_value=0)` | Retains all genes present in **any** sample; fills absent sample-gene entries with `0` | Merging samples quantified against slightly different gene annotations or pre-filtered per-sample matrices |
+| **Intersection of Features** | `anndata.concat(..., join="inner")` | Retains only genes shared across **every** input sample | All samples were quantified with the exact same reference transcriptome index (`cellranger` / `STARsolo`) |
+
+> **Scope Distinction**: `sc-multi-count` stacks raw count matrices and assigns `obs["sample_id"]` without subsampling reads (unlike `cellranger aggr` depth normalization) or removing batch effects (use `sc-batch-integration` downstream).
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Multi-Sample Concatenation with Collision-Free Barcodes (`anndata.concat`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
+import anndata as ad
+import numpy as np
+import pandas as pd
+import scanpy as sc
 
-merge = load_skill("sc-multi-count")
-samples = [read_input("data/sample_a.h5ad"), read_input("data/sample_b.h5ad")]
-adata = merge.merge_samples(samples, sample_ids=["sample_a", "sample_b"])
-write_output(adata, "intermediate/merged.h5ad")
-write_output(merge.per_sample_summary(adata), "tables/samples.csv")
+sample_files = {
+    "donor1_ctrl": "sample1_filtered_feature_bc_matrix.h5",
+    "donor2_ctrl": "sample2_filtered_feature_bc_matrix.h5",
+    "donor3_stim": "sample3_filtered_feature_bc_matrix.h5",
+}
+
+adatas = []
+for sample_id, path in sample_files.items():
+    a = sc.read_10x_h5(path) if path.endswith(".h5") else sc.read_h5ad(path)
+    a.var_names_make_unique()
+    a.obs["sample_id"] = sample_id
+    # Prefix cell barcodes with sample_id to prevent 10x barcode collisions across channels!
+    a.obs_names = [f"{sample_id}_{bc}" for bc in a.obs_names]
+    adatas.append(a)
+
+# Concatenate along observations (axis=0) with zero-fill for any sample-specific genes
+merged = ad.concat(adatas, axis=0, join="outer", fill_value=0, merge="same")
+merged.obs["sample_id"] = merged.obs["sample_id"].astype("category")
+merged.layers["counts"] = merged.X.copy()
+merged.raw = merged.copy()
 ```
 
-The API returns objects and does not write files. Existing sample labels are
-kept even when `sample_ids` supplies different barcode prefixes. See
-`examples/example_step.py` for a count-conservation check using two halves
-of PBMC3k; those halves are demonstration samples, not biological replicates.
+### Pattern B: Per-Sample Depth & Complexity Audit Table
 
-## When to use
-
-The user has run `sc-count` (or another counting backend) on multiple
-samples separately and now needs them merged into one AnnData with a
-canonical sample-label column for downstream batch-aware analysis.
-This only joins matrices; it does not perform Cell Ranger's depth
-normalization or recount reads.
-
-## Inputs & Outputs
-
-**Inputs**
-
-- Two or more AnnData objects with raw count-like values in `.X`; the CLI
-  takes repeated `--input` H5AD paths. Features are aligned by name.
-
-**Outputs**
-
-- `tables/barcode_metrics.csv`
-- `tables/per_sample_summary.csv`
-- `figures/barcode_rank.png`
-- `figures/count_complexity_scatter.png`
-- `figures/count_distributions.png`
-- `figures/sample_composition.png`
-- `processed.h5ad`
-- `standardized_input.h5ad`
-- `report.md`
-- `result.json`
-- `figures/manifest.json`, `figure_data/manifest.json` and copies of the two tables
-- `reproducibility/commands.sh`, `reproducibility/requirements.txt`
-- The returned AnnData has sample labels, `layers["counts"]` and a count snapshot in `.raw`.
-
-## Flow
-
-1. Collect per-sample AnnData paths from each `--input <path>` flag (`action="append"`); paired `--sample-id <id>` flags assign sample labels.
-2. Load and tag samples, preserving an existing `obs["sample_id"]`.
-3. Join features and cells, zero-fill absent features, then record the count contract.
-4. Write merged AnnData; emit per-sample / per-barcode summary tables.
-5. Render barcode-rank + composition figures.
-6. Emit `report.md` + `result.json`.
-
-## Gotchas
-
-- **`--input` is `action="append"` — repeat the flag, do not comma-split.** `sc_multi_count.py` declares `--input` with `action="append"`.  Pass `--input s1.h5ad --input s2.h5ad --input s3.h5ad`; a single comma-separated value (`--input s1.h5ad,s2.h5ad`) is treated as one literal path that does not exist and triggers `FileNotFoundError`.  No directory expansion.
-- **At least two `--input` paths are required.** `sc_multi_count.py` calls `parser.error("At least two --input paths required when not using --demo.")` if you pass zero or one.  For a single-sample run you don't need this skill — just use the upstream `sc-count` output directly.
-- **Missing input file → hard fail.** `sc_multi_count.py` raises `FileNotFoundError` when any individual `--input` path does not resolve.  In batch pipelines, a single mistyped sample name aborts the whole merge — pre-flight your file list.
-- **`--r-enhanced` is accepted but produces no R plots.** This skill emits Python figures only; the flag exists for CLI consistency.
-- **No within-sample re-counting.** This is a stitching skill — it stacks already-canonical AnnData objects.  If a per-sample input has a non-canonical matrix layout, run `sc-standardize-input` on each before this; otherwise the merged contract may surface incoherent per-cell metrics downstream.
-- `_api.py:merge_samples` does not validate integer counts. It labels `.X` and its copies as raw counts; passing normalized data gives a misleading matrix contract.
-- `_api.py:merge_samples` keeps existing sample labels. `--sample-id` changes barcode prefixes but does not replace an existing `sample_id` column; check `tables/per_sample_summary.csv`.
-- `sc_multi_count.py:_demo_adata` ignores `--sample-id` in demo mode. Its labels stay `sample_A` and `sample_B`.
-
-## Key CLI
-
-```bash
-# Demo (two halves of PBMC3k raw counts)
-python skills/singlecell/scrna/sc-multi-count/sc_multi_count.py --demo --output /tmp/sc_multi_demo
-
-# Three samples — repeat --input per file
-python skills/singlecell/scrna/sc-multi-count/sc_multi_count.py \
-  --input s1.h5ad --input s2.h5ad --input s3.h5ad \
-  --output results/
-
-# With explicit per-sample labels (paired with --input order)
-python skills/singlecell/scrna/sc-multi-count/sc_multi_count.py \
-  --input s1.h5ad --sample-id ctrl_a \
-  --input s2.h5ad --sample-id ctrl_b \
-  --input s3.h5ad --sample-id treat_a \
-  --output results/
+```python
+mat = merged.layers["counts"]
+per_cell = pd.DataFrame({
+    "sample_id": merged.obs["sample_id"].values,
+    "total_counts": np.asarray(mat.sum(axis=1)).ravel(),
+    "n_genes": np.asarray((mat > 0).sum(axis=1)).ravel(),
+})
+per_sample_df = per_cell.groupby("sample_id", observed=True).agg(
+    n_cells=("total_counts", "count"),
+    median_counts=("total_counts", "median"),
+    median_genes=("n_genes", "median"),
+    total_umis=("total_counts", "sum"),
+).reset_index()
 ```
 
-## API
+### Optional Micro-Helper (`kernel.py`)
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+Calling `use_skill("sc-multi-count")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `merge_samples(adatas, sample_ids=None, sample_key="sample_id", join="outer")`
+- `per_sample_summary(adata, sample_key="sample_id")`
+- `barcode_metrics(adata, sample_key="sample_id")`
 
-### `merge_samples(adatas, *, sample_ids=None, sample_key='sample_id', join='outer')`
+## 3. Output Format & Verification Contract
 
-Merge .X counts, align features and return a standardized copy.
+- **Merged Count AnnData** (`intermediate/processed.h5ad`):
+  - `adata.obs["sample_id"]`: categorical sample identifier with $\ge 2$ distinct levels.
+  - `adata.obs_names`: globally unique sample-prefixed cell barcodes (`adata.obs_names.is_unique == True`).
+  - `adata.layers["counts"]` and `adata.X`: non-negative integer count matrix of shape $(\sum_i n_{\text{obs}, i}, n_{\text{vars}})$.
+- **Summary Tables** (`tables/per_sample_summary.csv`, `tables/barcode_metrics.csv`):
+  - `per_sample_summary.csv` columns: `sample_id`, `n_cells`, `median_counts`, `median_genes`, `total_umis`.
+- **Verification Invariants**:
+  - Assert `merged.n_obs == sum(a.n_obs for a in adatas)` and `merged.obs_names.is_unique`.
 
-Inputs are not modified. Missing features in an outer join become zeros.
-Existing sample labels are kept; sample_ids supplies missing labels and,
-when given, prefixes each input's barcodes. With no IDs, existing barcodes
-are kept and duplicate names get numeric suffixes; missing sample labels
-become sample_1, sample_2, etc. Like the CLI, this does not test whether .X
-holds integer counts. Standardize external inputs before merging them.
+## 4. Gotchas & Troubleshooting
 
-### `barcode_metrics(adata, *, sample_key='sample_id')`
-
-Return per-barcode .X counts and detected features, sorted by total counts.
-
-### `per_sample_summary(adata, *, sample_key='sample_id')`
-
-Return cell counts, median counts/features and summed UMIs for each sample.
-
-### `sample_composition_figure(adata, *, sample_key='sample_id')`
-
-Return a Figure showing each sample's cell count; do not write it.
-
-### `run_info(adata, *, keep: bool=True)`
-
-Return merge diagnostics; keep=False removes the run record.
-
-<!-- api:end -->
-
-## See also
-
-- `references/parameters.md` — every CLI flag and tuning hint
-- `references/methodology.md` — sample-label derivation, contract harmonisation rules
-- `references/output_contract.md` — merged `obs` schema, table layout
-- Adjacent skills: `sc-count` (upstream — produces single-sample AnnData inputs), `sc-standardize-input` (per-sample contract canonicaliser, run before this when inputs are external), `sc-batch-integration` (downstream — corrects batch effects in the merged AnnData)
+1. **10x Barcode Collisions Across Gel-Bead Lanes**:
+   - Every 10x Chromium channel draws from the same barcode whitelist (`AAACCCAAGAAACACT-1`), so identical barcode strings appear in multiple samples. Always prefix `obs_names` with `sample_id` (or pass `index_unique="-"` to `anndata.concat`) so cells from different donors never collide.
+2. **Never Concatenate Log-Normalized and Raw Count Matrices Together**:
+   - All input `AnnData` objects must be in the **same raw integer count state** before `anndata.concat`. Mixing an already CP10K-normalized `.h5ad` with a raw count `.h5ad` corrupts library-size normalization, HVG selection, and pseudobulk aggregation.
+3. **`anndata.concat` Drops `.var` Metadata Columns By Default (`merge=None`)**:
+   - Calling `ad.concat(adatas)` without `merge="same"` or `merge="first"` discards shared `.var` columns such as `gene_ids` or `feature_types`. Always pass `merge="same"` (or `merge="first"`) to preserve concordant gene metadata.
+4. **Run Doublet Detection Per-Sample (`batch_key="sample_id"`) After Merging**:
+   - Once samples are merged into a single `AnnData`, any downstream `sc-doublet-detection`, HVG selection (`sc.pp.highly_variable_genes`), or `sc-batch-integration` step **must** receive `batch_key="sample_id"`.
 
 ## Dependencies
 

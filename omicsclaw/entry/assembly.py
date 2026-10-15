@@ -84,7 +84,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol, Sequence, runtime_checkable
 
 from omicsclaw.context import (
     AssembledPrompt,
@@ -149,6 +150,7 @@ from omicsclaw.provider import (
     resolve_config,
 )
 from omicsclaw.remote import RemoteKernelRuntime, RemotePlaneBinding
+from omicsclaw.sandbox import EgressMode
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.artifacts import kind_and_mime_for
 from omicsclaw.skills import (
@@ -295,7 +297,10 @@ TOOL_GUIDANCE = """\
 read_file rather than `cat` under bash.
 - For a complex multi-step analysis, find the domain guidance first: \
 search the skill catalogue with `search_skills`, load the matching \
-skill with `use_skill`, then write code.
+skill with `use_skill`, then run cells interactively on the session's \
+persistent kernel with `python` (variables and loaded skill helpers \
+persist across calls; use `live_app` for interactive views and \
+`save_artifact` for exported tables or reports).
 - Every path is resolved inside the workspace sandbox; a path that \
 leaves it is refused, not clamped.
 - A tool that asks for approval is waiting on a person. Its reported \
@@ -415,6 +420,7 @@ def foundation_tools(
     memory: MemoryBinding | None = None,
     skill_env: SkillEnvBinding | None = None,
     remote: RemotePlane | None = None,
+    kernels: WorkspaceKernelBinding | None = None,
 ) -> tuple[Tool, ...]:
     """The six foundation tools, sharing one workspace, plus ``use_skill``.
 
@@ -499,7 +505,26 @@ def foundation_tools(
     )
     if config.skills_index is not SkillsIndex.OFF:
         index = build_skill_index(config) if skills is None else skills
-        annotate = skill_env.annotate if skill_env is not None else None
+        env_annotate = skill_env.annotate if skill_env is not None else None
+        kernel_annotate = (
+            kernels.annotate_skill
+            if kernels is not None and config.permission_mode is not PermissionMode.READ_ONLY
+            else None
+        )
+        if env_annotate is not None and kernel_annotate is not None:
+            async def _combined_annotate(skill: Skill, body: str) -> str:
+                parts: list[str] = []
+                first_note = await env_annotate(skill, body)
+                if first_note:
+                    parts.append(first_note)
+                second_note = await kernel_annotate(skill, body)
+                if second_note:
+                    parts.append(second_note)
+                return "\n\n".join(parts)
+
+            annotate = _combined_annotate
+        else:
+            annotate = env_annotate or kernel_annotate
         tools = (
             *tools,
             use_skill_tool(index, annotate=annotate),
@@ -626,6 +651,8 @@ class WorkspaceKernelBinding:
         *,
         remote_runtime: RemoteKernelStarter | None = None,
         notebook_store: NotebookStore | None = None,
+        auto_bind_notebook: bool = False,
+        skills_root: Path | None = None,
         spawn_wrapper: object = None,
         sandbox: SandboxBinding | None = None,
         python: str | None = None,
@@ -642,6 +669,7 @@ class WorkspaceKernelBinding:
         self.manager = PersistentKernelManager(
             root,
             on_figure=self._register_figure,
+            on_kernel_ready=self._inject_pending_sidecars,
             remote_runtime=remote_runtime,
             spawn_wrapper=spawn_wrapper,
             env_scrubber=without_control_credentials,
@@ -651,8 +679,93 @@ class WorkspaceKernelBinding:
         self._sandbox = sandbox
         self._store: ArtifactStore | None = None
         self._notebook_store = notebook_store
+        self._auto_bind_notebook = bool(auto_bind_notebook)
+        self._skills_root = skills_root
+        self._session_sidecars: dict[str, dict[str, tuple[Path, str]]] = {}
+        self._injected_sidecars: dict[int, set[str]] = {}
         self._notebooks = None
         self._notebooks_db = None
+
+    def register_skill_sidecar(
+        self,
+        session_id: str,
+        skill_name: str,
+        kernel_path: Path,
+    ) -> tuple[tuple[str, str, str], ...]:
+        """Validate and register a skill's ``kernel.py`` sidecar for *session_id*."""
+        from omicsclaw.skills.sidecar import (
+            extract_kernel_exports,
+            validate_kernel_ast,
+        )
+
+        if not kernel_path.is_file():
+            return ()
+        src = kernel_path.read_text(encoding="utf-8")
+        if validate_kernel_ast(src):
+            return ()
+        exports = extract_kernel_exports(src)
+        if not exports:
+            return ()
+        sid = str(session_id or "").strip() or "default"
+        self._session_sidecars.setdefault(sid, {})[skill_name] = (kernel_path, src)
+        return exports
+
+    async def annotate_skill(self, skill: Skill, _body: str) -> str:
+        """``use_skill`` callback: register ``kernel.py`` and return ``<kernel-plugin>``."""
+        from omicsclaw.skills.sidecar import render_kernel_plugin_block
+        from omicsclaw.tools.context import context_value
+
+        kernel_path = skill.directory / "kernel.py"
+        if not kernel_path.is_file():
+            return ""
+        session_id = str(context_value("session_id", "") or "") or "default"
+        exports = self.register_skill_sidecar(session_id, skill.name, kernel_path)
+        return render_kernel_plugin_block(skill.name, exports)
+
+    def _inject_pending_sidecars(self, state: object) -> None:
+        """Inject any registered ``kernel.py`` sidecars into *state.kernel* with ``store_history=False``."""
+        if getattr(state, "language", "python") != "python":
+            return
+        kernel = getattr(state, "kernel", None)
+        if kernel is None:
+            return
+        ksid = str(getattr(state, "session_id", "") or "")
+        candidate_sids = [ksid]
+        if ksid.startswith("notebook:") and self._notebooks is not None:
+            nid = ksid[len("notebook:") :]
+            try:
+                b = self._notebooks.binding(notebook_id=nid)
+                if b and b.get("session_id"):
+                    candidate_sids.append(str(b["session_id"]))
+            except Exception:  # noqa: BLE001
+                pass
+        elif self._notebooks is not None:
+            try:
+                b = self._notebooks.binding(session_id=ksid)
+                if b and b.get("notebook_id"):
+                    candidate_sids.append("notebook:" + str(b["notebook_id"]))
+            except Exception:  # noqa: BLE001
+                pass
+
+        merged: dict[str, tuple[Path, str]] = {}
+        for sid in candidate_sids:
+            for sname, item in self._session_sidecars.get(sid, {}).items():
+                merged[sname] = item
+        if not merged:
+            return
+
+        from omicsclaw.skills.sidecar import build_sidecar_bootstrap_code
+
+        kid = id(kernel)
+        done = self._injected_sidecars.setdefault(kid, set())
+        for sname, (kpath, src) in merged.items():
+            if sname in done:
+                continue
+            code = build_sidecar_bootstrap_code(sname, kpath, src, skills_root=self._skills_root)
+            result = kernel.execute(code, store_history=False)
+            if result.status != "ok":
+                raise RuntimeError(f"skill {sname!r} sidecar injection failed: {result.status}")
+            done.add(sname)
 
     @property
     def notebooks(self):
@@ -730,6 +843,7 @@ class WorkspaceKernelBinding:
         manager verbatim — the refusals (no runtime, bad shape) are the
         manager's, so both faces answer them identically."""
         import hashlib
+        import re
         import uuid
 
         from omicsclaw.kernel import KernelCallbacks
@@ -738,7 +852,26 @@ class WorkspaceKernelBinding:
         if self._sandbox is not None and self._sandbox.active:
             self._sandbox.drain_blocked_egress_hints()
 
-        if self.notebooks.binding(session_id=session_id) is not None:
+        if (
+            self._auto_bind_notebook
+            and location == "local"
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id)
+            and self.notebooks.binding(session_id=session_id) is None
+        ):
+            target_nid = (
+                notebook_id
+                if notebook_id and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", notebook_id)
+                else session_id
+            )
+            existing = self.notebooks.binding(notebook_id=target_nid)
+            if existing is not None and existing.get("session_id") != session_id:
+                suffix = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:6]
+                target_nid = f"{target_nid[:55]}-{suffix}"
+            self.notebooks.bind(target_nid, session_id)
+
+        if self.notebooks.binding(session_id=session_id) is not None and (
+            location == "local" or notebook_id
+        ):
             call = context_value("tool_call_id", "")
             turn = context_value("turn_id", "")
             command = hashlib.sha256(
@@ -2006,6 +2139,8 @@ def build_app(
                 config.workspace,
                 python=capabilities.science_python,
                 remote_runtime=remote_kernels,
+                auto_bind_notebook=True,
+                skills_root=skills.root,
                 notebook_store=(
                     NotebookStore(remembering.database)
                     if remembering is not None
@@ -2027,6 +2162,7 @@ def build_app(
                     memory=remembering,
                     skill_env=checking,
                     remote=remote_plane,
+                    kernels=kernels,
                 ),
                 # P2's save_artifact and P4's python close the foundation
                 # set: nothing the foundation mounted moves, and the only

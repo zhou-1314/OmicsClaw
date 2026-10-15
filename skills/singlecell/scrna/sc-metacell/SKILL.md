@@ -12,114 +12,108 @@ tags:
 - pseudo-cells
 ---
 
-# sc-metacell
+# Single-Cell Metacell Aggregation via SEACells / KMeans (`sc-metacell`)
 
-## Use from a step
+## 1. Method Decision Matrix & When to Use
+
+Use this skill to aggregate transcriptionally homogeneous single cells into compact, denoised **metacells** (typically $50\text{--}100$ cells per metacell) that overcome single-cell dropout while preserving continuous manifold geometry.
+
+| Analytical Goal | Recommended Method | Upstream Library | Input Embedding & Assumptions |
+|---|---|---|---|
+| **Manifold-preserving archetype metacells** (recommended for trajectories & GRNs) | **SEACells** (`seacells`) | `SEACells.core.SEACells` | Low-D embedding (`obsm["X_pca"]`, `obsm["X_scVI"]`, or `obsm["X_svd"]`); kernel archetypal analysis |
+| **Fast Euclidean centroid partitioning** (no `SEACells` dependency) | **KMeans Metacells** (`kmeans`) | `sklearn.cluster.KMeans` (`kernel.py`) | Low-D embedding (`obsm["X_pca"]`); deterministic with `random_state` |
+| **Donor-level DE across conditions** | **Sample-Level Pseudobulk** | `sc-de` (`pydeseq2`) | Sums raw integer counts per `(sample, cell_type)` (do **not** use `sc-metacell` as donor replicates) |
+
+> **Decision Rule**: Choose `n_metacells` at a compaction ratio of roughly $1$ metacell per $50\text{--}75$ single cells (e.g., $\sim 100$ metacells for $7,500$ cells), and always verify $2 \le \text{n\_metacells} < \text{n\_obs}$.
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Archetypal Metacell Inference (`SEACells`)
 
 ```python
-aggregation = load_skill("sc-metacell")
-cells = read_input("clustered.h5ad")
-metacells = aggregation.metacells(cells, method="kmeans", n_metacells=30)
-write_output(aggregation.cell_to_metacell(cells), "tables/cell_to_metacell.csv")
-write_output(aggregation.metacell_summary(metacells), "tables/metacell_summary.csv")
-write_output(metacells, "intermediate/metacells.h5ad")
+import SEACells
+import scanpy as sc
+
+# 1. Ensure PCA or batch-corrected latent space exists
+if "X_pca" not in adata.obsm:
+    sc.tl.pca(adata, n_comps=30)
+
+# 2. Fit SEACells model on latent representation
+n_metacells = max(2, adata.n_obs // 75)
+model = SEACells.core.SEACells(
+    adata,
+    build_kernel_on="X_pca",
+    n_SEACells=n_metacells,
+    n_waypoint_eigs=10,
+    convergence_epsilon=1e-5,
+)
+model.construct_kernel_matrix()
+model.initialize_archetypes()
+model.fit(min_iter=10, max_iter=50)
+
+# 3. Summarize into a metacell-level AnnData (adata.obs["SEACell"] holds assignments)
+madata = SEACells.core.summarize_by_SEACell(adata, SEACells_label="SEACell", summarize_layer="counts")
 ```
 
-The input receives obs['metacell']; the returned AnnData contains the
-aggregates. See `examples/example_step.py` for a PBMC example.
+### Pattern B: Fast KMeans Metacell Aggregation (`scikit-learn`)
 
-## API
+```python
+import anndata as ad
+import numpy as np
+import pandas as pd
+from scipy import sparse
+from sklearn.cluster import KMeans
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+# 1. Partition cells on X_pca into n_metacells centroids
+km = KMeans(n_clusters=30, random_state=0, n_init=10)
+labels = pd.Series([f"MC_{i}" for i in km.fit_predict(adata.obsm["X_pca"])], index=adata.obs_names)
+adata.obs["metacell"] = pd.Categorical(labels)
 
-### `metacells(adata, *, method: str='seacells', use_rep: str='X_pca', n_metacells: int=30, min_iter: int=10, max_iter: int=30, n_neighbors: int=15, n_pcs: int=20, random_state: int=0, celltype_key: str='leiden')`
+# 2. Aggregate mean expression per metacell
+mat = adata.layers["counts"] if "counts" in adata.layers else adata.X
+mc_ids = sorted(adata.obs["metacell"].unique())
+rows, meta = [], []
+for mc in mc_ids:
+    idx = adata.obs["metacell"] == mc
+    sub = mat[idx.to_numpy()]
+    rows.append(np.asarray(sub.mean(axis=0)).ravel())
+    dom = adata.obs.loc[idx, "leiden"].mode().iloc[0] if "leiden" in adata.obs else "unknown"
+    meta.append({"metacell": mc, "n_cells": int(idx.sum()), "dominant_label": str(dom)})
 
-Annotate input cells and return a new mean-expression metacell AnnData.
-
-KMeans uses the selected embedding. SEACells falls back to KMeans only
-when its package cannot be imported; a warning and run_info identify the
-fallback. Runtime errors propagate. Counts
-are averaged, not summed, using layers['counts'] when present, else X.
-Input X is preserved; obs['metacell'] receives the assignments.
-
-:param method: seacells (default) or kmeans.
-:param use_rep: Existing embedding, default X_pca.
-:param n_metacells: Requested aggregates, default 30; at least 2 and fewer than cells.
-:param min_iter: SEACells minimum fitting iterations, default 10.
-:param max_iter: SEACells maximum fitting iterations, default 30.
-:param n_neighbors: Neighbor count for SEACells when its graph is absent, default 15.
-:param n_pcs: PCs for that graph, default 20.
-:param random_state: Seed for KMeans and SEACells initialization, default 0.
-:param celltype_key: SEACells dominant-celltype annotation, default leiden.
-    KMeans retains the legacy dominant_label from the first obs column.
-:returns: A new AnnData with mean_expression layer, n_cells and dominant_label.
-:raises ValueError: The method, embedding or numerical parameters are invalid.
-
-### `aggregate_metacells(adata, labels: pd.Series | None=None)`
-
-Return mean-expression aggregates for labels, or the input obs['metacell'].
-
-Labels must cover every cell. Prefer layers['counts'] over X. This is
-not a summed pseudobulk matrix and does not infer biological replicates.
-
-### `run_info(madata, *, keep: bool=True) -> dict`
-
-Read requested/executed method and aggregation diagnostics from the result.
-
-### `metacell_summary(madata) -> pd.DataFrame`
-
-Return a copy of the aggregate's size and dominant-label metadata.
-
-### `cell_to_metacell(adata) -> pd.DataFrame`
-
-Return cell and metacell columns from the annotated input AnnData.
-
-### `size_distribution_figure(madata)`
-
-Return a matplotlib Figure of cells per metacell.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-`method="seacells"` retains the CLI default. If SEACells is unavailable,
-the API warns, uses KMeans and records both methods in `run_info`. Other backend
-errors propagate. `method="kmeans"` avoids that optional dependency.
-
-Defaults remain `use_rep="X_pca"`, `n_metacells=30`, `min_iter=10`,
-`max_iter=30`, `n_neighbors=15` and `n_pcs=20`. KMeans uses the selected
-embedding, not a newly constructed neighbor graph. `random_state=0` seeds
-KMeans and now also SEACells initialization; the wrapper previously ignored
-the seed for SEACells.
-
-## Gotchas
-
-- Aggregation takes the **mean**, not sum, of counts-layer values or X.
-  This is not sample-level pseudobulk, and grouping is not sample-aware (`_api.py:82`).
-- The legacy KMeans `dominant_label` uses the first obs column, not
-  `celltype_key`; that option controls SEACells' extra dominant-celltype column (`_api.py:15`).
-- `run_info(metacells)` reports fallback and expression source. Inspect
-  `aggregation="mean"` before feeding an aggregate into a count-based model (`_api.py:94`).
-- CLI `processed.h5ad` contains original cells plus labels.
-  `tables/metacells.h5ad` is the aggregate; use it explicitly when needed.
-
-## Inputs & Outputs
-
-Input needs the selected embedding and more cells than requested aggregates.
-The API returns a new metacell AnnData and table/Figure helpers.
-
-CLI files: `processed.h5ad`, its `metacells_annotated.h5ad` alias,
-`tables/metacells.h5ad`, `tables/metacell_summary.csv`,
-`tables/cell_to_metacell.csv`, `report.md`, `result.json`,
-`figures/metacell_centroids.png` and `figures/metacell_size_distribution.png`.
-Plot data/manifests and optional R-enhanced figures are also exported.
-
-## Key CLI
-
-```bash
-python skills/singlecell/scrna/sc-metacell/sc_metacell.py --demo --method kmeans --output /tmp/sc_metacell_demo
-python skills/singlecell/scrna/sc-metacell/sc_metacell.py --input clustered.h5ad --method kmeans --n-metacells 30 --output results/
+madata = ad.AnnData(X=np.vstack(rows), obs=pd.DataFrame(meta).set_index("metacell"), var=adata.var.copy())
+madata.layers["mean_expression"] = madata.X.copy()
 ```
+
+### Optional Micro-Helper (`kernel.py`)
+
+Calling `use_skill("sc-metacell")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `metacells(adata, method="kmeans", use_rep="X_pca", n_metacells=30, random_state=0, celltype_key="leiden")`
+- `aggregate_metacells(adata, labels=None, celltype_key="leiden")`
+- `metacell_summary(madata)`
+
+## 3. Output Format & Verification Contract
+
+- **Annotated Single-Cell AnnData** (`processed.h5ad` / `metacells_annotated.h5ad`):
+  - `adata.obs["metacell"]`: categorical metacell assignment (`MC_0`, `MC_1`, ...) for every cell.
+- **Aggregated Metacell AnnData** (`intermediate/metacells.h5ad` or `tables/metacells.h5ad`):
+  - Shape `(n_metacells, n_vars)` with `madata.layers["mean_expression"]`, `madata.obs["n_cells"]`, and `madata.obs["dominant_label"]`.
+- **Tabular Outputs** (`tables/metacell_summary.csv`, `tables/cell_to_metacell.csv`):
+  - `metacell_summary.csv`: `metacell`, `n_cells`, `dominant_label`.
+  - `cell_to_metacell.csv`: `cell`, `metacell`.
+- **Verification Invariants**:
+  - Assert `madata.obs["n_cells"].sum() == adata.n_obs` and `(madata.obs["n_cells"] > 0).all()`.
+  - Assert `adata.obs["metacell"].isna().sum() == 0`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **Mean Aggregation vs. Integer Pseudobulk Sums**:
+   - `sc-metacell` averages expression across cells in each metacell (`aggregation="mean"`). Do **not** feed mean-aggregated metacells directly into negative-binomial count models (`pydeseq2`, `edgeR`) that require raw integer sums across independent biological donors.
+2. **Metacells Are Not Independent Biological Replicates**:
+   - Partitioning 10,000 cells from one donor into 100 metacells does not create $N=100$ biological replicates. Never run condition-level differential expression across metacells without accounting for donor identity (`sample_key`).
+3. **Cross-Sample / Cross-Condition Mixing**:
+   - If you build metacells on a joint batch-integrated embedding (`X_scVI`, `X_pca_harmony`), a single metacell can merge cells from both control and treated samples. Partition per sample or inspect sample purity per metacell before condition comparisons.
+4. **Processed Cell-Level H5AD vs. Aggregate H5AD**:
+   - In CLI outputs, `processed.h5ad` retains original single cells with `obs["metacell"]`, whereas `tables/metacells.h5ad` stores the compressed `(n_metacells, n_vars)` AnnData object.
 
 ## Dependencies
 

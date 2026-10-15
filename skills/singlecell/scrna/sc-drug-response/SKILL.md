@@ -14,97 +14,86 @@ tags:
 - prism
 ---
 
-# sc-drug-response
+# Single-Cell Drug Target Expression & Pharmacogenomic Scoring (`sc-drug-response`)
 
-Summarize drug-associated gene expression or apply supplied CaDRReS models.
-The default does not predict drug sensitivity or recommend treatment.
+## 1. Method Decision Matrix & When to Use
 
-## Key CLI
+Use this skill to summarize drug-target gene set expression across annotated cell clusters (`simple_correlation` / target-mean scoring) or to apply pretrained pharmacogenomic response models (`CaDRReS-Sc` trained on GDSC / PRISM) when local model weights are available.
 
-```bash
-python skills/singlecell/scrna/sc-drug-response/sc_drug_response.py --demo --output /tmp/sc_drug_demo
-python skills/singlecell/scrna/sc-drug-response/sc_drug_response.py --input clustered.h5ad --cluster-key leiden --output results/drug_expression
-python skills/singlecell/scrna/sc-drug-response/sc_drug_response.py --input clustered.h5ad --cluster-key leiden --method cadrres --drug-db gdsc --model-dir /path/to/trusted/models --output results/cadrres
+| Analytical Goal | Recommended Method | Upstream Library / Implementation | Input Assumptions & Interpretation |
+|---|---|---|---|
+| **Descriptive drug-target expression screen across clusters** | **Target Gene-Set Mean** (`simple_correlation` / `score_drug_targets`) | `scanpy` / `numpy` group mean over drug-target signatures (`kernel.py`) | Log-normalized `adata.X` with gene symbols and cluster column (`cluster_key`); descriptive expression, **not** IC50 prediction |
+| **Control-adjusted per-cell drug signature activity** | **Scanpy Gene-Set Scoring** (`sc.tl.score_genes`) | `scanpy.tl.score_genes` | Log-normalized `adata.X` + curated target/resistance gene list |
+| **Pretrained pharmacogenomic IC50 / sensitivity projection** | **CaDRReS-Sc** (`cadrres`) | `omicverse.single.Drug_Response` + local `CaDRReS-Sc` checkout & weights | Log-normalized `adata.X`, local GDSC/PRISM model directory; lower $\log(\text{IC}_{50})$ indicates higher predicted sensitivity |
+
+> **Decision Rule**: Descriptive target expression (`mean_target_expression`) measures whether a cluster expresses the canonical molecular targets of a compound; it does not predict clinical efficacy or distinguish sensitivity from resistance. Never compare `mean_target_expression` directly against `CaDRReS` model `Score` units.
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Cluster-Level Drug-Target Signature Scoring (`scanpy` + `pandas`)
+
+```python
+import numpy as np
+import pandas as pd
+from scipy import sparse
+
+# Define drug-target gene sets (gene symbols matching adata.var_names)
+drug_targets = {
+    "Imatinib": ["ABL1", "KIT", "PDGFRA", "PDGFRB"],
+    "Venetoclax": ["BCL2", "BCL2L1", "MCL1"],
+    "Osimertinib": ["EGFR", "ERBB2", "MET"],
+}
+
+# Compute mean log-normalized expression per (cluster, drug) and gene overlap
+rows = []
+for group, idx in adata.obs.groupby("leiden", observed=True).groups.items():
+    sub = adata[idx]
+    for drug, genes in drug_targets.items():
+        present = [g for g in genes if g in adata.var_names]
+        if not present:
+            continue
+        mat = sub[:, present].X
+        mean_val = float(mat.mean()) if not sparse.issparse(mat) else float(mat.mean())
+        rows.append({
+            "Cluster": str(group),
+            "Drug": drug,
+            "mean_target_expression": round(mean_val, 4),
+            "TargetGenes": len(present),
+            "TotalTargets": len(genes),
+            "OverlapPct": round(100.0 * len(present) / len(genes), 1),
+        })
+
+rankings_df = pd.DataFrame(rows).sort_values(["Cluster", "mean_target_expression"], ascending=[True, False])
 ```
 
-## Methods and Workflow
+### Optional Micro-Helper (`kernel.py`)
 
-`simple_correlation` is a legacy CLI name for mean expression, not correlation.
-It averages available genes in each drug-associated gene set and cell group,
-reports `mean_target_expression`, and ranks those descriptive means. Built-in
-sets include targets, resistance and response-associated genes with no signed
-weights. More expression does not imply more sensitivity or clinical benefit.
+Calling `use_skill("sc-drug-response")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `builtin_drug_targets()`
+- `score_drug_targets(adata, cluster_key=None, drug_targets=None)`
+- `top_drugs(table, n_top=10)`
 
-`cadrres` requires the omicverse adapter, a local CaDRReS-Sc checkout and trusted
-pretrained model files. No models are bundled or downloaded. The old release
-download links are unavailable; no replacement source is claimed here. Returned
-`Score` is model output: inspect its units and direction, not just rank.
+## 3. Output Format & Verification Contract
 
-Upstream: `sc-preprocessing` and cluster/cell-type annotation. Downstream:
-inspect gene overlap and expression patterns before any experimental follow-up.
+- **Drug Rankings Table** (`tables/drug_rankings.csv`):
+  - Default target-expression screen columns: `Cluster`, `Drug`, `mean_target_expression`, `TargetGenes`, `TotalTargets`, `OverlapPct`, `MatchedGenes`.
+  - CaDRReS model columns: `Cluster`, `Drug`, `Score`, `DrugDB`.
+- **Annotated AnnData** (`intermediate/drug_response.h5ad` or `processed.h5ad`):
+  - Group-level summary scores mapped onto `adata.obs["drug_score_<drug>"]` for visualization.
+- **Verification Invariants**:
+  - Assert `len(rankings_df) > 0` and verify `TargetGenes > 0` (if `n_drugs_scored == 0`, check whether `adata.var_names` contains Ensembl IDs instead of HGNC gene symbols).
+  - Verify `OverlapPct` before interpreting drugs with only 1 matched gene.
 
-## Inputs & Outputs
+## 4. Gotchas & Troubleshooting
 
-Input: normalized expression in `.h5ad` with gene symbols and a group column.
-PCA/neighbours are not required for scoring. The CLI writes `processed.h5ad`,
-`tables/drug_rankings.csv`, `report.md`, `result.json` and
-`reproducibility/commands.sh`. Bar/heatmap figures are written when scores are
-available; `figures/drug_sensitivity_umap.png` is a legacy filename and requires
-UMAP. `obs['drug_score_<drug>']` are legacy names for the same group-level values,
-not per-cell response predictions. Temporary CaDRReS CSV files are not public outputs.
-
-## Gotchas
-
-- `tables/drug_rankings.csv` has `mean_target_expression` for the default and `Score` for CaDRReS. Do not compare their units.
-- `result.json` → `summary.n_drugs_scored` is zero if no gene set overlaps; review `TargetGenes`, `TotalTargets` and `OverlapPct` in the table.
-- Pass `--cluster-key` on real data; automatic selection can choose an unintended categorical column. The API accepts `cluster_key=None` to summarize all cells.
-- `--method cadrres --demo` generates explicitly synthetic plumbing scores without a real model. The API never substitutes synthetic predictions for a missing model.
-- `report.md` includes the SDK's OmicsClaw research-use disclaimer unchanged.
-
-## API
-
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
-
-### `score_drug_targets(adata, *, cluster_key=None, drug_targets=None)`
-
-Return mean_target_expression for each drug-associated gene set and group.
-
-Averages X over available genes and cells, rounding to four decimals to
-preserve the CLI table. No model is fitted; this is neither correlation nor
-drug sensitivity, and high expression does not establish benefit. Pass
-normalized expression and a group key; None summarizes all cells together.
-
-### `builtin_drug_targets()`
-
-Return a copy of 15 illustrative drug-associated gene sets.
-
-These include targets, resistance and response-associated genes without
-direction or potency weights. They are not a validated response signature.
-
-### `cadrres(adata, *, cluster_key, model_dir, drug_db='gdsc', n_drugs=10)`
-
-Return CaDRReS model scores using explicitly supplied trusted local models.
-
-Requires omicverse's Drug_Response adapter and a CaDRReS-Sc checkout beside
-model_dir or under the home directory. Models are not bundled or downloaded;
-upstream download locations have not been validated. Temporary predictions
-do not modify model_dir. Score units and direction depend on the model.
-
-### `run_info(table, *, keep: bool=True)`
-
-Return score interpretation; keep=False removes the table's run record.
-
-### `top_drugs(table, *, n_top=10)`
-
-Return drug means across groups, ordered by decreasing descriptive/model score.
-
-Ranking model scores this way preserves the CLI order, not clinical benefit.
-
-### `top_drugs_figure(table, *, n_top=10)`
-
-Return a Figure labelled with expression or model-score units, without saving.
-
-<!-- api:end -->
+1. **Legacy Name `simple_correlation` Is Mean Expression**:
+   - The CLI method name `simple_correlation` computes unweighted mean expression (`mean_target_expression`) across matched genes in each drug's gene set, not a correlation coefficient.
+2. **Incompatible Units Between `mean_target_expression` and `CaDRReS` `Score`**:
+   - `mean_target_expression` is in log-normalized expression units (higher $=$ more target mRNA), whereas CaDRReS GDSC `Score` estimates $\log(\text{IC}_{50})$ or sensitivity score depending on `drug_db`. Never mix or co-rank the two columns.
+3. **Gene Symbol vs. Ensembl ID Mismatch (`n_drugs_scored == 0`)**:
+   - Built-in drug target dictionaries use human HGNC symbols (e.g., `EGFR`, `BCL2`). If `adata.var_names` stores Ensembl IDs (`ENSG...`) or mouse Title-case symbols (`Egfr`), map symbols first and inspect `OverlapPct`.
+4. **Target Expression Does Not Equal Clinical Sensitivity**:
+   - Built-in sets include primary targets and resistance-associated genes without signed weights. Treat output rankings strictly as exploratory research hypotheses.
 
 ## Dependencies
 

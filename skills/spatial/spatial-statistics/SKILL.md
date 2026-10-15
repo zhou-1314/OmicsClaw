@@ -16,106 +16,103 @@ tags:
 - squidpy
 ---
 
-# spatial-statistics
+# Spatial Point-Pattern & Graph Statistics (`spatial-statistics`)
 
-## When to use
+## 1. Method Decision Matrix & When to Use
 
-Measure spatial enrichment, co-occurrence, autocorrelation or graph structure. Use spatial-genes for SVG ranking and spatial-domains for regions.
+Use this playbook to quantify spatial tissue organization, cell-type co-localization, multi-scale clustering vs. dispersion, graph topology, and local spatial hotspots on an annotated or clustered spatial `AnnData`:
 
-## Use from a step
+| Analysis Goal | Upstream Function | Statistical Metric | Best Used When |
+|---|---|---|---|
+| **Cell-Type Contact Enrichment** (`nhood_enrichment`) | `squidpy.gr.nhood_enrichment` | Permutation $z$-score matrix $(K \times K)$ of direct neighbor contacts | Testing whether two cell types or niches physically contact each other more (or less) than random permutation |
+| **Distance-Stratified Co-Occurrence** (`co_occurrence`) | `squidpy.gr.co_occurrence` | Conditional probability ratio $P(\text{type } B \mid \text{type } A, d) / P(\text{type } B, d)$ across radial intervals | Measuring how cell-type attraction or exclusion decays over continuous physical distances |
+| **Multi-Scale Point Process** (`ripley`) | `squidpy.gr.ripley` (`mode="L"`) | Ripley's $L(r)$ vs. Poisson CSR envelope | Determining whether a cell population forms focal aggregates ($L(r) > r$) or uniform spacing ($L(r) < r$) |
+| **Graph Topology Centrality** (`centrality_scores`) | `squidpy.gr.centrality_scores` | Degree centrality, closeness centrality, average clustering coefficient | Quantifying hub vs. insular tissue architecture per cell type |
+| **Local Hotspot / LISA Analysis** (`getis_ord` / `local_moran`) | `esda.getisord.G_Local` / `esda.moran.Moran_Local` | Per-spot $G_i^*$ $z$-score or Local Moran quadrant (`HH`, `LL`, `HL`, `LH`) | Pinpointing statistically significant spatial hotspots of a marker gene or pathway score |
+
+## 2. How to Run (Idiomatic Upstream Patterns)
+
+### Pattern A: Neighborhood Contact Enrichment & Radial Co-Occurrence (`squidpy`)
 
 ```python
-from skills._sdk.notebook import load_skill, read_input, write_output
-library = load_skill("spatial-statistics")
-data = read_input("input.h5ad")
-data = library.analyze(data, analysis_type="neighborhood_enrichment", random_state=123)
-write_output(library.results_table(data), "tables/results.csv")
+import numpy as np
+import pandas as pd
+import squidpy as sq
+
+# 1. Ensure cluster_key is strictly Categorical (required by squidpy!)
+cluster_key = "cell_type"
+adata.obs[cluster_key] = adata.obs[cluster_key].astype(str).astype("category")
+
+# 2. Build spatial neighbor graph (pass library_key="slide_id" for multi-slide cohorts)
+sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
+
+# 3. Compute permutation neighborhood enrichment z-scores
+sq.gr.nhood_enrichment(adata, cluster_key=cluster_key, n_perms=500, seed=0)
+zmat = pd.DataFrame(
+    adata.uns[f"{cluster_key}_nhood_enrichment"]["zscore"],
+    index=adata.obs[cluster_key].cat.categories,
+    columns=adata.obs[cluster_key].cat.categories,
+)
+
+# 4. Compute distance-stratified co-occurrence ratio across radial intervals
+sq.gr.co_occurrence(adata, cluster_key=cluster_key, n_splits=1, interval=50)
 ```
 
-Run [examples/example_step.py](examples/example_step.py) through the step runner.
+### Pattern B: Ripley's $L$ Function & Graph Centrality (`squidpy`)
 
-## API
+```python
+import squidpy as sq
 
-<!-- api:begin generated from _api.py; regenerate with run.py api <skill dir> --write -->
+# Ripley's L statistic (L(r) > 0 indicates spatial clustering beyond Complete Spatial Randomness)
+sq.gr.ripley(adata, cluster_key=cluster_key, mode="L", max_dist=500, n_simulations=100, seed=0)
+ripley_df = adata.uns[f"{cluster_key}_ripley_L"]["L_stat"].copy()
 
-### `analyze(adata, *, analysis_type: str='neighborhood_enrichment', random_state: int=123, **parameters)`
-
-Run one spatial analysis in place and return the same AnnData.
-
-Gene analyses read X (log-normalized expression); cluster and network
-analyses read labels, coordinates and spatial_connectivities. Existing
-spatial graphs are reused unless force_graph_rebuild=True.
-Bivariate Moran's backend cannot be seeded: results vary between runs.
-
-:param adata: Spatial AnnData; cluster-aware methods require categorical labels.
-:param analysis_type: CLI default neighborhood_enrichment; also ripley,
-    co_occurrence, moran, geary, local_moran, getis_ord, bivariate_moran,
-    network_properties or spatial_centrality.
-:param random_state: Permutation/simulation seed, matching CLI default 123.
-    Ignored by bivariate_moran; its run_info records this limitation.
-:param parameters: Method keyword options from references/parameters.md;
-    omitted values retain backend wrapper defaults. Unknown options raise.
-:returns: The same AnnData with JSON-encoded diagnostics and result tables.
-:raises ValueError: Unknown analysis or invalid input.
-:raises TypeError: An option does not belong to the chosen method.
-:raises ImportError: Missing backend; use install_skill_deps with squidpy,
-    esda, libpysal or networkx as reported in the error.
-
-### `run_info(adata, *, keep: bool=True) -> dict`
-
-Read the analysis diagnostics, including method-specific DataFrames.
-
-:param adata: AnnData returned by analyze.
-:param keep: True retains the record; False removes it before CLI serialization.
-:returns: Diagnostic dict; encoded tables are restored as DataFrames.
-
-### `results_table(adata, *, name: str='pair_summary_df')`
-
-Return a method result table independently of the CLI gallery.
-
-:param adata: AnnData returned by analyze.
-:param name: Default pair_summary_df for enrichment; results_df for most
-    other methods, or zscore_df/count_df/per_cluster_df when present.
-:returns: A DataFrame copy.
-:raises KeyError: The selected analysis has no table with this name.
-
-### `enrichment_figure(adata)`
-
-Plot the neighborhood enrichment z-score matrix.
-
-:param adata: AnnData after neighborhood_enrichment; expression is not read.
-:returns: A matplotlib Figure without saving it.
-:raises KeyError: No enrichment matrix is available.
-
-<!-- api:end -->
-
-## Methods and parameters
-
-Ten methods remain available through analysis_type; extra keywords use Python wrapper names documented in references/parameters.md. Existing spatial graphs are reused unless force_graph_rebuild=True.
-See [parameters](references/parameters.md) and [methodology](references/methodology.md).
-
-## Gotchas
-
-- `results_table` defaults to pair_summary_df; other methods often return results_df. `spatial_centrality` requires labels and returns cluster-level scores.
-- `run_info(keep=False)` removes library diagnostics before CLI serialization.
-
-## Inputs and outputs
-
-The library returns AnnData, DataFrames or Figures without file writes. The CLI
-keeps reports, result.json, tables and conditional gallery outputs. See the
-complete [output contract](references/output_contract.md) for filenames and conditions.
-
-## CLI
-
-```bash
-python skills/spatial/spatial-statistics/spatial_statistics.py --input data.h5ad --output results/spatial-statistics
+# Network centrality scores per cluster
+sq.gr.centrality_scores(adata, cluster_key=cluster_key)
+centrality_df = adata.uns[f"{cluster_key}_centrality_scores"].copy()
 ```
 
-## See also
+### Pattern C: Local Spatial Hotspot Detection — Getis-Ord $G_i^*$ (`libpysal` + `esda`)
 
-- [Methodology](references/methodology.md)
-- [Parameters](references/parameters.md)
-- [Output contract](references/output_contract.md)
+```python
+import numpy as np
+from libpysal.weights import KNN
+from esda.getisord import G_Local
+
+# Build row-standardized KNN spatial weights from 2D coordinates
+w = KNN.from_array(np.asarray(adata.obsm["spatial"], dtype=float), k=6)
+w.transform = "R"
+
+# Compute local Gi* hotspot z-scores for a target gene or signature
+y = np.asarray(adata[:, "CXCL13"].X.toarray() if hasattr(adata.X, "toarray") else adata[:, "CXCL13"].X).ravel()
+g_local = G_Local(y, w, transform="R", star=True, permutations=199)
+adata.obs["hotspot_zscore"] = g_local.Zs
+adata.obs["hotspot_pval"] = g_local.p_sim
+```
+
+### Optional Micro-Helper (`kernel.py`)
+
+Calling `use_skill("spatial-statistics")` automatically loads `kernel.py` helpers into the persistent Python kernel:
+- `nhood_enrichment_table(adata, cluster_key="leiden", n_perms=100, seed=0, library_key=None)`
+- `spatial_centrality_table(adata, cluster_key="leiden")`
+
+## 3. Output Format & Verification Contract
+
+- **Neighborhood Enrichment Table** (`tables/nhood_enrichment_zscore.csv`):
+  - Columns: `source`, `target`, `zscore`, `count` (or $K \times K$ symmetric matrix).
+- **Centrality & Ripley Tables** (`tables/centrality_scores.csv`, `tables/ripley_L.csv`):
+  - `degree_centrality`, `average_clustering`, `closeness_centrality` per cluster.
+- **Verification**:
+  - Verify `adata.obs[cluster_key].dtype.name == "category"` and check that `zscore` matrix dimensions match `len(adata.obs[cluster_key].cat.categories)`.
+
+## 4. Gotchas & Troubleshooting
+
+1. **`squidpy` Requires `pd.CategoricalDtype` on `adata.obs[cluster_key]`**:
+   - Passing a string or integer column to `sq.gr.nhood_enrichment`, `sq.gr.co_occurrence`, `sq.gr.ripley`, or `sq.gr.centrality_scores` raises `TypeError: Expected ... to be categorical`. Always cast `adata.obs[cluster_key] = adata.obs[cluster_key].astype(str).astype("category")` and call `.cat.remove_unused_categories()` after subsetting.
+2. **Pairwise Distance Matrix Memory Explosion in `sq.gr.co_occurrence`**:
+   - `sq.gr.co_occurrence` computes pairwise Euclidean distances between cells. For Xenium/MERFISH slides with $>50,000$ cells, set `n_splits=10` (or subsample) to prevent $O(N^2)$ RAM exhaustion.
+3. **Zero-Variance / Single-Cell Clusters Produce `NaN` $z$-Scores**:
+   - If a rare cluster has $<5$ cells across the slide, permutation variance in `nhood_enrichment` can be zero, yielding `NaN` in the $z$-score matrix. Filter or merge tiny clusters before running permutation tests.
 
 ## Dependencies
 

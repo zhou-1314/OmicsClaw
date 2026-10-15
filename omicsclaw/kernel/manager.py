@@ -231,6 +231,7 @@ class PersistentKernelManager:
         limits: OutputLimits | None = None,
         cell_timeout_s: float = DEFAULT_CELL_TIMEOUT_S,
         on_figure: Callable[[Path, str, str, str], Any] | None = None,
+        on_kernel_ready: Callable[[SessionState], None] | None = None,
         reaper: KernelReaper | None = None,
         python: str | None = None,
         remote_runtime: Any = None,
@@ -254,6 +255,7 @@ class PersistentKernelManager:
         self.handles = HandleRegistry()
         self.states: dict[tuple[str, str, str], SessionState] = {}
         self._on_figure = on_figure
+        self._on_kernel_ready = on_kernel_ready
         self._reaper = reaper or KernelReaper(self)
         self._reaper_task: asyncio.Task[None] | None = None
 
@@ -420,6 +422,8 @@ class PersistentKernelManager:
                         await self._start_locked(
                             state, target_workdir=state.target_workdir
                         )
+                    if self._on_kernel_ready is not None and state.kernel is not None:
+                        await asyncio.to_thread(self._on_kernel_ready, state)
                     if state.obituary_pending:
                         notice = state.obituary
                         state.obituary_pending = False
