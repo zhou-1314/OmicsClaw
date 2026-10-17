@@ -726,6 +726,9 @@ class EgressProxy:
         if cleaned in self._egress_allow:
             self._egress_allow.discard(cleaned)
             removed = True
+        if self._base_allowed is not None and cleaned in self._base_allowed:
+            self._base_allowed.discard(cleaned)
+            removed = True
         return removed
 
     def is_domain_allowed(self, host: str) -> bool:

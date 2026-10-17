@@ -56,6 +56,8 @@ __all__ = [
     "SandboxStatus",
     "append_egress_blocked_hints",
     "bash_policy",
+    "load_effective_egress_grants",
+    "load_egress_grants",
     "load_persisted_egress_grants",
     "open_sandbox",
     "python_policy",
@@ -100,26 +102,97 @@ def load_persisted_egress_grants(path: Path) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _write_persisted_egress_grants(path: Path, domains: list[str]) -> None:
-    payload = json.dumps({"domains": sorted(set(domains))}, indent=2) + "\n"
+load_egress_grants = load_persisted_egress_grants
+
+
+def load_effective_egress_grants(
+    path: Path,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Load effective (persisted + session) and revoked egress domains from *path*."""
+    allowed: list[str] = []
+    revoked: list[str] = []
+    for candidate in _candidate_grant_paths(path):
+        if not candidate.is_file():
+            continue
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            for key in ("domains", "session_domains"):
+                items = data.get(key)
+                if isinstance(items, list):
+                    for d in items:
+                        norm = str(d).strip().lower().rstrip(".")
+                        if norm and norm not in allowed:
+                            allowed.append(norm)
+            rev_items = data.get("revoked_domains")
+            if isinstance(rev_items, list):
+                for d in rev_items:
+                    norm = str(d).strip().lower().rstrip(".")
+                    if norm and norm not in revoked:
+                        revoked.append(norm)
+        except Exception:  # noqa: BLE001
+            continue
+    revoked_set = set(revoked)
+    effective = tuple(d for d in allowed if d not in revoked_set)
+    return effective, tuple(revoked)
+
+
+def _write_persisted_egress_grants(
+    path: Path,
+    domains: list[str],
+    *,
+    session_domains: Any = (),
+    revoked_domains: Any = (),
+) -> None:
+    doc: dict[str, Any] = {"domains": sorted(set(domains))}
+    sess = sorted({str(d).strip().lower().rstrip(".") for d in session_domains if str(d).strip()})
+    rev = sorted({str(d).strip().lower().rstrip(".") for d in revoked_domains if str(d).strip()})
+    if sess:
+        doc["session_domains"] = sess
+    if rev:
+        doc["revoked_domains"] = rev
+    payload = json.dumps(doc, indent=2) + "\n"
     for candidate in _candidate_grant_paths(path):
         with contextlib.suppress(OSError):
             candidate.parent.mkdir(parents=True, exist_ok=True)
             candidate.write_text(payload, encoding="utf-8")
 
 
-def _save_persisted_egress_grant(path: Path, domain: str) -> None:
+def _save_persisted_egress_grant(
+    path: Path,
+    domain: str,
+    *,
+    session_domains: Any = (),
+    revoked_domains: Any = (),
+) -> None:
     existing = list(load_persisted_egress_grants(path))
     norm = domain.strip().lower().rstrip(".")
     if norm and norm not in existing:
         existing.append(norm)
-    _write_persisted_egress_grants(path, existing)
+    _write_persisted_egress_grants(
+        path,
+        existing,
+        session_domains=session_domains,
+        revoked_domains=revoked_domains,
+    )
 
 
-def _remove_persisted_egress_grant(path: Path, domain: str) -> None:
+def _remove_persisted_egress_grant(
+    path: Path,
+    domain: str,
+    *,
+    session_domains: Any = (),
+    revoked_domains: Any = (),
+) -> None:
     norm = domain.strip().lower().rstrip(".")
     existing = [d for d in load_persisted_egress_grants(path) if d != norm]
-    _write_persisted_egress_grants(path, existing)
+    _write_persisted_egress_grants(
+        path,
+        existing,
+        session_domains=session_domains,
+        revoked_domains=revoked_domains,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,11 +338,22 @@ class SandboxBinding:
         fix_hint = st.fix_hint or (
             self.report.fix_hint if self.report is not None else ""
         )
+        covers_list = list(st.covers)
+        backend_name = st.backend.value
         return {
-            "backend": st.backend.value,
+            "backend": backend_name,
             "level": st.level.value,
-            "coverage": list(st.covers),
-            "covers": list(st.covers),
+            "coverage": covers_list,
+            "covers": covers_list,
+            "scope_coverage": {
+                "bash": backend_name if st.active else "off",
+                "notebook_kernel": (
+                    backend_name
+                    if (st.active and ("python" in covers_list or "r" in covers_list))
+                    else "off"
+                ),
+                "science_job": "subreaper_only",
+            },
             "egress": st.egress.value,
             "active": st.active,
             "degraded": self.degraded,
@@ -309,8 +393,21 @@ class SandboxBinding:
         self._session_grants.add(norm)
         if self.manager is not None:
             self.manager.allow_domain_for_session(norm)
-        if persist and self.granted_domains_path is not None:
-            _save_persisted_egress_grant(self.granted_domains_path, norm)
+        if self.granted_domains_path is not None:
+            if persist:
+                _save_persisted_egress_grant(
+                    self.granted_domains_path,
+                    norm,
+                    session_domains=self._session_grants,
+                    revoked_domains=self._revoked_domains,
+                )
+            else:
+                _write_persisted_egress_grants(
+                    self.granted_domains_path,
+                    list(load_persisted_egress_grants(self.granted_domains_path)),
+                    session_domains=self._session_grants,
+                    revoked_domains=self._revoked_domains,
+                )
         return self.snapshot()
 
     def revoke_domain(self, domain: str) -> dict[str, Any]:
@@ -327,7 +424,12 @@ class SandboxBinding:
                     while norm in granted_list:
                         granted_list.remove(norm)
             if self.granted_domains_path is not None:
-                _remove_persisted_egress_grant(self.granted_domains_path, norm)
+                _remove_persisted_egress_grant(
+                    self.granted_domains_path,
+                    norm,
+                    session_domains=self._session_grants,
+                    revoked_domains=self._revoked_domains,
+                )
         return self.snapshot()
 
     def drain_blocked_egress_hints(self, output: str = "") -> tuple[str, ...]:
@@ -348,6 +450,17 @@ class SandboxBinding:
 
     async def aclose(self) -> None:
         """Stop the sandbox and its egress proxy, if active."""
+        if self.granted_domains_path is not None and (
+            self._session_grants or self._revoked_domains
+        ):
+            persisted = list(load_persisted_egress_grants(self.granted_domains_path))
+            if persisted:
+                _write_persisted_egress_grants(self.granted_domains_path, persisted)
+            else:
+                for candidate in _candidate_grant_paths(self.granted_domains_path):
+                    if candidate.is_file():
+                        _write_persisted_egress_grants(self.granted_domains_path, [])
+                        break
         if self.manager is not None:
             await self.manager.aclose()
 
@@ -383,6 +496,8 @@ async def open_sandbox(
 
     grants_path = config.state_dir() / EGRESS_GRANTS_FILENAME
     persisted = load_persisted_egress_grants(grants_path)
+    if any(c.is_file() for c in _candidate_grant_paths(grants_path)):
+        _write_persisted_egress_grants(grants_path, list(persisted))
     if persisted:
         merged_allow = tuple(dict.fromkeys((*sandbox_config.egress_allow, *persisted)))
         sandbox_config = dataclasses.replace(

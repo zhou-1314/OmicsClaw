@@ -173,16 +173,44 @@ def _sandbox_snapshot(app: AgentApp) -> dict[str, Any]:
     binding = getattr(app, "sandbox", None)
     auto_cfg = bool(getattr(getattr(app, "config", None), "sandbox_auto_approve", True))
     if binding is not None and hasattr(binding, "snapshot"):
-        return binding.snapshot(auto_approve_configured=auto_cfg)
+        snap = dict(binding.snapshot(auto_approve_configured=auto_cfg))
+        if "scope_coverage" not in snap:
+            active_flag = bool(snap.get("active", False))
+            backend_name = str(snap.get("backend") or "none")
+            covers = snap.get("covers") or snap.get("coverage") or []
+            snap["scope_coverage"] = {
+                "bash": backend_name if active_flag else "off",
+                "notebook_kernel": (
+                    backend_name
+                    if (active_flag and ("python" in covers or "r" in covers))
+                    else "off"
+                ),
+                "science_job": "subreaper_only",
+            }
+        return snap
     active = bool(getattr(binding, "active", False))
     degraded = bool(getattr(binding, "degraded", False))
     reason = str(getattr(binding, "unavailable", "") or "")
     fix_hint = str(getattr(getattr(binding, "report", None), "fix_hint", "") or "")
+    backend_raw = getattr(binding, "backend", None)
+    backend_name = (
+        str(getattr(backend_raw, "value", backend_raw or "none")) if active else "none"
+    )
+    covers = list(getattr(binding, "covers", ()) or ()) if active else []
     return {
-        "backend": "none",
+        "backend": backend_name,
         "level": "off",
-        "coverage": [],
-        "covers": [],
+        "coverage": covers,
+        "covers": covers,
+        "scope_coverage": {
+            "bash": backend_name if active else "off",
+            "notebook_kernel": (
+                backend_name
+                if (active and ("python" in covers or "r" in covers))
+                else "off"
+            ),
+            "science_job": "subreaper_only",
+        },
         "egress": "open",
         "active": active,
         "degraded": degraded,

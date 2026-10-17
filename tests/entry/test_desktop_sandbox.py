@@ -241,6 +241,11 @@ def test_sandbox_rest_routes_and_doctor_report(
         assert status["level"] == "isolated"
         assert status["auto_approve_active"] is True
         assert "bash" in status["coverage"]
+        assert status["scope_coverage"] == {
+            "bash": "bwrap",
+            "notebook_kernel": "bwrap",
+            "science_job": "subreaper_only",
+        }
         assert isinstance(status["allowed_domains"], list)
         assert isinstance(status["persisted_domains"], list)
         assert isinstance(status["recent_blocked"], list)
@@ -281,3 +286,210 @@ def test_sandbox_rest_routes_and_doctor_report(
         assert "api.ensembl-mirror.org" not in after_del["persisted_domains"]
     finally:
         asyncio.run(app.aclose())
+
+
+def test_ssh_controller_configure_starts_sandbox_and_serves_status_and_domain_routes(
+    workspace: Path,
+    fake_sandbox,  # noqa: F811
+):
+    from types import SimpleNamespace
+    from omicsclaw.entry.ssh.controller import Controller
+
+    model = {
+        "provider_id": "test",
+        "dialect": "openai_chat",
+        "model": "test",
+        "allowed_models": ["test"],
+        "context_tokens": 8192,
+        "output_tokens": 1024,
+    }
+    params = {
+        "schemaVersion": 2,
+        "installationId": "a" * 32,
+        "roles": {
+            role: model
+            for role in (
+                "main",
+                "summary",
+                "subagent",
+                "title",
+                "shadow_review",
+                "provider_test",
+            )
+        },
+        "features": {
+            "shadowReview": False,
+            "sandbox": {
+                "mode": "auto",
+                "allowDomains": ["ncbi.nlm.nih.gov"],
+                "autoApprove": True,
+            },
+        },
+    }
+
+    async def scenario():
+        controller = Controller(workspace, SimpleNamespace(handlers={}))
+        try:
+            await controller.configure(params)
+            status_res = await controller.desktop_request(
+                {"method": "GET", "path": "/sandbox/status"}
+            )
+            assert status_res["status"] == 200
+            status = status_res["payload"]
+            assert status["active"] is True
+            assert status["backend"] == "bwrap"
+            assert status["scope_coverage"] == {
+                "bash": "bwrap",
+                "notebook_kernel": "bwrap",
+                "science_job": "subreaper_only",
+            }
+            assert "ncbi.nlm.nih.gov" in status["allowed_domains"]
+
+            health_res = await controller.desktop_request(
+                {"method": "GET", "path": "/health"}
+            )
+            assert health_res["status"] == 200
+            cap_details = health_res["payload"]["capability_details"]
+            assert cap_details["notebook"] == {
+                "state": "enabled",
+                "provider": "notebook_owner_v1",
+            }
+            assert cap_details["sandbox"] == {
+                "state": "active",
+                "backend": "bwrap",
+            }
+            assert cap_details["mcp"] == {
+                "state": "disabled",
+                "reason": "disabled_in_ssh_controller_stage2",
+            }
+            assert cap_details["attachments"] == {
+                "state": "disabled",
+                "reason": "requires_stage4_data_channel",
+            }
+
+            allow_res = await controller.desktop_request(
+                {
+                    "method": "POST",
+                    "path": "/sandbox/allow-domain",
+                    "document": {"domain": "api.ensembl-ssh.org", "persist": True},
+                }
+            )
+            assert allow_res["status"] == 200
+            assert "api.ensembl-ssh.org" in allow_res["payload"]["allowed_domains"]
+            assert "api.ensembl-ssh.org" in allow_res["payload"]["persisted_domains"]
+
+            deny_res = await controller.desktop_request(
+                {
+                    "method": "POST",
+                    "path": "/sandbox/allow-domain",
+                    "document": {"domain": "pastebin.com", "persist": False},
+                }
+            )
+            assert deny_res["status"] == 400
+            assert deny_res["payload"]["error"] == "domain_denied"
+
+            invalid_res = await controller.desktop_request(
+                {
+                    "method": "POST",
+                    "path": "/sandbox/allow-domain",
+                    "document": {"domain": "   "},
+                }
+            )
+            assert invalid_res["status"] == 400
+            assert invalid_res["payload"]["error"] == "invalid_domain"
+
+            doctor_res = await controller.desktop_request(
+                {"method": "GET", "path": "/env/doctor"}
+            )
+            assert doctor_res["status"] == 200
+            assert doctor_res["payload"]["sandbox"]["active"] is True
+            assert "api.ensembl-ssh.org" in doctor_res["payload"]["sandbox"]["allowed_domains"]
+        finally:
+            await controller.aclose()
+
+        # Reconnect controller and verify persisted domain survives and can be revoked
+        second = Controller(workspace, SimpleNamespace(handlers={}))
+        try:
+            await second.configure(params)
+            reconnected = await second.desktop_request(
+                {"method": "GET", "path": "/sandbox/status"}
+            )
+            assert reconnected["status"] == 200
+            assert "api.ensembl-ssh.org" in reconnected["payload"]["allowed_domains"]
+            assert "api.ensembl-ssh.org" in reconnected["payload"]["persisted_domains"]
+
+            revoke_res = await second.desktop_request(
+                {
+                    "method": "DELETE",
+                    "path": "/sandbox/allow-domain",
+                    "query": {"domain": "api.ensembl-ssh.org"},
+                }
+            )
+            assert revoke_res["status"] == 200
+            assert "api.ensembl-ssh.org" not in revoke_res["payload"]["allowed_domains"]
+            assert "api.ensembl-ssh.org" not in revoke_res["payload"]["persisted_domains"]
+        finally:
+            await second.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_notebook_owner_runtime_syncs_persisted_and_live_sandbox_domain_grants(
+    workspace: Path,
+    fake_sandbox,  # noqa: F811
+    monkeypatch,
+):
+    from omicsclaw.entry.notebook import runtime as nb_runtime
+    from omicsclaw.entry.notebook.runtime import OwnerRuntime
+
+    _state, instances = fake_sandbox
+
+    class _FakeOwnerSandbox(_FakeSandboxManager):
+        async def stop(self) -> None:
+            self.closed = True
+
+        def revoke_domain(self, domain: str) -> bool:
+            removed = False
+            while domain in self.granted_domains:
+                self.granted_domains.remove(domain)
+                removed = True
+            return removed
+
+    monkeypatch.setattr(nb_runtime, "SandboxManager", _FakeOwnerSandbox)
+
+    async def scenario():
+        binding = await open_sandbox(_config(workspace, sandbox=SandboxMode.AUTO))
+        try:
+            # 1. Persist a domain before OwnerRuntime starts
+            binding.allow_domain("persisted-before-owner.org", persist=True)
+
+            owner = OwnerRuntime(
+                workspace,
+                {"authorityId": "a" * 32, "workspaceId": "b" * 32},
+                source_digest="fixture",
+                env={},
+                config=SandboxConfig(mode=SandboxMode.AUTO),
+            )
+            await owner.start()
+            try:
+                assert owner.sandbox is not None
+                assert (
+                    "persisted-before-owner.org"
+                    in owner.sandbox.config.effective_allowed_domains
+                )
+
+                # 2. Live session-only grant while OwnerRuntime is already running
+                binding.allow_domain("live-session-grant.org", persist=False)
+                owner._sync_sandbox_grants()
+                assert "live-session-grant.org" in owner.sandbox.granted_domains
+
+                # 3. Live revoke while OwnerRuntime is already running
+                binding.revoke_domain("live-session-grant.org")
+                owner._sync_sandbox_grants()
+                assert "live-session-grant.org" not in owner.sandbox.granted_domains
+            finally:
+                await owner.close()
+        finally:
+            await binding.aclose()
+
+    asyncio.run(scenario())

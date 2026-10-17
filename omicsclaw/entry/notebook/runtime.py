@@ -326,10 +326,33 @@ class OwnerRuntime:
         from omicsclaw.entry.ssh.environments import EnvironmentRegistry
 
         if self.config is not None and self.config.mode != "off":
+            import dataclasses
+            from omicsclaw.entry.sandbox import (
+                EGRESS_GRANTS_FILENAME,
+                load_persisted_egress_grants,
+            )
+
+            persisted = load_persisted_egress_grants(
+                self.workspace / ".omicsclaw" / EGRESS_GRANTS_FILENAME
+            )
+            sandbox_cfg = (
+                dataclasses.replace(
+                    self.config,
+                    egress_allow=tuple(
+                        dict.fromkeys((*self.config.egress_allow, *persisted))
+                    ),
+                    extra_allowed_domains=self.config.extra_allowed_domains
+                    | frozenset(persisted),
+                )
+                if persisted
+                else self.config
+            )
             self.sandbox = SandboxManager(
-                self.workspace, config=self.config, env_provider=lambda: self.env
+                self.workspace, config=sandbox_cfg, env_provider=lambda: self.env
             )
             await self.sandbox.start()
+            self._synced_sandbox_domains = set(persisted)
+            self._sync_sandbox_grants()
         wrapper = self.sandbox.as_kernel_spawn_wrapper() if self.sandbox else None
         if wrapper is None:
             import sys
@@ -434,8 +457,28 @@ class OwnerRuntime:
         task.add_done_callback(done)
         return task
 
+    def _sync_sandbox_grants(self):
+        if self.sandbox is None:
+            return
+        from omicsclaw.entry.sandbox import (
+            EGRESS_GRANTS_FILENAME,
+            load_effective_egress_grants,
+        )
+
+        granted, revoked = load_effective_egress_grants(
+            self.workspace / ".omicsclaw" / EGRESS_GRANTS_FILENAME
+        )
+        current = set(granted)
+        previous = getattr(self, "_synced_sandbox_domains", set())
+        for domain in current - previous:
+            self.sandbox.allow_domain_for_session(domain)
+        for domain in (previous - current) | set(revoked):
+            self.sandbox.revoke_domain(domain)
+        self._synced_sandbox_domains = current
+
     async def mutate(self, method, params, authorize=None):
         # Once a mutation reaches this boundary its lifetime belongs to owner.
+        self._sync_sandbox_grants()
         token = self.authorization.set(authorize)
         try:
             return await asyncio.shield(self._own(getattr(self, method)(params)))
@@ -806,6 +849,7 @@ class OwnerRuntime:
     async def _admit(
         self, params, *, agent, analysis_operation=None, checkpoint_operation=None
     ):
+        self._sync_sandbox_grants()
         if set(params) != {"command"}:
             raise NotebookError("invalid_notebook_command")
         document, digest = command(params["command"])
@@ -1078,6 +1122,7 @@ class OwnerRuntime:
             await self.wakeup.wait()
             self.wakeup.clear()
             try:
+                self._sync_sandbox_grants()
                 self.checkpoints.schedule()
                 self.restores.schedule()
                 rows = await self.db.arun(

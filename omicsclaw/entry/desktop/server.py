@@ -99,6 +99,7 @@ from .chat_service import (
 from .artifacts import mount_artifacts_routes
 from .catalog import mcp_servers, skill_catalog, skill_detail
 from .doctor import _sandbox_snapshot, doctor_report
+from .service import allow_sandbox_domain, revoke_sandbox_domain
 from .files import (
     byte_span,
     content_disposition,
@@ -417,62 +418,32 @@ def create_desktop_app(
             document = await _read_json(request, CONTROL_MAX_REQUEST_BYTES)
         except DesktopIngressError as exc:
             return _refused(exc)
-        domain = document.get("domain")
-        persist = bool(document.get("persist", False))
-        if not isinstance(domain, str) or not domain.strip():
-            return JSONResponse(
-                {
-                    "detail": "domain must be a non-empty string",
-                    "error": "invalid_domain",
-                },
-                status_code=400,
-            )
-        binding = getattr(app, "sandbox", None)
-        if binding is None or not hasattr(binding, "allow_domain"):
-            return JSONResponse(
-                {
-                    "detail": "sandbox binding unavailable",
-                    "error": "sandbox_unavailable",
-                },
-                status_code=400,
-            )
-        try:
-            binding.allow_domain(domain, persist=persist)
-        except ValueError as exc:
-            return JSONResponse(
-                {"detail": str(exc), "error": "domain_denied"},
-                status_code=400,
-            )
-        return _sandbox_snapshot(app)
+        result = allow_sandbox_domain(app, document)
+        if result["status"] != 200:
+            return JSONResponse(result["payload"], status_code=result["status"])
+        return result["payload"]
 
     @api.delete("/sandbox/allow-domain")
     @api.delete("/api/sandbox/allow-domain")
     async def delete_sandbox_allow_domain(request: Request) -> Any:
         if not _authorized(request):
             return _unauthorized()
-        domain = request.query_params.get("domain")
-        if not domain:
+        doc: dict[str, Any] = {}
+        if not request.query_params.get("domain"):
             raw_body = await _read_body(request, CONTROL_MAX_REQUEST_BYTES)
             if raw_body.strip():
                 try:
-                    doc = parse_chat_stream_document(
+                    parsed_doc = parse_chat_stream_document(
                         raw_body, max_request_bytes=CONTROL_MAX_REQUEST_BYTES
                     )
-                    domain = doc.get("domain")
+                    if isinstance(parsed_doc, dict):
+                        doc = parsed_doc
                 except Exception:  # noqa: BLE001
-                    domain = None
-        if not isinstance(domain, str) or not domain.strip():
-            return JSONResponse(
-                {
-                    "detail": "domain must be a non-empty string",
-                    "error": "invalid_domain",
-                },
-                status_code=400,
-            )
-        binding = getattr(app, "sandbox", None)
-        if binding is not None and hasattr(binding, "revoke_domain"):
-            binding.revoke_domain(domain)
-        return _sandbox_snapshot(app)
+                    doc = {}
+        result = revoke_sandbox_domain(app, dict(request.query_params), doc)
+        if result["status"] != 200:
+            return JSONResponse(result["payload"], status_code=result["status"])
+        return result["payload"]
 
     @api.get("/workspace")
     async def get_workspace(request: Request) -> Any:

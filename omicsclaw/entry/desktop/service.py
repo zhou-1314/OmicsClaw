@@ -10,7 +10,7 @@ from omicsclaw.memory.artifacts import ARTIFACT_KINDS
 
 from .catalog import mcp_servers, skill_catalog, skill_detail
 from .chat_service import change_workspace, workspace_payload
-from .doctor import doctor_report
+from .doctor import _sandbox_snapshot, doctor_report
 from .files import (
     byte_span,
     content_disposition,
@@ -108,6 +108,41 @@ class DesktopService:
                     "science_runner": "skill_run" in jobs.runner_kinds(),
                 }
             )
+            payload["capability_details"] = {
+                "notebook": {"state": "enabled", "provider": "notebook_owner_v1"},
+                "sandbox": {
+                    "state": (
+                        "active"
+                        if getattr(app.sandbox, "active", False)
+                        else (
+                            "degraded"
+                            if getattr(app.sandbox, "degraded", False)
+                            else "off"
+                        )
+                    ),
+                    "backend": str(
+                        getattr(
+                            getattr(app.sandbox, "backend", None),
+                            "value",
+                            getattr(app.sandbox, "backend", "none"),
+                        )
+                        or "none"
+                    ),
+                },
+                "science_runner": {
+                    "state": (
+                        "enabled" if "skill_run" in jobs.runner_kinds() else "disabled"
+                    )
+                },
+                "mcp": {
+                    "state": "disabled",
+                    "reason": "disabled_in_ssh_controller_stage2",
+                },
+                "attachments": {
+                    "state": "disabled",
+                    "reason": "requires_stage4_data_channel",
+                },
+            }
             selected = jobs.runner_for("skill_run")
             payload["skill_python_executable"] = (
                 str(selected.interpreter) if selected is not None else ""
@@ -259,6 +294,18 @@ class DesktopService:
                     limit=500,
                 )
             }
+        elif method == "GET" and path in {"/sandbox/status", "/api/sandbox/status"}:
+            payload = _sandbox_snapshot(app)
+        elif method == "POST" and path in {
+            "/sandbox/allow-domain",
+            "/api/sandbox/allow-domain",
+        }:
+            return allow_sandbox_domain(app, document)
+        elif method == "DELETE" and path in {
+            "/sandbox/allow-domain",
+            "/api/sandbox/allow-domain",
+        }:
+            return revoke_sandbox_domain(app, query, document)
         else:
             raise DesktopIngressError("unsupported_rpc_route", status_code=404)
         return {"status": 200, "payload": payload}
@@ -292,3 +339,54 @@ class DesktopService:
             }
         finally:
             opened.close()
+
+
+def allow_sandbox_domain(app, document):
+    domain = document.get("domain") if isinstance(document, dict) else None
+    if not isinstance(domain, str) or not domain.strip():
+        return {
+            "status": 400,
+            "payload": {
+                "detail": "domain must be a non-empty string",
+                "error": "invalid_domain",
+            },
+        }
+    persist = (
+        bool(document.get("persist", False)) if isinstance(document, dict) else False
+    )
+    binding = getattr(app, "sandbox", None)
+    if binding is None or not hasattr(binding, "allow_domain"):
+        return {
+            "status": 400,
+            "payload": {
+                "detail": "sandbox binding unavailable",
+                "error": "sandbox_unavailable",
+            },
+        }
+    try:
+        binding.allow_domain(domain, persist=persist)
+    except ValueError as exc:
+        return {
+            "status": 400,
+            "payload": {"detail": str(exc), "error": "domain_denied"},
+        }
+    return {"status": 200, "payload": _sandbox_snapshot(app)}
+
+
+def revoke_sandbox_domain(app, query, document):
+    domain = query.get("domain") if isinstance(query, dict) else None
+    if not domain and isinstance(document, dict):
+        domain = document.get("domain")
+    if not isinstance(domain, str) or not domain.strip():
+        return {
+            "status": 400,
+            "payload": {
+                "detail": "domain must be a non-empty string",
+                "error": "invalid_domain",
+            },
+        }
+    binding = getattr(app, "sandbox", None)
+    if binding is not None and hasattr(binding, "revoke_domain"):
+        binding.revoke_domain(domain)
+    return {"status": 200, "payload": _sandbox_snapshot(app)}
+

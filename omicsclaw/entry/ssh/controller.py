@@ -20,9 +20,17 @@ from contextlib import contextmanager
 from importlib.metadata import distributions
 from pathlib import Path
 
-from omicsclaw.entry import AppConfig, attach_sessions, build_app
+from omicsclaw.entry import AppConfig, SandboxMode, attach_sessions, build_app, open_sandbox
 from omicsclaw.entry.assembly import DeploymentCapabilities
-from omicsclaw.entry.config import SkillEnvMode
+from omicsclaw.entry.config import (
+    AppConfigError,
+    SkillEnvMode,
+    _as_csv_tuple,
+    _as_sandbox_backend,
+    _as_sandbox_egress,
+    _as_sandbox_mode,
+    _from_env,
+)
 from omicsclaw.entry.desktop.chat_service import (
     COMPACT_COMMAND,
     admit_chat,
@@ -310,10 +318,18 @@ class Controller:
             "provider_test",
         )
         production = params.get("schemaVersion") == 2
+        features = {"shadowReview": False}
         if production:
             if (
                 set(params)
-                - {"schemaVersion", "roles", "installationId", "features", "science"}
+                - {
+                    "schemaVersion",
+                    "roles",
+                    "installationId",
+                    "features",
+                    "science",
+                    "sandbox",
+                }
                 or not {"schemaVersion", "roles", "installationId"} <= set(params)
                 or not isinstance(params["roles"], dict)
                 or set(params["roles"]) != set(roles)
@@ -327,13 +343,23 @@ class Controller:
             features = params.get("features", {"shadowReview": False})
             if (
                 not isinstance(features, dict)
-                or set(features) != {"shadowReview"}
+                or not {"shadowReview"} <= set(features)
+                or set(features) - {"shadowReview", "sandbox"}
                 or type(features["shadowReview"]) is not bool
             ):
                 raise RpcError("invalid controller feature snapshot")
             snapshots = params["roles"]
         else:
-            snapshots = {"main": params}
+            snapshots = {
+                "main": {k: v for k, v in params.items() if k != "sandbox"}
+                if isinstance(params, dict)
+                else params
+            }
+        sandbox_kwargs = _resolve_sandbox_kwargs(
+            params if isinstance(params, dict) else {},
+            production=production,
+            features=features,
+        )
         science = None
         if production and params.get("science") is not None:
             science = await asyncio.to_thread(
@@ -387,30 +413,37 @@ class Controller:
                 science.payload_root if science else Path(__file__).resolve().parents[3]
             )
             / "skills",
+            **sandbox_kwargs,
         )
         from omicsclaw.entry.environment_runtime import ProcessEnvironmentGuard
         self.environment_guard = ProcessEnvironmentGuard(
             self.workspace, workspace_id=self.identity.workspace_id, role="ssh_controller"
         )
-        self.notebook_client = NotebookOwnerClient(
-            self.workspace,
-            {"authorityId": self.identity.authority_id, "workspaceId": self.identity.workspace_id},
-            self.instance_id, self.epoch,
-            sandbox_config=config.sandbox_config(),
-        )
-        self.notebook_binding = SSHNotebookBinding(self.notebook_client)
-        assembled = build_app(
-            config,
-            additional_tools=(RunSkillJobTool(lambda: self.jobs),) if science else (),
-            provider=provider,
-            resolved_model=snapshot.model,
-            model_limits=ModelLimits(snapshot.context_tokens, snapshot.output_tokens),
-            capabilities=DeploymentCapabilities(notebook=True),
-            telemetry=Telemetry(),
-            provider_for_role=(self.role_providers.__getitem__ if production else None),
-            review_call=review_call if production else None,
-            kernel_binding=self.notebook_binding,
-        )
+        sandbox = await open_sandbox(config)
+        try:
+            self.notebook_client = NotebookOwnerClient(
+                self.workspace,
+                {"authorityId": self.identity.authority_id, "workspaceId": self.identity.workspace_id},
+                self.instance_id, self.epoch,
+                sandbox_config=config.sandbox_config(),
+            )
+            self.notebook_binding = SSHNotebookBinding(self.notebook_client)
+            assembled = build_app(
+                config,
+                additional_tools=(RunSkillJobTool(lambda: self.jobs),) if science else (),
+                provider=provider,
+                resolved_model=snapshot.model,
+                model_limits=ModelLimits(snapshot.context_tokens, snapshot.output_tokens),
+                capabilities=DeploymentCapabilities(notebook=True),
+                telemetry=Telemetry(),
+                provider_for_role=(self.role_providers.__getitem__ if production else None),
+                review_call=review_call if production else None,
+                kernel_binding=self.notebook_binding,
+                sandbox=sandbox,
+            )
+        except BaseException:
+            await sandbox.aclose()
+            raise
         bridge = None
         try:
             if science:
@@ -1160,3 +1193,111 @@ async def run_stdio(workspace: Path):
     finally:
         await controller.aclose()
         writer.close()
+
+
+def _parse_sandbox_feature(spec):
+    if spec is None:
+        return {}
+    if isinstance(spec, bool):
+        return {"sandbox": SandboxMode.AUTO if spec else SandboxMode.OFF}
+    if isinstance(spec, str):
+        try:
+            return {"sandbox": _as_sandbox_mode(spec)}
+        except AppConfigError as exc:
+            raise RpcError("invalid controller sandbox configuration") from exc
+    if not isinstance(spec, dict):
+        raise RpcError("invalid controller sandbox configuration")
+    allowed = {
+        "mode",
+        "backend",
+        "egress",
+        "egressGroups",
+        "egress_groups",
+        "egressAllow",
+        "egress_allow",
+        "egressEndpoints",
+        "egress_endpoints",
+        "allowDomains",
+        "allow_domain",
+        "allow_domains",
+        "allowPrivateCidr",
+        "allow_private_cidr",
+        "kernels",
+        "required",
+        "autoApprove",
+        "auto_approve",
+    }
+    if set(spec) - allowed:
+        raise RpcError("invalid controller sandbox configuration")
+    out = {}
+    try:
+        if "mode" in spec:
+            if isinstance(spec["mode"], bool):
+                out["sandbox"] = SandboxMode.AUTO if spec["mode"] else SandboxMode.OFF
+            elif isinstance(spec["mode"], str):
+                out["sandbox"] = _as_sandbox_mode(spec["mode"])
+            else:
+                raise RpcError("invalid controller sandbox configuration")
+        if "backend" in spec:
+            if not isinstance(spec["backend"], str):
+                raise RpcError("invalid controller sandbox configuration")
+            out["sandbox_backend"] = _as_sandbox_backend(spec["backend"])
+        if "egress" in spec:
+            if not isinstance(spec["egress"], str):
+                raise RpcError("invalid controller sandbox configuration")
+            out["sandbox_egress"] = _as_sandbox_egress(spec["egress"])
+        for src_key, dst_key in (
+            ("egressGroups", "sandbox_egress_groups"),
+            ("egress_groups", "sandbox_egress_groups"),
+            ("egressAllow", "sandbox_egress_allow"),
+            ("egress_allow", "sandbox_egress_allow"),
+            ("egressEndpoints", "sandbox_egress_endpoints"),
+            ("egress_endpoints", "sandbox_egress_endpoints"),
+            ("allowDomains", "sandbox_allow_domain"),
+            ("allow_domain", "sandbox_allow_domain"),
+            ("allow_domains", "sandbox_allow_domain"),
+            ("allowPrivateCidr", "sandbox_allow_private_cidr"),
+            ("allow_private_cidr", "sandbox_allow_private_cidr"),
+        ):
+            if src_key in spec:
+                val = spec[src_key]
+                if isinstance(val, str):
+                    out[dst_key] = _as_csv_tuple(val)
+                elif isinstance(val, (list, tuple)) and all(
+                    isinstance(x, str) for x in val
+                ):
+                    out[dst_key] = tuple(x.strip() for x in val if x.strip())
+                else:
+                    raise RpcError("invalid controller sandbox configuration")
+        for src_key, dst_key in (
+            ("kernels", "sandbox_kernels"),
+            ("required", "sandbox_required"),
+            ("autoApprove", "sandbox_auto_approve"),
+            ("auto_approve", "sandbox_auto_approve"),
+        ):
+            if src_key in spec:
+                if type(spec[src_key]) is not bool:
+                    raise RpcError("invalid controller sandbox configuration")
+                out[dst_key] = spec[src_key]
+    except AppConfigError as exc:
+        raise RpcError("invalid controller sandbox configuration") from exc
+    return out
+
+
+def _resolve_sandbox_kwargs(params, *, production: bool, features: dict):
+    try:
+        resolved = {
+            key: value
+            for key, value in _from_env(os.environ).items()
+            if key == "sandbox" or key.startswith("sandbox_")
+        }
+    except AppConfigError as exc:
+        raise RpcError(str(exc)) from exc
+    if "sandbox" in features:
+        resolved.update(_parse_sandbox_feature(features["sandbox"]))
+    if "sandbox" in params:
+        resolved.update(_parse_sandbox_feature(params["sandbox"]))
+    if production and "sandbox" not in resolved:
+        resolved["sandbox"] = SandboxMode.AUTO
+    return resolved
+
