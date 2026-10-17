@@ -6,7 +6,9 @@ Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
+import shutil
 import mimetypes
 import os
 import re
@@ -39,6 +41,13 @@ __all__ = [
     "serve_target",
     "served_media_type",
     "tree_depth",
+    "FILES_WRITE_MAX_BYTES",
+    "browse_workspace_directories",
+    "delete_workspace_entry",
+    "mkdir_workspace",
+    "rename_workspace_entry",
+    "resolve_target_in_workspace",
+    "write_workspace_file",
 ]
 
 FILES_SERVE_MAX_BYTES: Final = 64 * 1024 * 1024
@@ -505,3 +514,299 @@ async def file_chunks(
             yield chunk
     finally:
         opened.close()
+
+
+FILES_WRITE_MAX_BYTES: Final = 16 * 1024 * 1024
+"""Most decoded bytes one POST /files/write request may write."""
+
+
+def resolve_target_in_workspace(
+    workspace: Path | str,
+    raw_path: str,
+    *,
+    allow_missing: bool = True,
+    create_parents: bool = False,
+) -> tuple[Path, Path]:
+    """Resolve *raw_path* inside *workspace* for file/directory mutations.
+
+    Returns (target_path, workspace_root). Refuses NUL bytes, ..
+    escapes, and symlinks pointing outside *workspace*.
+    """
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise DesktopIngressError("path_required", status_code=422)
+    if "\x00" in raw_path:
+        raise DesktopIngressError("invalid_path", status_code=422)
+    try:
+        root = Path(workspace).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise DesktopIngressError("directory_not_found", status_code=404) from exc
+
+    spelled_root = Path(os.path.abspath(os.path.expanduser(workspace)))
+    if os.path.isabs(raw_path):
+        lexical = Path(os.path.normpath(raw_path))
+    else:
+        lexical = Path(os.path.normpath(os.path.join(spelled_root, raw_path)))
+
+    rel_parts = _segments_below(lexical, (spelled_root, root))
+    if rel_parts is None:
+        raise DesktopIngressError("path_outside_workspace", status_code=403)
+
+    if not rel_parts:
+        return root, root
+
+    # Walk ancestors from root down to parent to detect any symlink escaping workspace
+    current = root
+    for segment in rel_parts[:-1]:
+        if segment in ("", ".", ".."):
+            raise DesktopIngressError("path_outside_workspace", status_code=403)
+        next_path = current / segment
+        if next_path.exists() or next_path.is_symlink():
+            try:
+                resolved_next = next_path.resolve(strict=True)
+            except FileNotFoundError as exc:
+                raise DesktopIngressError("directory_not_found", status_code=404) from exc
+            except (OSError, RuntimeError) as exc:
+                raise DesktopIngressError("invalid_path", status_code=422) from exc
+            if _segments_below(resolved_next, (root,)) is None:
+                raise DesktopIngressError("path_outside_workspace", status_code=403)
+            if not resolved_next.is_dir():
+                raise DesktopIngressError("not_a_directory", status_code=422)
+            current = resolved_next
+        else:
+            if not create_parents:
+                raise DesktopIngressError("directory_not_found", status_code=404)
+            next_path.mkdir(parents=True, exist_ok=True)
+            current = next_path.resolve(strict=True)
+            if _segments_below(current, (root,)) is None:
+                raise DesktopIngressError("path_outside_workspace", status_code=403)
+
+    leaf = rel_parts[-1]
+    if leaf in ("", ".", ".."):
+        raise DesktopIngressError("path_outside_workspace", status_code=403)
+    target = current / leaf
+    if target.is_symlink():
+        try:
+            resolved_target = target.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            raise DesktopIngressError("invalid_path", status_code=422) from exc
+        if _segments_below(resolved_target, (root,)) is None:
+            raise DesktopIngressError("path_outside_workspace", status_code=403)
+    elif target.exists():
+        try:
+            resolved_target = target.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise DesktopIngressError("invalid_path", status_code=422) from exc
+        if _segments_below(resolved_target, (root,)) is None:
+            raise DesktopIngressError("path_outside_workspace", status_code=403)
+    elif not allow_missing:
+        raise DesktopIngressError("file_not_found", status_code=404)
+
+    return target, root
+
+
+def write_workspace_file(
+    workspace: Path | str,
+    raw_path: str,
+    content: str,
+    *,
+    encoding: str = "utf-8",
+    overwrite: bool = True,
+    create_parents: bool = False,
+) -> dict[str, Any]:
+    """Write text or base64 content to *raw_path* inside *workspace*."""
+    if not isinstance(content, str):
+        raise DesktopIngressError("invalid_content", status_code=422)
+    norm_encoding = (encoding or "utf-8").strip().lower()
+    if norm_encoding == "utf-8":
+        data = content.encode("utf-8")
+    elif norm_encoding == "base64":
+        try:
+            data = base64.b64decode(content, validate=False)
+        except Exception as exc:
+            raise DesktopIngressError("invalid_base64", status_code=422) from exc
+    else:
+        raise DesktopIngressError("invalid_encoding", status_code=422)
+
+    if len(data) > FILES_WRITE_MAX_BYTES:
+        raise DesktopIngressError("file_too_large", status_code=413)
+
+    target, root = resolve_target_in_workspace(
+        workspace,
+        raw_path,
+        allow_missing=True,
+        create_parents=create_parents,
+    )
+    if target == root:
+        raise DesktopIngressError("not_a_file", status_code=422)
+    if target.exists() or target.is_symlink():
+        if target.is_dir() and not target.is_symlink():
+            raise DesktopIngressError("not_a_file", status_code=422)
+        if not overwrite:
+            raise DesktopIngressError("already_exists", status_code=409)
+    try:
+        target.write_bytes(data)
+    except PermissionError as exc:
+        raise DesktopIngressError("permission_denied", status_code=403) from exc
+    except OSError as exc:
+        raise DesktopIngressError("write_failed", status_code=500) from exc
+    return {"path": str(target), "bytes_written": len(data)}
+
+
+def mkdir_workspace(
+    workspace: Path | str,
+    raw_path: str,
+    *,
+    create_parents: bool = True,
+) -> dict[str, Any]:
+    """Create directory *raw_path* inside *workspace*."""
+    target, root = resolve_target_in_workspace(
+        workspace,
+        raw_path,
+        allow_missing=True,
+        create_parents=create_parents,
+    )
+    if target == root:
+        return {"path": str(root)}
+    if target.exists() or target.is_symlink():
+        if not target.is_dir():
+            raise DesktopIngressError("already_exists", status_code=409)
+        return {"path": str(target)}
+    try:
+        target.mkdir(parents=create_parents, exist_ok=True)
+    except FileNotFoundError as exc:
+        raise DesktopIngressError("directory_not_found", status_code=404) from exc
+    except PermissionError as exc:
+        raise DesktopIngressError("permission_denied", status_code=403) from exc
+    except OSError as exc:
+        raise DesktopIngressError("mkdir_failed", status_code=500) from exc
+    return {"path": str(target)}
+
+
+def rename_workspace_entry(
+    workspace: Path | str,
+    from_path: str,
+    to_path: str,
+    *,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Rename or move *from_path* to *to_path* inside *workspace*."""
+    src, root = resolve_target_in_workspace(
+        workspace,
+        from_path,
+        allow_missing=False,
+        create_parents=False,
+    )
+    if src == root:
+        raise DesktopIngressError("forbidden_target", status_code=403)
+    dst, _ = resolve_target_in_workspace(
+        workspace,
+        to_path,
+        allow_missing=True,
+        create_parents=False,
+    )
+    if dst == root:
+        raise DesktopIngressError("forbidden_target", status_code=403)
+    if (dst.exists() or dst.is_symlink()) and not overwrite:
+        raise DesktopIngressError("already_exists", status_code=409)
+    try:
+        os.replace(src, dst)
+    except PermissionError as exc:
+        raise DesktopIngressError("permission_denied", status_code=403) from exc
+    except OSError as exc:
+        raise DesktopIngressError("rename_failed", status_code=500) from exc
+    return {"from": str(src), "to": str(dst)}
+
+
+def delete_workspace_entry(
+    workspace: Path | str,
+    raw_path: str,
+    *,
+    recursive: bool = False,
+) -> dict[str, Any]:
+    """Delete file or directory *raw_path* inside *workspace*."""
+    target, root = resolve_target_in_workspace(
+        workspace,
+        raw_path,
+        allow_missing=False,
+        create_parents=False,
+    )
+    if target == root:
+        raise DesktopIngressError("forbidden_target", status_code=403)
+    try:
+        if target.is_dir() and not target.is_symlink():
+            if recursive:
+                shutil.rmtree(target)
+            else:
+                try:
+                    os.rmdir(target)
+                except OSError as exc:
+                    raise DesktopIngressError(
+                        "directory_not_empty", status_code=409
+                    ) from exc
+        else:
+            target.unlink()
+    except DesktopIngressError:
+        raise
+    except PermissionError as exc:
+        raise DesktopIngressError("permission_denied", status_code=403) from exc
+    except OSError as exc:
+        raise DesktopIngressError("delete_failed", status_code=500) from exc
+    return {"path": str(target), "trashed": False}
+
+
+def browse_workspace_directories(
+    workspace: Path | str,
+    raw_dir: str | None = None,
+) -> dict[str, Any]:
+    """List browsable subdirectories inside *workspace* for *raw_dir*."""
+    try:
+        root = Path(workspace).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise DesktopIngressError("directory_not_found", status_code=404) from exc
+
+    if raw_dir is not None and str(raw_dir).strip():
+        try:
+            target, _ = resolve_target_in_workspace(
+                workspace,
+                str(raw_dir).strip(),
+                allow_missing=False,
+                create_parents=False,
+            )
+        except DesktopIngressError as exc:
+            if exc.code == "path_outside_workspace":
+                target = root
+            else:
+                raise
+    else:
+        target = root
+
+    if not target.is_dir():
+        raise DesktopIngressError("not_a_directory", status_code=422)
+
+    directories: list[dict[str, str]] = []
+    try:
+        with os.scandir(target) as scan:
+            for item in scan:
+                if item.name.startswith(".") or item.name in IGNORED_DIRECTORIES:
+                    continue
+                try:
+                    if item.is_symlink():
+                        real = Path(item.path).resolve(strict=True)
+                        if _segments_below(real, (root,)) is None or not real.is_dir():
+                            continue
+                    elif not item.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                directories.append({"name": item.name, "path": str(target / item.name)})
+    except OSError as exc:
+        raise DesktopIngressError("permission_denied", status_code=403) from exc
+
+    directories.sort(key=lambda d: (d["name"].casefold(), d["name"]))
+    parent = str(target.parent) if target != root else None
+    return {
+        "current": str(target),
+        "parent": parent,
+        "directories": directories,
+        "drives": [],
+    }

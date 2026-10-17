@@ -316,6 +316,14 @@ class JobStore:
             )
         )
 
+    def delete_job(self, job_id: str) -> bool:
+        def _delete(conn: Any) -> bool:
+            conn.execute("DELETE FROM job_events WHERE job_id = ?", (job_id,))
+            cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            return cur.rowcount > 0
+
+        return self._db.run(_delete)
+
     def get_job(self, job_id: str) -> JobRecord | None:
         rows = self._db.run(
             lambda conn: conn.execute(

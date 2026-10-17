@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import re
+import time
 
 from omicsclaw.memory.artifacts import ARTIFACT_KINDS
 
@@ -12,12 +14,17 @@ from .catalog import mcp_servers, skill_catalog, skill_detail
 from .chat_service import change_workspace, workspace_payload
 from .doctor import _sandbox_snapshot, doctor_report
 from .files import (
+    browse_workspace_directories,
     byte_span,
     content_disposition,
+    delete_workspace_entry,
     file_tree,
+    mkdir_workspace,
     open_served_file,
+    rename_workspace_entry,
     serve_target,
     tree_depth,
+    write_workspace_file,
 )
 from .git_service import execute_git
 from .interactions import abort_chat, answer_permission, change_permission_profile
@@ -29,6 +36,7 @@ from .job_service import (
     settle_job_approval,
 )
 from .jobs_manager import JobError
+from .memory_service import dispatch_memory_request
 from .runtime_service import health_payload
 from .turn_submission import DesktopIngressError
 from .usage_service import usage_statistics
@@ -180,12 +188,64 @@ class DesktopService:
             payload = await abort_chat(app, self.interactions, document)
         elif method == "POST" and path == "/chat/session-permission-profile":
             payload = await change_permission_profile(app, self.interactions, document)
+        elif method == "DELETE" and re.fullmatch(
+            r"/chat/session/[A-Za-z0-9_.:-]+", path
+        ):
+            payload = await delete_chat_session(app, path.split("/")[3])
+        elif method == "POST" and path == "/chat/rewind":
+            payload = await rewind_chat_session(app, document)
         elif method == "GET" and path == "/files/tree":
             payload = await asyncio.to_thread(
                 file_tree,
                 app.config.workspace,
                 query.get("path"),
                 depth=tree_depth(query.get("depth")),
+            )
+        elif method == "GET" and path == "/files/browse":
+            payload = await asyncio.to_thread(
+                browse_workspace_directories,
+                app.config.workspace,
+                query.get("dir"),
+            )
+        elif method == "POST" and path == "/files/write":
+            payload = await asyncio.to_thread(
+                write_workspace_file,
+                app.config.workspace,
+                str(document.get("path") or ""),
+                document.get("content", ""),
+                encoding=str(document.get("encoding") or "utf-8"),
+                overwrite=bool(document.get("overwrite", True)),
+                create_parents=bool(
+                    document.get(
+                        "create_parents", document.get("createParents", False)
+                    )
+                ),
+            )
+        elif method == "POST" and path == "/files/mkdir":
+            payload = await asyncio.to_thread(
+                mkdir_workspace,
+                app.config.workspace,
+                str(document.get("path") or ""),
+                create_parents=bool(
+                    document.get(
+                        "create_parents", document.get("createParents", True)
+                    )
+                ),
+            )
+        elif method == "POST" and path == "/files/rename":
+            payload = await asyncio.to_thread(
+                rename_workspace_entry,
+                app.config.workspace,
+                str(document.get("from") or document.get("from_path") or ""),
+                str(document.get("to") or document.get("to_path") or ""),
+                overwrite=bool(document.get("overwrite", False)),
+            )
+        elif method == "POST" and path == "/files/delete":
+            payload = await asyncio.to_thread(
+                delete_workspace_entry,
+                app.config.workspace,
+                str(document.get("path") or ""),
+                recursive=bool(document.get("recursive", False)),
             )
         elif method == "GET" and path == "/files/serve":
             return await self._file(query, headers)
@@ -234,6 +294,76 @@ class DesktopService:
         ):
             pieces = path.split("/")
             payload = settle_job_approval(jobs, pieces[2], pieces[4], document)
+        elif method == "POST" and re.fullmatch(r"/jobs/[A-Za-z0-9_.-]+/retry", path):
+            if "skill_run" not in jobs.runner_kinds():
+                return capability_required("science_runner")
+            job_id = path.split("/")[2]
+            original = jobs.get_job(job_id)
+            if original is None:
+                raise DesktopIngressError("job_not_found", status_code=404)
+            if original.status not in {
+                "failed",
+                "canceled",
+                "cancelled",
+                "interrupted",
+                "succeeded",
+            }:
+                raise DesktopIngressError("job_not_terminal", status_code=409)
+            if original.kind not in jobs.runner_kinds():
+                return capability_required("science_runner")
+            retry_inputs = dict(original.inputs or {})
+            retry_doc = {
+                "kind": original.kind,
+                "skill": original.skill,
+                "inputs": retry_inputs,
+                "session_id": original.session_id,
+                "workspace": str(app.config.workspace),
+                "runtime": original.runtime or "local",
+                "source_request_id": str(
+                    document.get("source_request_id")
+                    or f"retry-{job_id}-{int(time.time() * 1000)}"
+                ),
+            }
+            if original.kind == "code_run":
+                retry_doc["code"] = retry_inputs.get("code", "")
+                retry_doc["language"] = retry_inputs.get("language", "python")
+                retry_doc["location"] = retry_inputs.get("location", "local")
+            elif original.kind == "env_install":
+                retry_doc["env"] = retry_inputs.get("env", "main")
+                retry_doc["packages"] = retry_inputs.get("packages", [])
+            record = await create_job_from_document(jobs, retry_doc)
+            return {
+                "status": 201,
+                "payload": {"job_id": record.id, "job": record.as_payload()},
+            }
+        elif method == "DELETE" and re.fullmatch(r"/jobs/[A-Za-z0-9_.-]+", path):
+            if "skill_run" not in jobs.runner_kinds():
+                return capability_required("science_runner")
+            job_id = path.split("/")[2]
+            record = jobs.get_job(job_id)
+            if record is None:
+                raise DesktopIngressError("job_not_found", status_code=404)
+            if record.status in {"queued", "running", "cancel_requested"}:
+                raise DesktopIngressError("job_not_terminal", status_code=409)
+            if hasattr(jobs.store, "delete_job"):
+                jobs.store.delete_job(job_id)
+            payload = {"deleted": True, "job_id": job_id, "success": True}
+        elif method == "PUT" and re.fullmatch(r"/jobs/[A-Za-z0-9_.-]+", path):
+            if "skill_run" not in jobs.runner_kinds():
+                return capability_required("science_runner")
+            job_id = path.split("/")[2]
+            record = jobs.get_job(job_id)
+            if record is None:
+                raise DesktopIngressError("job_not_found", status_code=404)
+            changes = {
+                k: document[k]
+                for k in ("status", "error")
+                if k in document and isinstance(document[k], str)
+            }
+            if changes:
+                jobs.store.update_job(job_id, **changes)
+                record = jobs.get_job(job_id) or record
+            payload = {"job": record.as_payload()}
         elif path.startswith("/jobs/"):
             return capability_required("science_runner")
         elif method == "GET" and path == "/artifacts":
@@ -306,6 +436,10 @@ class DesktopService:
             "/api/sandbox/allow-domain",
         }:
             return revoke_sandbox_domain(app, query, document)
+        elif path.startswith("/memory/"):
+            payload = await dispatch_memory_request(
+                app, method, path, query, document
+            )
         else:
             raise DesktopIngressError("unsupported_rpc_route", status_code=404)
         return {"status": 200, "payload": payload}
@@ -390,3 +524,58 @@ def revoke_sandbox_domain(app, query, document):
         binding.revoke_domain(domain)
     return {"status": 200, "payload": _sandbox_snapshot(app)}
 
+
+
+
+async def delete_chat_session(app, session_id: str) -> dict:
+    sessions = getattr(app, "sessions", None)
+    if sessions is not None:
+        if hasattr(sessions, "is_busy") and sessions.is_busy(session_id):
+            raise DesktopIngressError("session_busy", status_code=409)
+        if hasattr(sessions, "_sessions") and isinstance(sessions._sessions, dict):
+            sessions._sessions.pop(session_id, None)
+        if hasattr(sessions, "_lanes") and isinstance(sessions._lanes, dict):
+            sessions._lanes.pop(session_id, None)
+        if hasattr(sessions, "delete") and callable(sessions.delete):
+            res = sessions.delete(session_id)
+            if inspect.isawaitable(res):
+                await res
+        elif hasattr(sessions, "_store") and hasattr(sessions._store, "delete"):
+            res = sessions._store.delete(session_id)
+            if inspect.isawaitable(res):
+                await res
+    return {"deleted": True, "session_id": session_id}
+
+
+async def rewind_chat_session(app, document: dict) -> dict:
+    session_id = document.get("session_id") or document.get("sessionId")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise DesktopIngressError("session_id_required", status_code=422)
+    keep_count = document.get("keep_count", document.get("keepCount"))
+    sessions = getattr(app, "sessions", None)
+    if sessions is not None:
+        if hasattr(sessions, "is_busy") and sessions.is_busy(session_id):
+            raise DesktopIngressError("session_busy", status_code=409)
+        session = None
+        if hasattr(sessions, "load_session"):
+            session = await sessions.load_session(session_id)
+        elif hasattr(sessions, "load"):
+            res = sessions.load(session_id)
+            session = await res if inspect.isawaitable(res) else res
+        if session is not None:
+            if isinstance(keep_count, int) and not isinstance(keep_count, bool) and keep_count >= 0:
+                session.history = tuple(session.history[:keep_count])
+            else:
+                session.history = ()
+                if hasattr(session, "compaction") and session.compaction is not None:
+                    session.compaction = type(session.compaction)()
+            session.updated_at = time.time()
+            if hasattr(sessions, "_store") and hasattr(sessions._store, "save"):
+                res = sessions._store.save(session)
+                if inspect.isawaitable(res):
+                    await res
+            elif hasattr(sessions, "save"):
+                res = sessions.save(session)
+                if inspect.isawaitable(res):
+                    await res
+    return {"rewound": True, "session_id": session_id}
