@@ -225,3 +225,32 @@ def test_cancelled_probe_keeps_registration_unverified(tmp_path):
                 registry.require_ready(row["environmentId"], 0)
 
     asyncio.run(run())
+
+
+def test_controller_ensure_default_environments_and_rscript_probe(tmp_path):
+    from types import SimpleNamespace
+    from omicsclaw.entry.ssh.controller import Controller
+
+    async def run():
+        controller = Controller(tmp_path, SimpleNamespace(handlers={}))
+        try:
+            await controller.configure(
+                {
+                    "provider_id": "test",
+                    "dialect": "openai_chat",
+                    "model": "test",
+                    "allowed_models": ["test"],
+                    "context_tokens": 8192,
+                    "output_tokens": 1024,
+                }
+            )
+            await controller._ensure_default_environments(force=True)
+            envs = (await controller.environment_list({}))["environments"]
+            assert any(
+                row["spec"]["language"] == "python" and row["status"] == "ready"
+                for row in envs
+            )
+        finally:
+            await controller.aclose()
+
+    asyncio.run(run())

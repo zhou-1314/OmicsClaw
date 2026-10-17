@@ -20,6 +20,7 @@ _PYTHON_WORKER = Path(__file__).resolve().parents[2] / "skillenv/registered_prob
 
 _R = r"""
 args <- commandArgs(trailingOnly=TRUE)
+if (length(args) > 0L && identical(args[[1]], "--args")) args <- args[-1L]
 nlibs <- as.integer(args[[1]])
 libs <- args[seq_len(nlibs) + 1L]
 .libPaths(c(libs, .Library))

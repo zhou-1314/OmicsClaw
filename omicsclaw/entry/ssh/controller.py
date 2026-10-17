@@ -138,6 +138,8 @@ class Controller:
         self.notebook_client = None
         self.environment_guard = None
         self.maintenance_jobs_task = None
+        self._default_envs_checked = False
+        self._default_envs_lock = asyncio.Lock()
         self._configuring = False
         self.factory = None
         self.model_snapshot = None
@@ -545,6 +547,7 @@ class Controller:
             raise RpcError("resume must observe durable events; it cannot submit")
         if request.workspace and Path(request.workspace).resolve() != self.workspace:
             raise RpcError("workspace mismatch")
+        await self._ensure_default_environments()
         with self.model_entry(request.source_request_id, request.session_id):
             settled = await admit_chat(
                 app,
@@ -1081,10 +1084,88 @@ class Controller:
                 "workspaceId": self.identity.workspace_id,
                 "controllerEpoch": self.epoch}
 
+    async def _ensure_default_environments(self, *, force: bool = False):
+        if self.environments is None or (not self.production and not force) or self._default_envs_checked:
+            return
+        async with self._default_envs_lock:
+            if self._default_envs_checked or self.environments is None:
+                return
+            self._default_envs_checked = True
+            try:
+                rows = self.environments.page(limit=20).get("environments", [])
+            except Exception:
+                return
+            has_py = any(r.get("spec", {}).get("language") == "python" and r.get("status") == "ready" for r in rows)
+            has_r = any(r.get("spec", {}).get("language") == "r" and r.get("status") == "ready" for r in rows)
+            if not has_py:
+                py_candidates = []
+                if self.science is not None and getattr(self.science, "python", None):
+                    py_candidates.append(Path(self.science.python))
+                py_candidates.extend([
+                    self.workspace / ".venv/bin/python",
+                    self.workspace / ".venv-dev/bin/python",
+                    Path("/opt/conda/envs/OmicsClaw/bin/python"),
+                ])
+                if os.environ.get("CONDA_PREFIX"):
+                    py_candidates.append(Path(os.environ["CONDA_PREFIX"]) / "bin/python")
+                py_candidates.extend([Path("/opt/conda/bin/python"), Path(sys.executable)])
+                seen_py = set()
+                for cand in py_candidates:
+                    s = str(cand)
+                    if not s.startswith("/") or s in seen_py or not cand.is_file():
+                        continue
+                    seen_py.add(s)
+                    try:
+                        reg = await self.environments.register({
+                            "language": "python",
+                            "executable": s,
+                            "libraryPaths": [],
+                            "requiredPackages": [],
+                        })
+                        if reg.get("status") == "ready":
+                            break
+                    except Exception:
+                        continue
+            if not has_r:
+                r_candidates = []
+                if self.science is not None and getattr(self.science, "rscript", None):
+                    r_candidates.append(Path(self.science.rscript))
+                r_candidates.extend([
+                    Path("/opt/conda/envs/OmicsClaw/bin/R"),
+                    Path("/usr/local/bin/R"),
+                    Path("/usr/bin/R"),
+                    Path("/usr/bin/Rscript"),
+                ])
+                r_libs = []
+                if self.science is not None and getattr(self.science, "r_library", None):
+                    r_libs.extend(str(p) for p in (self.science.r_library if isinstance(self.science.r_library, (list, tuple)) else [self.science.r_library]))
+                for std_lib in ("/usr/local/lib/R/site-library", "/usr/lib/R/site-library", "/usr/lib/R/library"):
+                    if Path(std_lib).is_dir() and std_lib not in r_libs:
+                        r_libs.append(std_lib)
+                if r_libs:
+                    seen_r = set()
+                    for cand in r_candidates:
+                        s = str(cand)
+                        if not s.startswith("/") or s in seen_r or not cand.is_file():
+                            continue
+                        seen_r.add(s)
+                        try:
+                            reg = await self.environments.register({
+                                "language": "r",
+                                "executable": s,
+                                "libraryPaths": r_libs[:16],
+                                "requiredPackages": [],
+                            })
+                            if reg.get("status") == "ready":
+                                break
+                        except Exception:
+                            continue
+
     async def environment_list(self, params):
         registry = self._environment_registry(params)
         if set(params) - {"after", "limit"}:
             raise PublicRpcError("invalid_environment_request")
+        await self._ensure_default_environments()
         missing = []
         for name in ("jupyter_client", "zmq"):
             try:
@@ -1136,6 +1217,7 @@ class Controller:
         base = self._environment_target()
         if not isinstance(target, dict) or any(target.get(k) != v for k, v in base.items()):
             raise PublicRpcError("notebook_target_changed")
+        await self._ensure_default_environments()
         try:
             health = await self.notebook_client.attach()
             fence = {**base, "ownerId": health["owner"]["ownerId"],
