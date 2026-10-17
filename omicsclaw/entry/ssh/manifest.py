@@ -38,7 +38,7 @@ def verified_source_metadata(root: Path) -> dict:
         allowed = isinstance(path, str) and (
             path.startswith("omicsclaw/")
             or path.startswith("skills/")
-            and path.endswith("/SKILL.md")
+            and path.endswith(("/SKILL.md", "/kernel.py"))
             or path in {"OMICSCLAW.md", "LICENSE"}
         )
         if (

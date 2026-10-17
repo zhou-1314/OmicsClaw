@@ -1,32 +1,6 @@
-"""One span and two measurements per tool call, through the hook seam.
+"""Record tool telemetry through runtime hooks.
 
-The counterpart of ``observability/hook.go``, and the reason
-:mod:`omicsclaw.hooks` exists as a mechanism at all — plan 0042 built the
-seam and shipped the one hook nobody owned, naming this as the piece it
-was deliberately not doing ("**No OpenTelemetry.** … A deployment that
-wants OTEL writes a twelve-line sink"). This is that deployment's side of
-the bargain, written once here rather than twelve lines at a time.
-
-**It is not a second audit log.** :class:`~omicsclaw.hooks.AuditHook`
-writes a durable local record, one line per call, digest only, mounted
-**first** so that it hears a refusal from a hook mounted after it. This
-one opens a span and records two instruments, and is mounted **last** so
-that its span measures the tool and not its neighbours. They answer
-different questions, they are switched on by different settings, and
-neither can be derived from the other — but they share one vocabulary for
-*how a call ended*, :class:`~omicsclaw.hooks.AuditOutcome`, because two
-spellings of that would be two answers to one question.
-
-**Where it sits in the chain, and the blind spot that follows.** The hook
-chain runs *inside* the permission gate, so a call a rule denied never
-reaches a hook and therefore never appears as a span. That is the same
-blind spot ``observability/hook.go`` has, for the same reason
-(``cmd/harness9/main.go:411-416``), and it is the right trade: a refusal
-is a permission event, and
-:class:`~omicsclaw.hooks.AuditHook`'s record is where it is already
-written down.
-
-Imports :mod:`omicsclaw.hooks` and this package.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -1,49 +1,10 @@
-"""The versioned Desktop wire contract, as ``GET /health`` publishes it.
+"""Define the versioned Desktop wire contract published by health.
 
-The backend serves two kinds of route.
+Optional fields and capabilities can be additive within a major version.
+Removing a field or changing its type or meaning requires the matching major
+version change. Management routes follow the package release contract.
 
-**Chat contract routes**, versioned here: ``POST /chat/stream`` (request
-body and SSE frames), ``POST /chat/permission``, ``POST /chat/abort``,
-``POST /chat/session-permission-profile``, ``GET``/``PUT /workspace``,
-``GET /env/doctor`` and ``GET /health``. The backend defines this
-contract and the desktop client implements the major version it names.
-Optional fields and capability declarations are additive within v3. Removing
-a field, changing its meaning or type, or requiring new client behavior
-bumps the matching major version. Clients ignore fields they do not use
-and refuse major versions they do not implement.
-
-**Management routes**, released with the package version and not covered
-by these numbers: ``GET /skills``, ``GET /skills/{domain}/{name}``,
-``GET /mcp/servers``, ``GET``/``PUT /providers``, ``POST /providers/test``,
-``POST /chat/title`` (whose request body carries its own
-``schema_version``), the read-only file routes ``GET /files/tree`` and
-``GET /files/serve``, and the remote-execution host routes
-``GET``/``POST /remote/hosts`` and ``DELETE /remote/hosts/{alias}``, plus
-Backend-owned alias suggestions and read-only target file routes.
-(C1's REST face over the host knowledge base — additive, and answered
-``503 remote_execution_disabled`` where no remote plane is bound, so a
-client gates on ``capabilities.remote_execution``).
-
-* ``request_schema_version`` — the ``/chat/stream`` request body. The
-  body must carry ``ingress_schema_version`` equal to it; a missing or
-  different value is refused with 422. Version 3 adds ``after_seq`` (the
-  sequence number to resume after) and ``resume`` (reattach to the
-  exchange a ``source_request_id`` started, and never start one).
-* ``sse_schema_version`` — the frames of ``/chat/stream``, the request
-  and response of ``/chat/permission`` and of
-  ``/chat/session-permission-profile``, and the ``/env/doctor`` payload.
-  Version 3 puts an ``id:`` line on every frame an event produced, except
-  the frames that end the stream, and sums ``result.usage`` over the
-  whole exchange rather than over one connection.
-* ``interrupt_schema_version`` — the ``/chat/abort`` request.
-
-``abandon_grace_s`` is how long an exchange keeps running once nobody
-observes it, ``None`` when this backend never cancels one for that. It
-is a fact about the running process rather than about the wire, so it is
-not versioned.
-
-:data:`SERVED_PATHS` names the routes
-:func:`~omicsclaw.entry.desktop.server.create_desktop_app` mounts.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

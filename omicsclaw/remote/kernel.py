@@ -1,55 +1,6 @@
-"""C3: the remote persistent kernel — ipykernel beside the data.
+"""Run persistent kernels beside remote data.
 
-The one piece of remote state the plan keeps (§4 C3, absorbing OmicOS's
-real advantage): a session's analysis kernel runs **on the remote host**,
-so ``adata`` loads once and survives turns without the data ever
-travelling to this machine. The supply side stays minimal — the remote
-host is asked for one Python environment under ``~/.omicsclaw/kernel-env``
-(uv venv + ipykernel + the scanpy core stack), not a product stack.
-
-**The wire is the standard jupyter protocol.** The remote ipykernel
-writes its own connection file (five ports on the remote loopback plus a
-random key); we read that file back over SFTP-less ``ssh cat``, rewrite
-nothing but the ``ip`` (defensively — both sides are 127.0.0.1), and run
-one ``ssh -N`` process carrying five ``-L`` forwards bound to the **local
-127.0.0.1 only**. :mod:`jupyter_client` then *attaches* —
-``load_connection_file`` + ``client()`` + ``wait_for_ready`` — never
-``start_kernel``: the process belongs to the remote host, and the local
-side owns only the tunnel.
-
-**The kernel object is P4's, subclassed.** :class:`RemoteSessionKernel`
-extends :class:`~omicsclaw.kernel.session.SessionKernel` and overrides
-exactly the process-management face — ``start``/``is_alive``/
-``interrupt``/``kill``/``shutdown`` and the two ``/proc`` probes —
-because the cell-execution half (the three output ceilings, figure
-capture, the idle notice, the interrupt ladder) is location-agnostic and
-is inherited, not copied. The manager treats it as one more kernel:
-same reaper, same idle soft top, same cancel ladder, same obituaries.
-
-**Liveness has two witnesses.** The heartbeat channel is the cheap local
-one; when it falls silent the two failure modes — kernel died, tunnel
-died — are indistinguishable locally, so ``ssh kill -0 <pid>`` settles
-it (the pid the launch recorded, nothing else). A tunnel that died with
-the kernel alive is *not* a death: the next cell re-spawns the forwards
-and the zmq channels reconnect, and the variables are still there — the
-acceptance scenario (kill the tunnel, reconnect, the namespace survives)
-is a property of this split, not a recovery path bolted on later.
-
-**Every remote command from a kernel method runs on a worker thread**
-(the manager's ``asyncio.to_thread`` boundary). The sync driver here
-enforces that invariant: it refuses to run on the event loop, because
-``asyncio.run`` cannot nest — the one P4 call site that used to kill
-from the loop thread (``_park_with_obituary``) now offloads to a thread
-so the remote kill can pay its SSH round trip off-loop.
-
-**Two seams deliberately untouched.** The ``X-OmicsClaw-Runtime``
-response header (P3's routing seam) is not spoken here: it answers
-*where an HTTP request's backend lives*, and a remote kernel is reached
-by a tool argument or a job body, not by a wire route — widening it to
-mean two things would cost the header its one meaning. And ``bash``
-stays location-blind: remote shell-shaped work is C1's ``remote_exec``
-family's trade, and a location-dispatching ``bash`` would be a second
-shell seam with none of the kernel's persistent state to offer.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

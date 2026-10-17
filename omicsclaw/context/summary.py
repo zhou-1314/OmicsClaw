@@ -1,41 +1,6 @@
-"""``omicsclaw/context`` — anchors, and the text that carries them.
+"""Preserve conversation anchors in summaries.
 
-Plan 0030 task C. Pure text: the five anchors a compaction preserves,
-the parser that recovers them from whatever a model actually wrote, the
-templates that ask for them, and the marker that says "this message is a
-compaction". All of it ported from ``internal/memory/anchor.go`` and
-``progressive_compactor.go:26-65``.
-
-It is its own module for cohesion rather than for size. Anchors and
-templates are a self-contained text transform that can be tested without
-a budget, a plan or a model anywhere in sight; folded into
-:mod:`~omicsclaw.context.compaction` they would turn that file into the
-1,200-line compactor this rebuild exists to leave behind.
-
-**There is no gate on what a summarizer returns.** The replaced layer
-had six — empty, over-length by tokens, by characters, by bytes,
-looks-like-a-tool-call, and a content-fidelity check that re-read the
-source material for file paths and ``Error``/``Traceback``/``TODO``
-markers and rejected a summary that had dropped one. The harness has
-none: ``progressive_compactor.go:423-431`` checks that the call did not
-error and did not return nil, and then parses whatever came back. The
-owner's 2026-09-18 ruling takes the harness's shape, and **the cost is
-that a compaction can lose the path to an ``h5ad`` file and nothing
-will notice**. What is left in its place is the degradation path in
-:func:`~omicsclaw.context.compaction.compact`, which must therefore
-actually hold — see plan 0030 §11.A-9, the debt this makes most worth
-repaying. It holds in two places, and both are budget arithmetic rather
-than judgements about prose: the fallback trims to a *stricter* target
-than the tier that triggered it, and ``compact`` re-measures its own
-output against ``usable_tokens`` before handing it back.
-
-**Do not invent a replacement gate.** "Reject a summary longer than the
-template" needs a template to measure against, and the
-deterministic-template path is exactly what was removed; reintroducing
-a yardstick is reintroducing the path. The budget re-measurement is not
-that: it compares the result to the number this package already divides
-by, asks nothing at all about what the summary says, and is the literal
-text of task C acceptance 3.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

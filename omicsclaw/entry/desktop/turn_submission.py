@@ -1,22 +1,6 @@
-"""Strict Desktop ``POST /chat/stream`` ingress: bytes in, one turn out.
+"""Parse and validate Desktop chat requests.
 
-The module owns only transport parsing. It never runs a turn, never
-touches a workspace and never decides what the agent does; it decides
-whether a request is admissible and, if it is, what
-:class:`~omicsclaw.entry.ingress.InboundMessage` it means.
-
-:func:`parse_chat_stream_document` bounds the raw bytes — size, nesting
-depth, duplicate keys, non-finite constants — before and while parsing,
-because this is the hostile-input surface. :func:`decode_chat_stream_request`
-then refuses, by published code, what this route does not serve:
-
-* every attachment-shaped input (``attachments_supported: False``), rather
-  than silently dropping files the caller believed were uploaded;
-* a request without a ``source_request_id``
-  (``source_request_id_required: True``);
-* per-turn provider credentials, because a chat request is not where a
-  deployment changes which backend it pays;
-* an ``ingress_schema_version`` other than the contract's request version.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

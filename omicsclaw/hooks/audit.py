@@ -1,35 +1,6 @@
-"""A record per tool call: what ran, how it ended, and nothing else.
+"""Record tool calls and their outcomes.
 
-The one hook this package ships. The other three the reference harness
-mounts already have homes in this tree — permission and the danger
-patterns are :mod:`omicsclaw.permission`, oversized output is
-:mod:`omicsclaw.context`'s ``Offloader``, plan persistence is
-:mod:`omicsclaw.planning` — and re-implementing any of them here would
-give a deployment two answers to the same question.
-
-Observability is what was left. ``docs/plans/0031-entry-layer.md``
-deferred it by name ("hooks：permission / danger / offload /
-observability | 不做（Q13）"), and
-``entry/channel/telegram.py`` records the consequence: *"plan 0031 has no
-audit log yet, and inventing one here would be a second unowned place
-that writes about users."* This is the owned place.
-
-**No OpenTelemetry.** The reference's equivalent
-(``observability/hook.go``) starts a span and records two instruments;
-this layer imports the standard library and nothing else, like every
-other leaf in the rebuild, and hands a :class:`AuditRecord` to a
-:class:`AuditSink` the composition root supplied. A deployment that
-wants OTEL writes a twelve-line sink; a deployment that does not is not
-made to carry the dependency.
-
-**No duration.** Two layers already time a tool call and a third number
-would be a third answer: ``ToolResult.metadata["duration_s"]``
-(``tools/registry.py:416-422``, measured around the tool itself) and
-``EngineEvent.duration_s`` (``engine/types.py:229-247``, measured around
-the executor seam and *including* any approval wait). The second is the
-one that reaches a surface. This record says a call happened and how it
-ended; asking it to also say how long would have needed per-call state
-on a hook object shared by every concurrent call.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -12,12 +12,35 @@ import os
 import sqlite3
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Self, TypeVar
 
 T = TypeVar("T")
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS registered_environments (
+    environment_id TEXT PRIMARY KEY,
+    spec_hash TEXT NOT NULL UNIQUE,
+    spec_json TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0,
+    accepted_revision INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'unverified',
+    reason TEXT NOT NULL DEFAULT '',
+    checked_at REAL,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS registered_environment_revisions (
+    environment_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    observation_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (environment_id, revision),
+    FOREIGN KEY (environment_id) REFERENCES registered_environments(environment_id)
+);
+
 CREATE TABLE IF NOT EXISTS turn_authority_identity (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     authority_id TEXT NOT NULL,
@@ -377,7 +400,7 @@ class Database:
         )
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
-        with self._lock:
+        with self._lock, _schema_lock(self.path):
             self._conn.execute("PRAGMA foreign_keys = ON")
             # Switching the journal mode needs the database to itself, and
             # SQLite answers SQLITE_BUSY without consulting the busy
@@ -461,6 +484,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if "duplicate column name" not in str(exc).lower():
                 raise
     for table, additions in {
+        "notebook_cells": {"language": "TEXT NOT NULL DEFAULT 'python'"},
         "jobs": {
             "lifetime": "TEXT NOT NULL DEFAULT ''",
             "source_request_id": "TEXT NOT NULL DEFAULT ''",
@@ -522,3 +546,23 @@ def _create_private(path: str) -> bool:
         return False
     os.close(descriptor)
     return True
+
+
+@contextmanager
+def _schema_lock(path: str):
+    """Serialize process-level schema setup before inspecting migration columns."""
+    if path == ":memory:" or os.name != "posix":
+        yield
+        return
+    import fcntl
+    import stat
+
+    fd=os.open(path+".schema.lock",os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,PRIVATE_FILE_MODE)
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1:
+            raise ValueError("unsafe database schema lock")
+        fcntl.flock(fd,fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)

@@ -1,93 +1,10 @@
-"""``omicsclaw/entry`` — one exchange's frames as text, and as JSON.
+"""Render exchange events as text and wire data.
 
-Plan 0031 §3.2. Two projections of :class:`~omicsclaw.entry.events.
-TurnEvent`, deliberately of different kinds:
+TextRenderer accumulates deltas for surfaces that batch updates. to_wire
+projects events without renderer state. Control-line fields pass through
+entry.display; surfaces remain responsible for displaying raw text deltas.
 
-:class:`TextRenderer` is **stateful**, because the Channel Surface cannot
-be served by a pure function. An IM platform rate-limits message edits, so
-a bot that forwarded every text delta would be throttled within a
-sentence; deltas have to be accumulated *across* events and sent in
-batches. The CLI wants the opposite — a token on screen as it arrives —
-so the same class does both, and which one is a constructor argument
-rather than two classes with one shared bug.
-
-:func:`to_wire` is **pure**, and is what crosses a process boundary.
-
-Every text field a control line is built from — a tool name, a progress
-message, a request id, a refusal's reason, a compaction's failure, an
-error's type name, an approval card's reason and arguments, a question
-card's question and options — is made
-inert by ``omicsclaw/entry/display.py`` before it is put in the line, so
-no surface receives a control character from one. Text and reasoning
-deltas are returned as they arrived; a surface that prints them makes
-them inert itself.
-
-Three things this module is careful about, each with a named trap in plan
-0031 §6:
-
-*The elapsed figure is not "how long the tool took"* (trap 6).
-``EngineEvent.duration_s`` is wall-clock measured by the scheduler and
-therefore **includes time a human spent deciding an approval**
-(``engine/types.py:239-245``). The guard here is structural rather than
-editorial: no field named for a tool's duration ever reaches a caller —
-the text always carries :data:`ELAPSED_INCLUDES_APPROVAL_WAIT` and the
-wire always uses ``elapsed_s`` plus an explicit
-``elapsed_includes_approval_wait`` flag. Neither can be composed by
-accident, and neither depends on anyone reading the prose.
-
-*A missing token count and a zero token count are different facts*
-(trap 7). ``usage=None`` only ever comes from a streamed run and means the
-backend reported nothing; a zero :class:`~omicsclaw.schema.Usage` comes
-from the blocking path and means "free **or** unreported", because
-``Completion.usage`` cannot express the difference
-(``engine/types.py:204-215``). They render as
-:data:`USAGE_UNREPORTED` and :data:`USAGE_ZERO`, never as the same string.
-
-*Tool arguments and tool output are not rendered as text* (Q22 rule 1),
-approval lines excepted. Argument payloads and tool output can carry
-subject identifiers, and this layer feeds a CLI, an IM transport and an
-HTTP stream from one place, so :class:`TextRenderer` never puts a raw
-payload or any output on a screen or in a chat; a Surface that has decided
-it may show them reads them off
-:attr:`~omicsclaw.entry.events.TurnEvent.engine` itself, having made that
-decision explicitly. An approval line carries the request's reason and,
-unless :attr:`~omicsclaw.tools.ApprovalRequest.reason_shows_call`, the
-call's arguments with credential-named values hidden; both are made inert
-by ``omicsclaw/entry/display.py``, shown to the person deciding, and never
-logged.
-
-:func:`to_wire` is the other case and the opposite rule: it **must**
-carry both, because ``ToolCall.arguments`` crossing byte for byte is a
-published contract (see below) and a ``tool_result`` without its content
-is not a result. It follows that ``to_wire``'s **output** is itself
-inside Q22 rule 1's protection: those dictionaries reach an SSE stream by
-way of ``desktop/turn_observation.py``, whose ``_wire_json_value``
-redacts by *key name* only and passes every string through untouched. A
-frame is therefore not safe to log, and nothing here logs one.
-
-**Wire compatibility** (Q24). ``POST /chat/stream`` is a published
-contract with an external client, not this layer's to invent. Three
-consequences are load-bearing and are pinned by tests:
-
-- ``ToolCall.arguments`` crosses **byte for byte**. It is a raw JSON
-  string precisely so that a decode/re-encode cannot reorder keys
-  (``schema/message.py:81-89``); prompt-prefix caching and replay
-  evidence both depend on those bytes.
-- A ``tool_result`` frame uses the key names
-  ``surfaces/desktop/_chat_sse.py`` reads — ``tool_use_id``,
-  ``tool_name``, ``content``, ``is_error``. That renderer's 4 MiB
-  oversize projection reaches into the payload by name, so a frame that
-  spelled them differently would lose its correlation identity exactly
-  when a result is too big to send.
-- The terminal frame preserves the error's **type**
-  (``wire_contract.py``: ``terminal_error_type_preserved``), and only its
-  type: an exception's text can contain a URL with credentials in the
-  query string.
-
-The mapping from :class:`~omicsclaw.entry.events.TurnEventType` to that
-client's frame names is :data:`DESKTOP_CHAT_FRAME_TYPE`; ``to_wire``
-itself tags frames with the enum value, because the enum is this layer's
-truth and the client's vocabulary is the Desktop Surface's to speak.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

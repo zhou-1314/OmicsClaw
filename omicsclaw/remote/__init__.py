@@ -1,30 +1,6 @@
-"""``omicsclaw.remote`` — the remote execution plane (C1/C2).
+"""Provide remote execution services.
 
-The remote runtime plan's main route: orchestration stays local, the
-remote host is asked for ``sshd`` and a POSIX shell, and every remote
-fact that outlives a call is a durable handle in SQLite. Four layers,
-each importable without the one above it::
-
-    ssh        argv construction + process spawning (the transport)
-    probe      the read-only probe script + its tolerant parser
-    jobs       job scripts, handles, the status state machine (pure)
-    store      remote_hosts / remote_jobs over the memory Database
-    plane      RemotePlaneBinding: the tool layer's injected plane
-    bridge     the P1 jobs-plane runner for runtime="remote:<alias>"
-    kernel     C3's remote persistent kernel: env supply + the tunnel
-    reconcile  re-estimate in-flight handles after a restart
-
-The tool family itself lives in the leaf layer
-(:mod:`omicsclaw.tools.builtin.remote`) with this package injected as
-its :class:`~omicsclaw.tools.builtin.remote.RemotePlane`; the
-composition root binds :class:`RemotePlaneBinding` when
-:attr:`~omicsclaw.entry.config.AppConfig.remote_execution` is on, and
-nothing remote exists in a deployment that leaves it off — no tool, no
-prompt section, no socket opened on the plane's behalf.
-
-**Standard library only**, like everything this package spawns: the
-SSH client is the system's ``ssh``/``sftp`` (zero pip dependencies, the
-user's config as the contract, host keys the system's business).
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

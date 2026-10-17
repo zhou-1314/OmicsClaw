@@ -1,23 +1,6 @@
-"""Overlay environments: a virtual environment over the base interpreter holding only what the base lacks.
+"""Provide dependency overlays over an existing Python interpreter.
 
-An overlay is created with ``--system-site-packages`` from the interpreter
-``bash`` runs, so every base package stays visible and the overlay's own
-site-packages comes first. Its directory is ``<root>/<key>/.venv``, where the
-key is a digest of the base's identity, the distributions in the base's own
-site-packages and the requested requirements: any change to the base gives a
-new key. An overlay with a fingerprint file is finished and is never changed
-or deleted here; a directory without one is a half-built overlay and is
-removed under the key's lock, which lives in ``<root>/.locks`` and is never
-deleted.
-
-:class:`OverlayBuilder` builds one overlay: resolve with ``pip install
---dry-run --only-binary=:all: --report``, keep what the base already has
-(:func:`fill_only`), install the rest pinned with ``--no-deps``, compare what
-was installed with what was planned, check where every installed file landed
-and which top-level names it adds, compare ``pip check`` before and after,
-import the skill's modules, and only then write the metadata and the
-fingerprint. Any failure, cancellation or time-out removes the half-built
-directory.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

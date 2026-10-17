@@ -1,48 +1,10 @@
-"""``omicsclaw/planning`` — the plan the agent keeps, and keeps seeing.
+"""Expose persistent plan state, plan tools and per-call plan injection.
 
-Plan 0039, the layer that makes a long task survive its own context. The
-main loop can already act, use tools and compact its history; what it
-could not do is *remember what it set out to do* once the turns that said
-so had been summarized away. A plan is that memory, held outside the
-conversation and put back in front of the model before every call::
+Plans live outside conversation history so compaction need not remove the
+task state. Composition supplies the archive and binds an injector to the
+current session.
 
-    from omicsclaw.planning import PlanBook, PlanInjector, plan_write_tool
-
-    book = PlanBook(FilePlanArchive(workspace / ".omicsclaw" / "plans"))
-    registry.register(plan_write_tool(book))                 # once, per app
-    injector = PlanInjector(book.for_session(session_id))    # per exchange
-    result = await engine.run(messages, augmentor=injector)
-
-Four pieces, and each is a different kind of thing, which is why they are
-four modules rather than one:
-
-``plan`` / ``rules``
-    The state, and what may be said about it. Standard library only.
-``tool``
-    The model's one way in. ``plan_write``, read and write modes,
-    refusing a write that would record progress that did not happen.
-``injector``
-    Re-injection before every model call, plus a nudge for a run that has
-    explored for a long time without writing anything down.
-``archive`` / ``book``
-    One plan per session, written through to disk as it changes, restored
-    when a session resumes.
-
-**Planning is native, not a mode.** There is no switch a person flips to
-"enter planning" — the reference harness removed exactly that and said so
-(``plan.go:3-5``). What decides whether a task gets a plan is the model,
-reading :data:`~omicsclaw.planning.guidance.PLANNING_GUIDANCE` in its
-system prompt.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools`` and the
-standard library — the same whitelist as :mod:`omicsclaw.skills`, and
-for the same reason: ``plan_write`` declares its own
-:class:`~omicsclaw.tools.ToolPolicy`, and the guarded defaults would put
-a human approval prompt in front of every plan update. Notably **not**
-``omicsclaw.engine``: :class:`PlanInjector` satisfies that layer's
-``TurnAugmentor`` structurally, and ``tests/planning/`` runs the real
-code paths in a subprocess and then asserts no ``omicsclaw.engine``,
-``omicsclaw.context`` or ``omicsclaw.entry`` is in ``sys.modules``.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from .archive import (

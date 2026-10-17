@@ -1,37 +1,6 @@
-"""Process-local state behind the Desktop return channels, and their logic.
+"""Handle process-local Desktop interaction state.
 
-:class:`DesktopInteractions` is created once per
-:func:`~omicsclaw.entry.desktop.server.create_desktop_app` and holds three
-bounded maps, all in memory and none persisted:
-
-* the approval requests a ``/chat/stream`` body has shown as a
-  ``permission_request`` card, keyed by ``request_id``, so that
-  ``/chat/permission`` knows the session and the tool a decision is about;
-* the tools a session has allowed for the rest of its life in this
-  process ("allow for this session"), keyed by ``session_id``;
-* the sessions in the ``full_access`` permission profile;
-* ``(session_id, source_request_id) → turn_id``, so that ``/chat/abort``
-  can find the exchange a client is streaming, and a resuming
-  ``/chat/stream`` the exchange to reattach to;
-* ``turn_id → TurnUsage``, what the model calls of each exchange cost,
-  gathered across every stream that observed it.
-
-:func:`answer_permission`, :func:`abort_chat` and
-:func:`change_permission_profile` are the logic of ``POST
-/chat/permission``, ``POST /chat/abort`` and ``POST
-/chat/session-permission-profile`` over an already parsed JSON document,
-with no web framework in their signatures.
-
-``full_access`` allows, without a card, every request that is not marked
-``ask_every_time`` — the same line ``auto-approve`` draws — so a
-dangerous command, an explicit ``ask`` rule and a change to a protected
-file are still asked about. It lives here, per session and in memory,
-rather than in the permission gate's mode, which is one per process and
-shared by every session.
-
-A session grant and ``full_access`` are applied by an observer of the
-stream: an approval request raised while no ``/chat/stream`` body is
-reading the exchange is answered only once somebody observes it again.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
@@ -395,6 +364,18 @@ class DesktopInteractions:
     def forget_approval(self, request_id: str) -> None:
         """Drop one remembered request. Unknown ids are a no-op."""
         self._pending.pop(request_id, None)
+
+    def invalidate_tool(self, session_id: str, tool_name: str, reason: str) -> tuple[str, ...]:
+        """Deny stale pending calls without changing any remembered permission rule."""
+        settled = []
+        for request_id, held in tuple(self._pending.items()):
+            if held.session_id != session_id or held.request.tool_name != tool_name:
+                continue
+            handle = self._handle(held.turn_id)
+            if handle is not None and handle.approvals.settle(request_id, ApprovalDecision(approved=False, reason=reason)):
+                settled.append(request_id)
+            self._pending.pop(request_id, None)
+        return tuple(settled)
 
     def settle_granted(self, session_id: str, tool_name: str) -> tuple[str, ...]:
         """Allow every outstanding request a new session grant answers.

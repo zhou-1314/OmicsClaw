@@ -1,33 +1,6 @@
-"""HTML reduced to something a model can read, standard library only.
+"""Convert HTML to bounded text with the standard library.
 
-Modelled on harness9's ``internal/tools/web_content.go``, and the one
-place in this work where the reference cannot be ported, only answered:
-its pipeline is ``go-readability → html-to-markdown``, both third-party
-Go libraries, and this package may import nothing outside the standard
-library. There is no readability in it and no HTML-to-Markdown converter.
-
-**So what ships is a better version of the reference's fallback path.**
-Tags that are never content (``script``, ``style`` and neighbours) are
-dropped, as ``extractPlainText`` does; tags that are structurally
-boilerplate (``nav``, ``header``, ``footer``, ``aside``, ``form``) are
-dropped too; and structure is kept rather than flattened — headings as
-``#``, list items as ``-``, links as ``[text](url)``, ``pre`` in a fence.
-
-**The gap, stated rather than papered over:** ``go-readability`` finds
-the article by *scoring* nodes, so it discards a sidebar built from a
-``<div class="sidebar">``. A fixed tag list cannot. On a documentation
-page or a blog post the two are close; on a news site heavy with
-promotional furniture this returns more noise.
-
-**Truncation** aligns the cut to the last newline before the ceiling when
-that newline is past the halfway point, so a page is cut at a paragraph
-rather than mid-sentence. What is *not* ported is the loop after it in
-``web_content.go:91-93``, which walks backwards off a partial UTF-8
-character: a Go ``string`` is bytes and can be split mid-character, while
-a Python :class:`str` is code points and ``text[:n]`` cannot be.
-
-**Leaf-adjacent.** The standard library only — :mod:`html.parser` and
-:mod:`re`.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

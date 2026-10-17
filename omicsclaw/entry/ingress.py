@@ -1,39 +1,6 @@
-"""Who gets in, and whether the reply was taken.
+"""Admit incoming requests and track response delivery.
 
-Plan 0031 task A, decision Q23. Three surfaces — channel, desktop, CLI —
-share exactly two questions at their edge: *is this sender allowed to
-drive the agent*, and *did the message we sent back actually land*. Both
-were answered by ``omicsclaw/control/``, which this rebuild deletes.
-This module is that half of it, and only that half.
-
-**The names are deliberately the old ones.** ``telegram.py:20`` and
-``feishu.py:21`` import ``ChannelSurfaceBinding`` today;
-``desktop/turn_submission.py:30`` imports ``RawInboundV1`` and
-``RawContentBlockV1``. :class:`InboundMessage` stands where
-``RawInboundV1`` stood and :class:`Acceptance` where
-``DeliveryAttemptOutcome`` stood, because the reconnection is meant to
-be a changed import path rather than thirteen small acts of translation.
-Keeping a vocabulary three call sites already speak is not the same as
-keeping the architecture that coined it.
-
-**What was not brought across, and why it matters more than what was.**
-``ControlRuntimePorts`` had twenty-two fields; five of them were a bare
-:data:`~typing.Any` and a sixth was ``dict[str, Any] | None``. It is the
-shape the owner's "high cohesion, low coupling" instruction was aimed at,
-and the same shape plan 0030 already cut down once in
-``ContextAssemblyRequest``. So: **no field in this module mentions**
-:data:`~typing.Any` **at all**. :attr:`InboundMessage.values` is
-``Mapping[str, object]``, which is what ``Any`` was being used to avoid
-saying — a caller that puts something in gets ``object`` back and has to
-admit it is narrowing.
-
-**Both classes fail closed, and that is the whole of their value.** A
-sender allowlist is not a feature that can be added later without
-regression, because the regression is silent: a surface with no policy
-does not look broken, it looks like anybody may drive the agent. So
-:class:`SenderPolicy` has no default allowlist — omitting it is a
-:exc:`TypeError` — and an empty one is refused at construction rather
-than quietly admitting nobody.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

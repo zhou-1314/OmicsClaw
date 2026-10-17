@@ -1,23 +1,6 @@
-"""The prompt section that makes planning a habit rather than a feature.
+"""Define planning guidance for model requests.
 
-Plan 0039 §1. The reference harness is explicit that planning is a
-**native capability, not a mode** (``plan.go:3-5``, after its Plan Mode
-was removed): there is no switch to flip, no tool filtering and no
-runtime detection. What replaces all of that is one section of the system
-prompt plus one tool, and the model decides when a task is worth planning.
-
-This module is the text. :mod:`omicsclaw.planning` renders it;
-:func:`~omicsclaw.entry.assembly.default_sections` places it — the same
-split :mod:`omicsclaw.skills` has with the catalogue, and for the same
-reason: the layer that writes text and the layer that decides where text
-goes should not import each other.
-
-**Mount the section only when the tool is mounted.** The reference
-harness gates it on ``planEnabled`` (``builder.go:123``) and the
-consequence of getting it wrong is specific: a prompt that instructs the
-model to call ``plan_write`` when no such tool exists produces a call
-that fails, which the model then tries to correct — spending turns on a
-capability the deployment turned off.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

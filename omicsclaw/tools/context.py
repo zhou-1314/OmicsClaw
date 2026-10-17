@@ -1,156 +1,17 @@
-"""Out-of-band channels: how a running tool reaches the caller that started it.
+"""Carry approval, questions, progress and execution context through ContextVars.
 
-Plan 0028 §4 Q4. The seam step 3 published is ``execute(call)`` — one
-argument, and deliberately not a ``ctx``. Go's ``context.Context`` carries
-*values* as well as cancellation, and the reference harness uses that half
-for seven keys, of which this module reproduces two: an approval callback
-handed to the tool executor (``hooks/decision.go:60``) and a progress sink
-handed to sub-agent streaming (``hooks/subagent_progress.go:18``). Python
-has an environment-carried equivalent that does not require widening a
-published Protocol, so this module is what the Go ``ctx`` value half
-becomes: :mod:`contextvars`.
+Surfaces bind callbacks before scheduling tools. Each tool Task inherits its
+own context; separate sessions must not share one mutable Task context. The
+registry passes the effective deployment policy and timeout-pause callback to
+the concrete tool without owning the human decision.
 
-**Of the five not reproduced, three are observability spans and two are a
-mechanism worth naming.** ``approvedContextKey`` and
-``explicitlyAllowedContextKey`` (``hooks/decision.go:74`` and ``:89``,
-read at ``hooks/hook.go:87``) mark a *call* as already decided, so one
-tool call asks a human **at most once** however many layers of the hook
-chain want to ask. There is no equivalent here: :func:`require_approval`
-asks every time it is called. Every tool in this package calls it once, so
-nothing is wrong today — but a wrapping tool (a skill wrapper, an MCP
-proxy, a future sub-agent tool) would prompt twice, and the layer that
-would own the fix is the hook layer this package deliberately does not
-have.
+Approval and question channels fail closed when unavailable. An absent
+progress sink is a no-op. Approval waits pause the execution deadline; the
+surface owns the prompt deadline and must service requests while event
+consumption is suspended. Context values carry references and per-turn facts.
 
-That this works at all rests on one property of the engine:
-``engine/executor.py`` runs each call in its own :class:`asyncio.Task`,
-and ``Task.__init__`` calls :func:`contextvars.copy_context`, so every
-worker runs on a **copy of the context current when the turn's tools were
-scheduled**. A variable set by a surface before the turn is therefore
-readable inside a tool running three levels down, and the engine needs no
-change at all. A property nobody wrote down is a coincidence waiting to be
-refactored away, so it is written down here, and
-``tests/tools/test_context.py`` asserts it through the real
-``execute_tool_calls`` rather than by reading a variable back in the
-coroutine that set it.
-
-**What would break it is narrower than it looks.** Neither
-:class:`asyncio.TaskGroup` nor :func:`asyncio.gather` is a threat —
-both create Tasks, and a Task copies. The two that are: awaiting a call
-**inline** rather than in a Task, which leaves every tool writing into
-the turn's own context; and creating the Tasks with one shared
-``context=``, which is the only spelling that makes several workers share
-a mutable context on purpose.
-
-**The five questions plan 0028 §4 Q4 requires answering, answered.**
-
-1. *What is carried — a value or a reference?* **A reference.** The
-   variable holds the approval *callback* and the progress *sink*, never
-   an approval result. A decision that was computed before the tool ran
-   cannot be about the arguments the tool actually received, and a tool
-   that must block until a human clicks needs something it can await.
-   :func:`require_approval` awaits the callback, so the round trip is the
-   callback's own business — see :class:`ApprovalRequest`.
-
-2. *Who sets it?* **The surface** (CLI, Desktop, Channel), once, before
-   entering the agent turn — :func:`use_tool_context` or
-   :func:`set_tool_context`.
-
-3. *Who reads it?* **The concrete tool**, inside its own ``execute``.
-   :class:`~omicsclaw.tools.registry.ToolRegistry` reads neither channel
-   and still has no opinion about approval: it makes them exist and takes
-   no part in what travels down them. A registry that *enforced* approval
-   would have to know who is asking, which is precisely the knowledge
-   plan 0028 trap 12 keeps out of it.
-
-   It does publish two things, and it has to. The first is the policy in
-   force for a call, resolved by
-   :meth:`~omicsclaw.tools.registry.ToolRegistry.policy_for` — the
-   deployment's ``register(policy=)`` outranking the author's
-   ``tool.policy``, per plan 0028 §4 Q5 — and a tool asking with the
-   policy *it* holds would be asking with the author's, never the
-   deployment's. That made the whole of Q5 decorative in the one
-   direction that matters: a deployment tightening ``AUTO`` to ``ASK``
-   gated nothing, because the tool went on self-approving from its own
-   ``AUTO``. So :meth:`~omicsclaw.tools.registry.ToolRegistry.execute`
-   binds its resolution through :func:`use_effective_policy` and
-   :func:`require_approval` reads it from there. Publishing a resolution
-   is not enforcing it; the registry still neither asks nor decides.
-
-   The second is the scheduler's :data:`TimeoutPause`, bound through
-   :func:`use_timeout_pause` from what the engine handed the registry for
-   this call. Same shape and same reason: the thing a tool needs is owned
-   by a layer the tool may not import, so the dispatcher in the middle
-   passes it down instead.
-
-4. *What happens when nothing is set?* **Fail closed.**
-   :func:`require_approval` raises :exc:`ApprovalUnavailable` when a tool
-   needs consent and no channel is bound, which the registry turns into an
-   ``is_error`` Observation naming the reason. The absent channel is never
-   read as consent. Progress is the opposite and deliberately so: a
-   missing sink is the normal case, so :func:`report_progress` is a no-op
-   that reports having done nothing.
-
-5. *Can two sessions cross?* **Only if they share an asyncio Task.**
-   ``contextvars`` isolates per Task, not per coroutine call, so two
-   concurrent sessions in one process — which the Channel Surface has by
-   construction, Telegram and Feishu conversations interleaving on one
-   event loop — are isolated **iff each top-level session runs in its own
-   Task**. Two sessions binding a context inside one shared Task is a
-   real defect with a plausible-looking diff: the second ``set`` wins, and
-   one user's tool call is offered to the other user's approval prompt.
-   Both halves have a test.
-
-**Not a general-purpose bag with two extras bolted on.** The two named
-channels are named because they are the two that need a *reference*.
-:attr:`ToolContext.values` carries the flat per-turn facts the existing
-tool layer injects through ``ToolSpec.context_params`` — ``session_id``,
-``chat_id``, ``surface``, ``workspace``, ``thread_id`` and the rest — and
-exists so plan 0028 §5's "must have a one-for-one replacement" is true
-rather than aspirational. It is deliberately untyped: this layer must not
-learn what a ``surface`` is.
-
-**A third channel carries a question to the person.**
-:attr:`ToolContext.question` is bound the way the approval channel is and
-read by :func:`ask_question`, which raises :exc:`QuestionUnavailable` when
-none is bound.
-
-**A human's thinking time is no longer charged to the tool's timeout.**
-``engine/executor.py::_execute`` wraps ``executor.execute(call)`` in
-``asyncio.timeout(config.tool_timeout)`` — sixty seconds by default —
-while Q4.3 above puts the approval await *inside* the tool's own
-``execute``, so the two nest the wrong way round and a user who took
-longer than ``tool_timeout`` to press "approve" used to have the tool
-cancelled and the model told ``tool 'X' timed out after 60s``: false
-(nothing ran long, nobody answered) and actively misleading, since it
-sends the model to make the tool faster. :func:`asyncio.shield` was never
-the fix — the outer budget still raises at the next await point in this
-task — so the fix is the engine lifting its own deadline: it offers the
-call a :data:`TimeoutPause`, :func:`require_approval` enters it around
-the round trip, and the seconds that were left are restored on the way
-out. The engine's half is ``DeadlineAwareExecutor``, and the registry is
-what carries it here.
-
-A pause stops the clock; it does not bound the wait. **A surface that
-asks a person still owns the deadline on its own prompt** — an IM bot
-posting an approval card runs its own timer and answers "nobody
-responded" itself, so the refusal the model reads is the true one. What
-changed is that missing that deadline is now the surface's own report
-rather than a fabricated tool timeout.
-
-It owns one more thing, and it is the shape that hangs. **Whatever
-answers an :class:`ApprovalRequest` must be able to make progress while
-the consumer of ``execute_tool_calls`` is suspended between events** — a
-separate Task, or an ``await`` on the request queue from inside the
-``async for`` body. A consumer that only *polls* for requests between
-events never sees one, because the request is issued after it has gone
-back to waiting for the next event. Before the pause, such a consumer was
-released by ``tool_timeout`` — with the false sentence above — so this is
-a hazard the pause exposed rather than one it introduced. The reference
-harness has the same hazard in its own shape and spends eight lines on it
-at ``stream.go:51-58``.
-
-**Leaf-adjacent.** ``omicsclaw.tools.base`` and the standard library.
+Historical implementation notes and measurements are preserved in
+docs/engineering/runtime-tool-design-notes.md, under this module's path.
 """
 
 from __future__ import annotations
@@ -163,6 +24,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, TypeAlias
+
+from omicsclaw.schema.request import ToolInvocationContext
 
 from .base import ApprovalMode, RiskLevel, ToolPolicy
 
@@ -359,6 +222,9 @@ class ToolContext:
     """Where :func:`ask_question` puts a question to the person. ``None``
     means nobody can be asked."""
 
+    invocation: ToolInvocationContext | None = None
+    """Framework state of the request that produced this call, never model input."""
+
     def __post_init__(self) -> None:
         """Copy :attr:`values` and seal it, here rather than at one binder.
 
@@ -424,6 +290,7 @@ def use_tool_context(
     progress: ProgressSink | None = None,
     values: Mapping[str, Any] | None = None,
     question: QuestionChannel | None = None,
+    invocation: ToolInvocationContext | None = None,
 ) -> Iterator[ToolContext]:
     """Bind a context for the duration of a block, then restore it.
 
@@ -449,6 +316,7 @@ def use_tool_context(
         progress=progress,
         values=values if values is not None else _EMPTY_VALUES,
         question=question,
+        invocation=invocation,
     )
     token = _CONTEXT.set(context)
     try:

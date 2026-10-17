@@ -1,33 +1,6 @@
-"""Putting the plan back in front of the model, before every call.
+"""Include current plans in model request context.
 
-Plan 0039 §2.2. This is the half of the planning system that makes the
-other half worth having: a plan the model wrote four compactions ago is
-only authoritative if it is still *present*, and the conversation is
-exactly the place it will not be.
-
-Two things are appended, in this order, and both only to the copy that is
-sent:
-
-1. the **planning gate** — one nudge, at most once per exchange, when the
-   model has spent many turns of that exchange reading without writing a
-   plan or touching anything;
-2. the **plan block** — every outstanding item, verbatim, with a header
-   saying it outranks whatever the history now says.
-
-The order is the reference harness's (``loop_phases.go:201-216``) and it
-is the useful one: the nudge only ever fires when there is no plan, so
-the two never appear together, and if that ever changes the instruction
-to make a plan should come before the plan it is asking for.
-
-**Nothing here is persisted and nothing accumulates.** The engine appends
-these to the conversation it sends and then discards them; the next call
-recomputes from the store. That is what makes a plan edited by
-``plan_write`` visible on the very next call with no invalidation
-anywhere.
-
-:class:`PlanInjector` satisfies
-:class:`omicsclaw.engine.TurnAugmentor` **structurally**. It does not
-import it, and a layering test pins that.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

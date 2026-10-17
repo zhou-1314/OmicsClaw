@@ -1,26 +1,6 @@
-"""One span per model call, by wrapping the contract the loop programs against.
+"""Record telemetry around provider calls.
 
-The counterpart of ``observability/provider.go``, and the seam that needs
-the least argument: :class:`~omicsclaw.provider.LLMProvider` is a
-structural :class:`~typing.Protocol`, so a decorator satisfying it is
-invisible to the engine. Nothing in :mod:`omicsclaw.engine` or
-:mod:`omicsclaw.provider` changes, and a deployment that does not observe
-never constructs one —
-:meth:`~omicsclaw.observability.telemetry.Telemetry.trace_provider` hands
-the inner provider straight back.
-
-**Decorating a provider is safe in a way that decorating the registry was
-not.** ``entry/assembly.py`` refuses to let anything wrap
-:class:`~omicsclaw.tools.ToolRegistry` because the engine probes it with
-:func:`isinstance` for two optional Protocols and a wrapper that forgets
-one fails silently (defect R3). ``LLMProvider`` has no optional
-Protocols: four members, all of them required, all forwarded here — and
-``tests/observability/test_provider.py`` asserts the member list against
-the Protocol so that a fifth one added upstream fails a test rather than
-disappearing.
-
-Imports :mod:`omicsclaw.provider`, :mod:`omicsclaw.schema` and this
-package.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

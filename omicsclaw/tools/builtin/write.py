@@ -1,118 +1,16 @@
-"""``write_file`` — the first tool in this layer that can destroy something.
+"""Write UTF-8 files after validation, workspace resolution and approval.
 
-Plan 0029 §4 Q2, Q11 and traps 3, 5, 7 and 12. The reference is
-harness9's ``internal/tools/write_file.go``, whose whole design is three
-sentences in its package comment (``write_file.go:3-9``) and all three
-are kept: the path goes through the sandbox boundary, missing parent
-directories are created, and an existing file is **replaced**.
+Writes replace existing content and create missing parent directories. The
+approval receives the original call payload and identifies the resolved
+destination. No write or directory creation occurs before approval. A shared
+path lock coordinates writes with other file tools.
 
-**Overwrite semantics are a fact the model has to be told** (plan 0029
-trap 12). ``write_file.go:8-9`` says it and says why: the behaviour
-matches :func:`os.WriteFile`, there is no append and no merge, and
-deciding whether to read the file first is the *model's* job because the
-tool will not do it. That sentence is in :data:`_DESCRIPTION` for the
-model and in :meth:`WriteTool._reason` for the human, and the second is
-the one that changes an approval prompt from "may I write a file" into
-"may I replace the 4,000 bytes currently at this path".
+Filesystem errors become tool errors; cancellation propagates. An injected
+FileWriteEnvironment must honor the parent-directory and replacement
+contract. Local creation modes remain subject to the process umask.
 
-**Hand-written against the** :class:`~omicsclaw.tools.base.Tool`
-**Protocol, and the reason is the approval prompt** (plan 0029 §5, plan
-0028 §11). :class:`~omicsclaw.tools.function_tool.FunctionTool` calls its
-function with decoded keyword arguments, so a function wrapped by it can
-only show a human something re-encoded from what survived decoding — key
-order, spacing and any field the schema did not mention are gone, and
-those are exactly the differences a person reviewing a destructive call
-is looking at. ``execute`` here is handed the payload unparsed and hands
-that same string to
-:func:`~omicsclaw.tools.context.require_approval`. This and ``bash`` are
-the "some tools must be hand-written" set: both ask a human, so both need
-the bytes the model actually sent rather than the arguments a decoder
-reconstructed from them.
-
-**Order of operations, which is the design.** Decode, validate, resolve,
-**ask**, then write. Nothing before the approval touches the filesystem
-in a way that survives — resolution reads, it does not create — so a
-refusal at any point leaves no file behind. Resolving *before* asking is
-not an optimisation either: it is what lets the prompt name the real path
-the bytes will land at rather than the string the model chose, which for
-a path containing a symlink are different places.
-
-**Trap 3 is this file's to carry, and the helper layer cannot carry it.**
-:meth:`~omicsclaw.tools._workspace.Workspace.resolve` follows symlinks,
-so a link inside the workspace pointing at ``/tmp`` resolves to ``/tmp``
-and is refused — but nothing in that helper can force *this* module to
-call it before :meth:`~pathlib.Path.mkdir`, and ``mkdir(parents=True)``
-on an unresolved path would create directories out in ``/tmp`` before any
-check ran. So the test that matters is not "the tool returned an error";
-it is **"the external directory is still empty"**, and
-``tests/tools/test_write.py`` asserts that.
-
-**Trap 7 — the criterion is what the model should change next.** Every
-failure this tool produces is correctable by sending different arguments:
-a path outside the workspace, a directory where a file was meant, a name
-longer than the filesystem allows. All of them raise, and
-:meth:`~omicsclaw.tools.registry.ToolRegistry.execute` turns each into
-``is_error=True`` so the model reads the reason and retries differently.
-A denied approval is the one refusal that is *not* correctable by new
-arguments, and it says so in its own words — it comes from
-:exc:`~omicsclaw.tools.context.ApprovalDenied`, not from here.
-
-**Trap 5 — cancellation is not a failure to report.** Every ``except`` in
-this module names :exc:`OSError`. The engine's per-tool deadline arrives
-as :exc:`asyncio.CancelledError`, which is a :exc:`BaseException`, and it
-must pass through untouched: a human still deciding when the budget
-expires (a collision ``omicsclaw/tools/context.py`` documents in full)
-must not be reported to the model as a broken tool.
-
-**The ``Environment`` seam (plan 0029 Q11).** ``environment=None`` means
-the local filesystem. The width of that seam is the point of the
-decision: if only ``bash`` ran under isolation while ``write`` wrote
-straight to the host, the isolation would be decoration a model could
-step around by choosing the other tool. So this tool takes one too and
-uses it. :class:`FileWriteEnvironment` states the contract that harness9's
-own interface leaves implicit — an implementation must create parent
-directories itself, because ``sandbox.Environment`` has no ``mkdir`` and
-the auto-mkdir promise in the tool description does not stop being made
-when a call is routed.
-
-**Compared against** ``omicsclaw/runtime/tools/builders/engineering.py``
-``file_write`` (line 772), which this layer may not import. Plan 0029 §6
-requires every row to be accounted for:
-
-* Auto-mkdir: both do it. The old tool exposes it as a ``create_dirs``
-  argument defaulting to ``true``; that argument is **dropped**, matching
-  harness9, because its ``false`` branch only turns a working write into
-  "Error: parent directory does not exist" — a refusal the model answers
-  by setting the flag it should not have had to think about.
-* Return text: ``"Wrote file: {target}"`` there, a byte count and the
-  created/overwrote distinction here. The old form cannot tell a model
-  whether it just destroyed something.
-* Multi-root discovery (``_resolve_path_for_write`` falls back to
-  ``allowed_roots[0]``) is **not** kept, for the reason
-  ``_workspace.py`` gives about ``resolve_dest``: writing somewhere other
-  than where the model asked is how it learns that an escape attempt
-  worked.
-* Encoding: both write UTF-8 text. The old tool uses
-  :meth:`~pathlib.Path.write_text` with default permissions; this one
-  opens with :data:`FILE_MODE` explicitly, matching
-  ``write_file.go:113``.
-* No path locking there, and no equivalent anywhere in the old layer
-  except the serial barrier in ``runtime/tools/orchestration.py`` that
-  the new engine does not have — see ``omicsclaw/tools/_pathlock.py``.
-* **The old tool reports failure as ordinary output** (``"Error: cannot
-  write outside allowed roots: …"``), so a refused write reaches the run
-  as a success. This one raises and the registry marks ``is_error``.
-* **No approval in practice.** The old layer has the machinery —
-  ``ToolSpec.approval_mode`` and ``orchestration.py``'s policy decision —
-  but ``file_write``'s spec leaves ``approval_mode`` at its ``auto``
-  default and declares only ``risk_level=medium`` plus a speculative
-  classifier, so the whole-workspace write runs unattended. Here the ask
-  is in ``execute``, before the bytes, and is not optional.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools._pathlock``,
-``omicsclaw.tools._workspace``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, ``omicsclaw.tools.function_tool``,
-``omicsclaw.tools.builtin.read``, and the standard library.
+Historical migration notes and reference comparisons are preserved in
+docs/engineering/runtime-tool-design-notes.md, under this module's path.
 """
 
 from __future__ import annotations

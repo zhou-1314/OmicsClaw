@@ -1,63 +1,10 @@
-"""``omicsclaw.entry`` — the one place a deployment is read.
+"""Resolve deployment configuration from supplied arguments and environment.
 
-Plan 0031 task A, decision Q8. Every layer below this one was built to
-know nothing about its environment: ``EngineConfig`` reads no variables
-on purpose (plan 0027: "a turn ceiling that moves with the shell makes
-two runs of one benchmark incomparable"), ``omicsclaw.context`` takes
-the contract file and the model table as callables and integers, and
-``omicsclaw.tools`` takes a :class:`~omicsclaw.tools._workspace.Workspace`
-rather than finding one. All of that knowledge arrives here.
+The launch layer supplies both inputs. Lower layers receive typed settings
+instead of interpreting process globals. Provider credentials remain outside
+AppConfig and are handled by the provider's configuration path.
 
-**One parse point, and it fetches one thing.**
-:func:`resolve_app_config` is the only place a deployment is
-interpreted, but as of plan 0037 §5.4 it no longer *fetches* anything:
-the command line and the process environment are handed to it by
-:func:`omicsclaw.launch.main`, which is the only reader of those two
-globals in the program. This module therefore takes no interest in the
-process it runs in, and the rule over this package is now flat — no
-module under ``omicsclaw/entry/`` names either global, with no
-exemption list. The one declared exception to the whole arrangement
-survives from plan 0031 Q8 and lives a layer down:
-:func:`omicsclaw.provider.provider_from_env` keeps reading its own API
-key, because moving a secret through this dataclass would only add a
-place it can be printed from. Everything else — which workspace, which
-model, how long a tool may run — is a field below.
-
-**The timeout is one number, written once.** ``tool_timeout_s`` is the
-single source for both halves of the ceiling a tool runs under:
-:meth:`AppConfig.engine_config` derives the scheduler's
-``EngineConfig.tool_timeout`` and :meth:`AppConfig.bash_timeout` derives
-what ``bash`` is constructed with, one
-:data:`~omicsclaw.tools.builtin.bash.ENGINE_TIMEOUT_MARGIN` below it.
-Plan 0031 §12-2 is blunt about why two independent literals are not
-acceptable: the day somebody raises the ceiling they will raise one of
-them, and half of this mechanism does not help. The margin is imported
-rather than re-typed for the same reason.
-
-**Bad input is refused, not defaulted.** ``omicsclaw/provider/config.py``
-replaces an unparseable environment value with its default; this module
-raises :exc:`AppConfigError` instead. The divergence is deliberate and
-narrow: a provider setting that silently falls back costs one slow
-request, while ``OMICSCLAW_TOOL_TIMEOUT_S=6OO`` silently falling back to
-60 s is exactly the failure §12-2 exists to prevent, and a single parse
-point is the only place that can say so out loud.
-
-**What this module does not read.** No ``.env`` file, and that is no
-longer a gap. The reference harness loads ``cwd/.env``
-(``main.go:117``) and this repository's ``.env.example`` documents ``.env``
-as the way channel credentials are supplied, but a resolver that returns
-a value cannot make ``provider_from_env`` see a variable without
-mutating the live environment behind its caller's back. Loading it
-belongs to whatever owns the process, and since plan 0037's review
-:func:`omicsclaw.launch._adopt_dotenv` does it — before this function
-is called, without overriding anything already exported. Between the
-delivery and the review the promise was recorded in three places and
-implemented in none, which is the failure mode "recorded as open" has
-when nobody is counting.
-
-``os`` is still imported, for :data:`os.pathsep` in :func:`_as_paths`
-and nothing else. Plan 0037 §5.4 predicted the import would go with the
-default; separator-joined path lists are the reason it does not.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

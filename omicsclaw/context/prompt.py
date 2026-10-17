@@ -1,58 +1,9 @@
-"""``omicsclaw/context`` — sections in, one system prompt out.
+"""Assemble ordered sections into one system message followed by conversation.
 
-Plan 0030 task B, decisions Q5 and Q5b.
+The system message occupies index zero, so provider adapters and cache
+breakpoints see the same placement. Section renderers supply current values.
 
-**One system message per prompt, and it is message zero.** The two
-adapters disagree about several system messages:
-``anthropic_provider.py:262-291`` pulls them all out and joins them with
-``"\\n\\n"``, while ``openai_provider.py:123-169`` passes each through as
-its own ``{"role": "system"}`` entry. A prompt built as one message per
-section would therefore *be a different prompt* depending on which
-backend read it — one block on Anthropic, N entries on OpenAI. So
-:func:`assemble` emits exactly one, sections joined with ``"\\n\\n"``:
-the separator the harness uses (``builder.go:189``) and the one the
-Anthropic adapter would have used anyway.
-
-It also holds the prompt cache breakpoint still.
-``apply_cache_breakpoints`` marks the **last** system message
-(``openai_provider.py:212-252``); with only ever one, the mark cannot
-drift from message zero because somebody added a section.
-
-**Everything goes into the system prompt — including the volatile
-parts.** The layer being replaced split sections across two placements:
-stable text into the system prompt where a prefix cache could hold it,
-query-dependent text riding on the user turn where churn was free. The
-owner's ruling of 2026-09-18 replaced that with the harness's shape
-(``builder.go:78-189``, one ``parts`` slice and one join), and the cost
-is recorded rather than hidden:
-
-* Volatile blocks — skill context, scoped memory, capability assessment,
-  knowledge guidance, plans, knowhow constraints — now sit inside the
-  cached prefix, so each change invalidates it. The mark
-  ``apply_cache_breakpoints`` places is paid for in full every time.
-* This repository has more volatile blocks than the harness, which has
-  exactly one (long-term memory) and can afford it.
-* The tool half of the prefix is untouched: ``registry.available_tools()``
-  is still byte-stable on purpose. Only the prompt half lost its return.
-
-Somebody looking at a low cache hit rate should read this paragraph
-before changing anything — it is a decision, not an oversight.
-
-**Order is arrival order.** The replaced layer sorted by ``(order,
-key)``. The harness appends, and so does
-:meth:`PromptAssembler.with_section`. Byte stability does not suffer —
-arrival order is just as deterministic as a sort key — but the
-responsibility moves: **a composition root must add sections in the
-order it wants them**, because there is no ``order`` field to correct
-them with afterwards.
-
-**No clock lives here.** Not a ``clock`` parameter either: today's date
-is external knowledge like every other, so a composition root passes
-``Section(key="date", heading="", source=lambda: date.today().isoformat())``
-and the injectability is the closure's, not this layer's. What is left
-is a negative property — :meth:`PromptAssembler.render` never calls
-``date.today()``, ``datetime.now()`` or ``time.time()`` — which is both
-stronger and easier to test than a parameter would have been.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

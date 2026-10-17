@@ -1,28 +1,6 @@
-"""``omicsclaw/engine`` — how one run is budgeted.
+"""Configure execution budgets.
 
-Plan 0027 §3. The sibling of
-:class:`~omicsclaw.provider.config.ProviderConfig`, and deliberately
-disjoint from it: that record holds what a *model call* needs — model,
-temperature, output ceiling, timeouts — while this one holds what a
-*loop* needs, which is entirely a matter of budgets. Nothing here reaches
-a prompt and nothing here names a vendor.
-
-One difference from its sibling is load-bearing. ``ProviderConfig`` is
-resolved from the ambient shell, because an API key has nowhere else to
-live. :class:`EngineConfig` reads **nothing**: a caller constructs one
-and passes it in. A turn ceiling that changed with whichever shell
-launched the process would make two runs of the same benchmark task
-incomparable, and the resulting failure — a task that stalls on one
-machine and completes on another — looks like a model regression rather
-than like configuration.
-
-The reference harness spells this as sixteen ``With…`` functional
-options mutating the engine in place. A frozen record plus
-:meth:`EngineConfig.with_overrides` says the same thing without letting a
-live engine's budget be edited underneath a running loop.
-
-**Leaf-adjacent.** ``omicsclaw.schema`` and the standard library only —
-and in this module, only the standard library.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

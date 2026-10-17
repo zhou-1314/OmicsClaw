@@ -1,58 +1,10 @@
-"""``omicsclaw/entry`` — what one user exchange emits, with an identity.
+"""Define identified events emitted during a user exchange.
 
-Plan 0031, step 6 of the staged framework rebuild. Step 3
-(:mod:`omicsclaw.engine`) already emits :class:`~omicsclaw.engine.types.
-EngineEvent`; this module is its **superset**, and the superset exists for
-three reasons that are all structural rather than stylistic:
+TurnEvent includes engine progress, approval and question lifecycle, context
+compaction and exchange completion. The entry layer supplies the identity
+and events that are outside the engine's orchestration contract.
 
-``APPROVAL_REQUIRED`` / ``APPROVAL_SETTLED``
-    The engine has no representation for "a human is being asked". It
-    cannot grow one honestly either: the ``await`` that waits for a person
-    happens *inside* a tool, inside the engine generator's ``__anext__``,
-    so the generator that would have to report the question is the same
-    generator that is blocked on its answer. The layer that binds
-    ``ApprovalChannel`` is this one, so the layer that can say so is this
-    one (plan 0031 Q5).
-
-``QUESTION_ASKED`` / ``QUESTION_SETTLED``
-    The same arrangement for a question a tool puts to the person through
-    the question channel this layer binds.
-
-``CONTEXT`` / ``COMPACTION``
-    Both come from the compactor the engine consults before each model
-    call, not from the engine: the engine does not know what a budget or
-    a compaction record is. They are published by the exchange that
-    supplied the compactor, so they reach the stream ahead of that model
-    call's own events.
-
-``QUEUED`` / ``GAP`` / ``EXCHANGE_*``
-    Facts about *delivery*, not about the loop: a second message arriving
-    while the first is still running, an observer whose cursor fell off
-    the ring, and the boundary of one user round-trip.
-
-**Two scopes, deliberately not the same word** (Q21)
-------------------------------------------------------
-
-``TURN_END`` is the engine's, and it fires **once per model call** — the
-emit site is ``engine/loop.py:287``, inside the ``while`` that starts at
-``:234``, so one user round-trip produces *N* of them, one per
-Thought→Action→Observation cycle.
-
-``EXCHANGE_START`` / ``EXCHANGE_END`` are this layer's, and they fire
-**once per user round-trip** — exactly one each, whatever happened in
-between. Pairing a new ``*_START`` with the engine's ``TURN_END`` would
-have mismatched their cardinality, which is the drafting error Q21
-records.
-
-**Pass-through events carry the original** :class:`EngineEvent`, on
-:attr:`TurnEvent.engine`, never a re-packed copy. Re-packing would create
-a second place that has to change every time the engine's event grows a
-field, and the first place would keep compiling while the second silently
-dropped it.
-
-This module is types only: no I/O, no clock, no logging. Transport lives
-in :mod:`omicsclaw.entry.stream` and projection in
-:mod:`omicsclaw.entry.render`.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

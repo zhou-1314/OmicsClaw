@@ -1,42 +1,6 @@
-"""Reading ``.mcp.json``: which MCP servers to connect, and how.
+"""Read MCP server configuration.
 
-The file uses the ``mcpServers`` shape most MCP clients share::
-
-    {
-      "mcpServers": {
-        "context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]},
-        "remote": {
-          "type": "http",
-          "url": "https://example.org/mcp",
-          "headers": {"Authorization": "Bearer ${REMOTE_TOKEN}"}
-        }
-      }
-    }
-
-Per server:
-
-``type`` / ``transport``
-    ``"stdio"`` or ``"http"`` (``"streamable-http"`` and
-    ``"streamable_http"`` are accepted spellings of ``"http"``). When
-    omitted it is inferred: ``command`` means stdio, ``url`` means http.
-    ``"sse"`` and ``"websocket"`` are rejected as unsupported.
-``command``, ``args``, ``env``
-    The stdio server's program, its arguments, and extra environment
-    variables — an object, or a list of ``"KEY=VALUE"`` strings.
-``url``, ``headers``
-    The HTTP server's endpoint and request headers.
-``enabled`` / ``disabled``
-    A server can be switched off without deleting it.
-``tools``
-    An allowlist of the server's own tool names; absent means all.
-
-``${VAR}`` and ``${VAR:-default}`` are expanded in ``command``, ``args``,
-``env`` values, ``url`` and ``headers`` values. Unknown keys are ignored.
-
-A missing file is an empty configuration. A file that cannot be read or
-parsed raises :exc:`MCPConfigError`. An invalid entry is *rejected* — kept
-on :attr:`MCPConfig.rejected` with its reason — and the other entries still
-load.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

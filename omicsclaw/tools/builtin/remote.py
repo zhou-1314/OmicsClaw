@@ -1,61 +1,9 @@
-"""``remote_*`` and ``ask_about_host`` — the remote execution tool family.
+"""Expose remote execution, job observation and host-knowledge tools.
 
-C1 of the remote runtime plan: a Claude-Science-shaped execution plane,
-where the remote host is asked for nothing but ``sshd`` and a POSIX
-shell. The agent gets five tools — ``remote_exec``, ``remote_submit``,
-``remote_status``, ``remote_cancel``, ``remote_fetch`` — plus
-``ask_about_host``, which puts a question about a host to the person and
-writes the answer into the host knowledge base.
+Composition injects RemotePlane; tools refuse execution when it is absent.
+The tools layer does not construct SSH clients or remote persistence stores.
 
-**The plane is injected** (:class:`RemotePlane`), for the reason every
-environment seam in this package exists: ``omicsclaw/tools/`` is a leaf
-layer and may import ``omicsclaw.schema`` and nothing else inside this
-namespace, while the SSH spawner, the probe parser and the SQLite stores
-live in ``omicsclaw.remote``. The composition root
-(:func:`~omicsclaw.entry.assembly.build_app`) binds
-``omicsclaw.remote.plane.RemotePlaneBinding`` when
-:attr:`~omicsclaw.entry.config.AppConfig.remote_execution` is on; a tool
-constructed without a plane refuses at execution time, the same "the
-surface binds it" refusal ``save_artifact``'s sink makes, because no
-argument the model can send could supply a database or an SSH client.
-
-**Hand-written like ``bash``, and for the same reason**: every tool here
-is ``ASK``, and an approval prompt must quote the bytes the model
-actually sent — an adapter that decodes and re-encodes cannot. The
-approval *reason* names the host and the ``intent`` argument, because
-"run a shell command on ``gpu.lab``" and "run a shell command" are
-different decisions for the person clicking, and ``intent`` is the
-model's own one-line human-language title for the card.
-
-**Host names are validated, commands are not.** A ``host`` that matches
-:data:`HOST_NAME` is an ``ssh`` config alias or a DNS name — a closed
-alphabet with no space, metacharacter or leading dash, so it cannot
-become an option or a second word on any ``ssh`` command line this plane
-builds. A ``command`` is deliberately *not* filtered: it is a whole
-programming language, the boundary claimed is the approval gate (the
-same ruling ``builtin/bash.py`` states for itself), and the command
-reaches the process layer as one ``argv`` element through
-``exec``-style spawning, so no local shell ever re-parses it. What the
-remote shell does with it is exactly what the human approved.
-
-**A non-zero exit is a result, not a failure** — ``remote_exec`` follows
-``bash``'s Q6 ruling, and for the same reason: the model's next move
-after ``squeue`` answering "invalid job id specified" is to fix the call,
-not to look for a broken tool. Timeouts, unreachable hosts and refused
-arguments are the tool's own failures and are raised.
-
-**Timeouts and output caps follow ``bash``'s numbers.** Output is cut in
-the middle keeping two thirds of the tail (:data:`MAX_OUTPUT_CHARS`
-imported rather than re-declared — one ceiling, one place), and the
-``remote_exec`` budget is capped at 600 s rather than ``bash``'s 45
-because the point of the tool is remote round-trips that don't fit a
-local attention span; anything longer than that belongs in
-``remote_submit``, which is the whole distinction between the two.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, ``omicsclaw.tools.function_tool``,
-``omicsclaw.tools.builtin.bash`` (for the truncation constants), and the
-standard library.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

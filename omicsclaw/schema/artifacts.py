@@ -1,22 +1,6 @@
-"""The artifact vocabulary: the kinds every layer names artifacts by.
+"""Define shared artifact types.
 
-P2 of the front-back plan gave this vocabulary exactly seven words —
-``figure | table | h5ad | rds | report | pdf | other`` — and two layers
-have to agree on it without either importing the other: the tools layer
-(``save_artifact`` offers the enum to the model) and the memory layer
-(the store persists it). That is precisely what this package is — the
-one vocabulary the layers share — so the words live here rather than in
-either of them, and the extension tables that pick a kind come with
-them because two of those tables would be two places the same
-``.h5ad`` could stop meaning ``h5ad``.
-
-``.md`` reads as ``report``: ``report.md`` is the convention every
-curated skill's CLI writes for its summary. An unrecognized extension
-lands on ``other`` and ``application/octet-stream`` — never an error,
-because the kind of a file that exists is a fact to record, not an
-argument to validate. Additive-only within a schema version: a client
-that meets an unknown kind falls back to a generic icon, exactly as it
-falls back to ``other``.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -1,52 +1,6 @@
-"""The session-scoped persistent kernel manager.
+"""Manage persistent kernels for sessions.
 
-One :class:`PersistentKernelManager` per deployment; one
-:class:`~omicsclaw.kernel.session.SessionKernel` per ``session_id``. A
-kernel is a **serial resource** — every session's executes run under that
-session's :class:`asyncio.Lock`, because an IPython kernel executes one
-request at a time and a second request would queue invisibly behind the
-first while its caller believes it is running.
-
-**The cancel ladder is four tiers** (OmicOS ``adata_kernel_runtime.py``
-evidence): ``interrupt_kernel()`` → a 10 s grace for the executing task
-to observe it → reset (kill the kernel, drop the handle cache, leave the
-session lazily rebuildable) → a ``pass`` probe that proves whatever
-kernel is left actually answers. :meth:`cancel` runs on the event loop
-while the blocked execute sits on a worker thread, which is the only
-safe arrangement — the ladder climbs from outside the cell.
-
-**Restart is lazy and announced.** A kernel that dies — killed
-externally, recycled by the reaper, or reset by a timeout — is *not*
-rebuilt at that moment. The next :meth:`execute` cold-starts one, and
-that cell's stderr begins with a handover notice carrying the dead
-kernel's namespace summary (variable / type / shape, AnnData
-special-cased) when one could be captured before the death, plus the
-standing advice to restore from artifacts and files rather than
-recompute. A kernel killed under us gets the no-summary variant of the
-same notice — an honest "variables are gone" beats a fabricated one.
-
-**Restart-need is a double signal** (the plan's fusion: CS's memory
-threshold and OmicOS's counter, each alone too trigger-happy): a
-session is marked for recycling-before-next-cell only when **both** the
-cell count and the peak RSS have crossed their thresholds, probed after
-every cell via ``/proc`` (:meth:`SessionKernel.peak_rss_kb`) — the same
-usage probe whose numbers ride the ``usage`` event.
-
-**A session's kernel also has a location** (C3): ``"local"`` (the whole
-of P4, and the default) or ``"remote:<ssh alias>"``. The state key grows
-a third component, so one session may hold a local python kernel and a
-remote one at once — separate namespaces, separate lifecycles, the same
-id. The manager knows the location *shape* and nothing more: a remote
-kernel is built by the injected *remote_runtime* (an async
-``start(session_id, host=..., ...) -> kernel`` plus its own environment
-provisioning, living in :mod:`omicsclaw.remote.kernel` — this package
-imports nothing of it, the way ``jobs_manager`` holds its planes). With
-no runtime bound, a remote location is refused at the door: a deployment
-that never asked for remote kernels behaves exactly as before, which a
-test pins. The reaper, the cancel ladder and the obituary notices serve
-remote kernels identically — only ``_start_locked`` and the park's kill
-(which now runs on a worker thread, so a remote kill can pay its ssh
-round trip without blocking the loop) know where a kernel lives.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
@@ -190,6 +144,7 @@ class SessionState:
     executing: bool = False
     current_job: str = ""
     current_execution_token: str = ""
+    preserve_on_timeout: bool = False
     last_error: str = ""
     target_workdir: str = ""
     """The immutable remote target work directory bound to this state.
@@ -237,11 +192,17 @@ class PersistentKernelManager:
         remote_runtime: Any = None,
         spawn_wrapper: SpawnWrapper | None = None,
         env_scrubber: Callable[[Mapping[str, str]], dict[str, str]] | None = None,
+        manual_lifecycle: bool = False,
+        kernel_factory: Callable | None = None,
+        environment_guard=None,
     ) -> None:
         self.workspace = Path(workspace)
         self.limits = limits or OutputLimits()
         self.cell_timeout_s = float(cell_timeout_s)
         self.python = python
+        self.manual_lifecycle = manual_lifecycle
+        self._kernel_factory = kernel_factory
+        self._environment_guard = environment_guard
         self.remote_runtime = remote_runtime
         self._spawn_wrapper = spawn_wrapper
         self._env_scrubber = env_scrubber
@@ -329,6 +290,7 @@ class PersistentKernelManager:
         retry_on_death: bool = True,
         cancelled: Callable[[], bool] | None = None,
         execution_token: str = "",
+        preserve_on_timeout: bool = False,
     ) -> CellResult:
         """Run *code* on *session_id*'s kernel, starting one if needed.
 
@@ -350,6 +312,10 @@ class PersistentKernelManager:
         if language not in ("python", "r"):
             raise ValueError(f"unsupported kernel language: {language!r}")
         location = normalize_location(location)
+        if preserve_on_timeout and (location != "local" or retry_on_death):
+            raise ValueError(
+                "protected operations require local execution without retry"
+            )
         if location != "local":
             if self.remote_runtime is None:
                 raise ValueError(
@@ -371,6 +337,10 @@ class PersistentKernelManager:
         self._ensure_reaper()
         state = self.state_for(session_id, language=language, location=location)
         async with state.lock:
+            if self._environment_guard is not None and state.location == "local":
+                await self._environment_guard.prepare_kernel(
+                    state, self.python, self._spawn_wrapper
+                )
             if cancelled is not None and cancelled():
                 return CellResult(status="interrupted")
             if location != "local":
@@ -397,117 +367,183 @@ class PersistentKernelManager:
                 state.protected.add("executing")
                 state.current_job = str(job_id)
                 state.current_execution_token = execution_token
-            try:
-                if state.restart_needed and state.kernel is not None:
-                    await self._recycle_locked(
-                        state, reason=state.restart_needed, with_summary=True
-                    )
-                attempt = 0
-                mid_cell_retry = False
-                while True:
-                    attempt += 1
-                    notice = ""
-                    if state.kernel is not None and not await asyncio.to_thread(
-                        state.kernel.is_alive
-                    ):
-                        # The kernel died between cells (killed externally,
-                        # or it crashed after the last cell): announce, then
-                        # cold-start beneath this same call.
-                        await self._park_with_obituary(
-                            state,
-                            summary=None,
-                            reason="the previous kernel died before this cell",
-                        )
-                    if state.kernel is None:
-                        await self._start_locked(
-                            state, target_workdir=state.target_workdir
-                        )
-                    if self._on_kernel_ready is not None and state.kernel is not None:
-                        await asyncio.to_thread(self._on_kernel_ready, state)
-                    if state.obituary_pending:
-                        notice = state.obituary
-                        state.obituary_pending = False
-                    prefix = ""
-                    sync_info: dict[str, Any] | None = None
-                    if adata_in:
-                        sync_info, prefix = await asyncio.to_thread(
-                            self._sync_input, state, adata_in, adata_binding
-                        )
+                state.preserve_on_timeout = preserve_on_timeout
 
-                    def execute_cell(source=prefix + code):
-                        # Cancellation during startup or a lock wait must not
-                        # become a new command after the caller has stopped.
+            async def execute_owned():
+                try:
+                    if (
+                        state.restart_needed
+                        and state.kernel is not None
+                        and not self.manual_lifecycle
+                        and not preserve_on_timeout
+                    ):
+                        await self._recycle_locked(
+                            state, reason=state.restart_needed, with_summary=True
+                        )
+                    attempt = 0
+                    mid_cell_retry = False
+                    while True:
+                        attempt += 1
+                        notice = ""
+                        if (
+                            self.manual_lifecycle
+                            and state.born_at
+                            and (
+                                state.kernel is None
+                                or not await asyncio.to_thread(state.kernel.is_alive)
+                            )
+                        ):
+                            return CellResult(
+                                status="dead",
+                                notice="Kernel generation lost; explicit release and bind required",
+                            )
+                        if state.kernel is not None and not await asyncio.to_thread(
+                            state.kernel.is_alive
+                        ):
+                            # The kernel died between cells (killed externally,
+                            # or it crashed after the last cell): announce, then
+                            # cold-start beneath this same call.
+                            await self._park_with_obituary(
+                                state,
+                                summary=None,
+                                reason="the previous kernel died before this cell",
+                            )
+                        if state.kernel is None:
+                            if (
+                                self._environment_guard is not None
+                                and state.location == "local"
+                            ):
+                                await self._environment_guard.prepare_kernel(
+                                    state,
+                                    self.python,
+                                    self._spawn_wrapper,
+                                    starting=True,
+                                )
+                            await self._start_locked(
+                                state, target_workdir=state.target_workdir
+                            )
+                        if (
+                            self._on_kernel_ready is not None
+                            and state.kernel is not None
+                        ):
+                            await asyncio.to_thread(self._on_kernel_ready, state)
+                        if state.obituary_pending:
+                            notice = state.obituary
+                            state.obituary_pending = False
+                        prefix = ""
+                        sync_info: dict[str, Any] | None = None
+                        if adata_in:
+                            sync_info, prefix = await asyncio.to_thread(
+                                self._sync_input, state, adata_in, adata_binding
+                            )
+
+                        def execute_cell(source=prefix + code):
+                            # Cancellation during startup or a lock wait must not
+                            # become a new command after the caller has stopped.
+                            if cancelled is not None and cancelled():
+                                return CellResult(status="interrupted")
+                            if (
+                                self._environment_guard is not None
+                                and state.location == "local"
+                            ):
+                                self._environment_guard.before_cell(state)
+                            options = (
+                                {"preserve_on_timeout": True}
+                                if preserve_on_timeout
+                                else {}
+                            )
+                            return state.kernel.execute(
+                                source,
+                                timeout_s=float(timeout_s or self.cell_timeout_s),
+                                callbacks=callbacks,
+                                **options,
+                            )
+
                         if cancelled is not None and cancelled():
                             return CellResult(status="interrupted")
-                        return state.kernel.execute(
-                            source,
-                            timeout_s=float(timeout_s or self.cell_timeout_s),
-                            callbacks=callbacks,
+                        result = await asyncio.to_thread(execute_cell)
+                        if (
+                            result.status == "dead"
+                            and retry_on_death
+                            and attempt == 1
+                            and not state.resetting
+                        ):
+                            # A kernel that dies *mid-cell* is not the cell's
+                            # fault: park it, and retry the cell once on a
+                            # cold-started kernel that carries the notice — the
+                            # caller asked for work, and the work has not had a
+                            # chance to run. A second death is reported as-is,
+                            # and a death caused by a cancel's tier-3 kill is
+                            # never retried (the caller asked for the opposite).
+                            # The retry is disclosed below: a cell that already
+                            # had side effects may have run them twice.
+                            await self._park_with_obituary(
+                                state,
+                                summary=None,
+                                reason="the previous kernel died mid-cell",
+                            )
+                            mid_cell_retry = True
+                            continue
+                        notices = []
+                        if notice:
+                            notices.append(notice)
+                        if mid_cell_retry:
+                            notices.append(_RETRY_DISCLOSURE)
+                        result.notice = "\n".join(notices)
+                        if notices:
+                            # The plan puts the handover notice at the *top* of
+                            # the next cell's stderr — the first thing a model
+                            # or a person reads — with the retry disclosure
+                            # second, never in front of it.
+                            result.stderr = "\n".join(notices) + "\n" + result.stderr
+                        if sync_info is not None:
+                            result.usage["adata_sync"] = sync_info
+                        state.cells += 1
+                        state.last_error = (
+                            (result.error or {}).get("evalue", "")
+                            if result.error
+                            else ""
                         )
+                        probe = await asyncio.to_thread(state.kernel.peak_rss_kb)
+                        if probe is not None:
+                            state.peak_rss_kb = max(state.peak_rss_kb or 0, probe)
+                        self._evaluate_restart_signals(state)
+                        if result.status == "timeout" and not preserve_on_timeout:
+                            # Unknown kernel state after a timeout: reset now so
+                            # the notice is ready for the next call.
+                            await self._park_with_obituary(
+                                state,
+                                summary=None,
+                                reason="the previous kernel was reset after a cell timeout",
+                            )
+                        return result
+                finally:
+                    async with state.cancel_guard:
+                        state.executing = False
+                        state.protected.discard("executing")
+                        state.current_job = ""
+                        state.current_execution_token = ""
+                        state.preserve_on_timeout = False
+                        state.last_activity = time.time()
 
-                    if cancelled is not None and cancelled():
-                        return CellResult(status="interrupted")
-                    result = await asyncio.to_thread(execute_cell)
-                    if (
-                        result.status == "dead"
-                        and retry_on_death
-                        and attempt == 1
-                        and not state.resetting
-                    ):
-                        # A kernel that dies *mid-cell* is not the cell's
-                        # fault: park it, and retry the cell once on a
-                        # cold-started kernel that carries the notice — the
-                        # caller asked for work, and the work has not had a
-                        # chance to run. A second death is reported as-is,
-                        # and a death caused by a cancel's tier-3 kill is
-                        # never retried (the caller asked for the opposite).
-                        # The retry is disclosed below: a cell that already
-                        # had side effects may have run them twice.
-                        await self._park_with_obituary(
-                            state,
-                            summary=None,
-                            reason="the previous kernel died mid-cell",
-                        )
-                        mid_cell_retry = True
-                        continue
-                    notices = []
-                    if notice:
-                        notices.append(notice)
-                    if mid_cell_retry:
-                        notices.append(_RETRY_DISCLOSURE)
-                    result.notice = "\n".join(notices)
-                    if notices:
-                        # The plan puts the handover notice at the *top* of
-                        # the next cell's stderr — the first thing a model
-                        # or a person reads — with the retry disclosure
-                        # second, never in front of it.
-                        result.stderr = "\n".join(notices) + "\n" + result.stderr
-                    if sync_info is not None:
-                        result.usage["adata_sync"] = sync_info
-                    state.cells += 1
-                    state.last_error = (
-                        (result.error or {}).get("evalue", "") if result.error else ""
-                    )
-                    probe = await asyncio.to_thread(state.kernel.peak_rss_kb)
-                    if probe is not None:
-                        state.peak_rss_kb = max(state.peak_rss_kb or 0, probe)
-                    self._evaluate_restart_signals(state)
-                    if result.status == "timeout":
-                        # Unknown kernel state after a timeout: reset now so
-                        # the notice is ready for the next call.
-                        await self._park_with_obituary(
-                            state,
-                            summary=None,
-                            reason="the previous kernel was reset after a cell timeout",
-                        )
-                    return result
-            finally:
-                async with state.cancel_guard:
-                    state.executing = False
-                    state.protected.discard("executing")
-                    state.current_job = ""
-                    state.current_execution_token = ""
-                    state.last_activity = time.time()
+            if not preserve_on_timeout:
+                return await execute_owned()
+            # This task owns the kernel until all worker-thread calls return.
+            # Cancelling its observer cannot release the execution lock early.
+            owned = asyncio.create_task(execute_owned())
+            observer_cancelled = False
+            while not owned.done():
+                try:
+                    await asyncio.shield(owned)
+                except asyncio.CancelledError:
+                    observer_cancelled = True
+                except Exception:  # noqa: BLE001 - retrieve the owned result below
+                    break
+            if observer_cancelled:
+                if not owned.cancelled():
+                    owned.exception()
+                raise asyncio.CancelledError()
+            return owned.result()
 
     def _sync_input(
         self, state: SessionState, adata_in: str, binding: str
@@ -530,6 +566,8 @@ class PersistentKernelManager:
         return info, prefix
 
     def _evaluate_restart_signals(self, state: SessionState) -> None:
+        if self.manual_lifecycle:
+            return
         if state.restart_needed:
             return
         if (
@@ -562,7 +600,9 @@ class PersistentKernelManager:
                     _log.exception("figure registration failed: %s", path)
             return artifact_id, "figure"
 
-        if state.location != "local":
+        if self._kernel_factory is not None:
+            kernel = await self._kernel_factory(state, _on_figure)
+        elif state.location != "local":
             # The remote half owns everything a far-away process needs —
             # the environment, the launch, the tunnel, the attach — and
             # raises on a host that refuses; a refusal here is a failed
@@ -587,8 +627,20 @@ class PersistentKernelManager:
                 language=state.language,
                 spawn_wrapper=self._spawn_wrapper,
                 env_scrubber=self._env_scrubber,
+                signal_guard_factory=(
+                    lambda pid: self._environment_guard.register_kernel(state, pid)
+                )
+                if self._environment_guard is not None
+                else None,
             )
-            await asyncio.to_thread(kernel.start)
+            try:
+                await asyncio.to_thread(kernel.start)
+                if self._environment_guard is not None:
+                    self._environment_guard.kernel_ready(state)
+            except BaseException:
+                if self._environment_guard is not None:
+                    await self._environment_guard.kernel_closed(state)
+                raise
         state.kernel = kernel
         state.born_at = time.time()
         state.cells = 0
@@ -666,15 +718,14 @@ class PersistentKernelManager:
                 )
             )
 
-        if not scoped:
+        # The fixed checkpoint stop policy owns its interrupt and cannot be
+        # escalated by an ordinary cancellation request.
+        async with state.cancel_guard:
+            if not owns_execution():
+                return "idle"
+            if state.preserve_on_timeout:
+                return "protected"
             await asyncio.to_thread(kernel.interrupt)
-        else:
-            # Keep ownership fixed until the signal is sent. The old execution
-            # cannot release its session lock and admit another cell meanwhile.
-            async with state.cancel_guard:
-                if not owns_execution():
-                    return "idle"
-                await asyncio.to_thread(kernel.interrupt)
         deadline = time.monotonic() + CANCEL_GRACE_S
         while state.executing and time.monotonic() < deadline:
             if scoped and not owns_execution():
@@ -698,6 +749,8 @@ class PersistentKernelManager:
         async with state.cancel_guard:
             if scoped and not owns_execution():
                 return "interrupted"
+            if state.preserve_on_timeout:
+                return "protected"
             state.resetting = True
             await asyncio.to_thread(kernel.kill)
         async with state.lock:
@@ -713,12 +766,16 @@ class PersistentKernelManager:
         return "reset"
 
     async def _probe(self, state: SessionState) -> bool:
-        """Tier 4: a ``pass`` cell proving the kernel still answers."""
+        """Tier 4: a language-specific no-op proves the kernel still answers."""
         kernel = state.kernel
         if kernel is None:
             return False
         try:
-            outcome = await asyncio.to_thread(kernel.execute, "pass\n", timeout_s=15.0)
+            outcome = await asyncio.to_thread(
+                kernel.execute,
+                "invisible(NULL)\n" if state.language == "r" else "pass\n",
+                timeout_s=15.0,
+            )
         except Exception:  # noqa: BLE001 - a probe that raises is a dead kernel
             return False
         return outcome.status == "ok"
@@ -741,6 +798,8 @@ class PersistentKernelManager:
                 await asyncio.to_thread(kernel.kill)
             finally:
                 state.kernel = None
+                if self._environment_guard is not None and state.location == "local":
+                    await self._environment_guard.kernel_closed(state)
         dropped = self.handles.drop_session(state.session_id)
         handle_note = ", ".join(dropped) if dropped else "no registered adata handles"
         if summary is None:
@@ -788,10 +847,14 @@ class PersistentKernelManager:
                 state.kernel = None
                 if kernel is not None:
                     await asyncio.to_thread(kernel.shutdown)
+                if self._environment_guard is not None and state.location == "local":
+                    await self._environment_guard.kernel_closed(state)
 
     # ---- the reaper task ----
 
     def _ensure_reaper(self) -> None:
+        if self.manual_lifecycle:
+            return
         if self._reaper_task is None or self._reaper_task.done():
             self._reaper_task = asyncio.create_task(
                 self._reaper.run(), name="omicsclaw-kernel-reaper"

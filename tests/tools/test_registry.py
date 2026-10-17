@@ -541,7 +541,7 @@ def test_an_unknown_name_publishes_nothing():
     assert effective_policy() is None
 
 
-# ---- trap 12: the registry does not know what a request is --------------
+# ---- trap 12: request policy stays outside the registry ----------------
 
 _ASSEMBLY_LAYER_WORDS = ("request", "surface", "stage")
 
@@ -559,6 +559,13 @@ def test_no_public_method_knows_about_requests_surfaces_or_stages():
     offenders: list[str] = []
     for attribute, member in vars(ToolRegistry).items():
         if attribute.startswith("_") or not callable(member):
+            continue
+        if attribute == "use_request_context":
+            # The engine's optional scope relays schema facts, never policy.
+            assert tuple(inspect.signature(member).parameters) == (
+                "self", "request", "position", "call",
+            )
+            assert inspect.signature(member).parameters["request"].annotation == "ModelRequestContext"
             continue
         if any(word in attribute for word in _ASSEMBLY_LAYER_WORDS):
             offenders.append(attribute)

@@ -1,40 +1,6 @@
-"""The OpenTelemetry adapter — the only module here that knows OTEL exists.
+"""Adapt telemetry to OpenTelemetry.
 
-The counterpart of ``observability/setup.go``, and the same relationship
-to this package that ``openai_provider.py`` has to
-:mod:`omicsclaw.provider`: one file where a vendor's names live, so that
-importing the contract never requires the vendor to be installed.
-
-**The import is inside the function**, which every other module in this
-rebuild is forbidden from doing —
-``tests/hooks/test_hooks_is_a_leaf_layer.py`` fails a package for it. The
-exemption is argued rather than assumed: a runtime import is banned
-because a module named as a string is a dependency the import rules
-cannot see, and the fix is to make the dependency *visible*. Here it is
-visible — the package is named in ``pyproject.toml`` under the ``otel``
-extra, this module does nothing else, and
-``tests/observability/test_otel.py`` skips itself when the import fails.
-What a top-level import would buy is nothing, and what it would cost is
-``import omicsclaw.entry`` failing on every machine that never wanted
-telemetry.
-
-**Failure is always a degradation, never a raise.** A missing SDK, an
-unset endpoint, an exporter that cannot be constructed — each returns
-``None`` and one log line, and
-:func:`~omicsclaw.observability.telemetry.build_telemetry` falls back to
-the no-op. **The reference does the same**, and saying so is a
-correction: an earlier version of this docstring claimed ``main.go``
-treats a failed ``Setup`` as fatal and counted the difference as this
-layer being more forgiving. It is not a difference —
-``cmd/harness9/main.go:127-131`` logs the error and substitutes
-``observability.NewNoopProviders()``, and its three other
-observability constructors degrade the same way. The claim was never
-checked, which makes it the defect it would be anywhere else in this
-tree.
-
-**Export failures after construction are surfaced too**, which is the
-one piece of ``setup.go`` this module was missing and its parity table
-did not mention; see :func:`_surface_export_failures`.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

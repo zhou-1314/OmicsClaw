@@ -1,33 +1,6 @@
-"""``omicsclaw/schema`` — the standard types every component exchanges.
+"""Define shared message types.
 
-Per ADR 0077. This is the system's unified blood. The Main Loop, the
-model adapter, the tool registry, and the memory layer all pass these
-types to each other and nothing else.
-
-It is defined before the Main Loop for the same reason the reference
-harness defines it first: the loop body *is* the movement of these types,
-
-    Message → ToolCall → ToolResult → Message
-
-so there is no loop to write until they exist.
-
-**Vendor-neutral by construction.** OpenAI, Anthropic, DeepSeek and
-Ollama disagree about nearly everything — where a tool call's name lives,
-whether a tool result is a role or a content block, what a cached token is
-called. None of that appears here. Translating between a vendor payload
-and these types is the model adapter layer's only job. A vendor field
-name leaking into this package is a bug.
-
-The two ReAct moves this package exists to carry:
-
-=========  ==============================================================
-Thought    ``Message.reasoning_content``
-Action     ``Message.tool_calls`` → :class:`ToolCall` → :class:`ToolResult`
-=========  ==============================================================
-
-**Leaf package.** Standard library only: no ``omicsclaw`` imports, no
-third-party dependency, no I/O, no logging. Every layer may depend on it;
-it depends on none. That is what keeps the dependency graph acyclic.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

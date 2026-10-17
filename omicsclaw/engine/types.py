@@ -1,37 +1,6 @@
-"""``omicsclaw/engine`` — what one ReAct run returns, and what it emits.
+"""Define execution results and emitted events.
 
-Plan 0027, step 3 of the staged framework rebuild. Step 1
-(:mod:`omicsclaw.schema`, ADR 0077) gave the system a vocabulary and step
-2 (:mod:`omicsclaw.provider`, plan 0026) gave it a way to speak; this
-layer is the loop that drives
-
-    Message → ToolCall → ToolResult → Message
-
-to convergence. The types here are that loop's two outputs:
-:class:`RunResult`, what a blocking run returns, and :class:`EngineEvent`,
-what a streaming run yields.
-
-Three names were drafted in step 1 and then removed again. This is the
-step that owns them, and the answer is **one of the three**:
-
-``StopReason``
-    Kept. A run has three ways to stop and only an error string told them
-    apart in the reference harness; an enum is the cheapest way to let
-    "did it finish, or did it run out of room" be answered by data.
-
-``Trajectory``
-    Dropped. The trajectory *is* the ``tuple[Message, ...]`` on
-    :class:`RunResult`. Wrapping a list of messages in a type pays for
-    itself only when the list needs annotating, and nothing needs that
-    yet.
-
-``AgentStep``
-    Dropped. A per-turn record's only plausible consumer is persistence,
-    which is step 6. Fixing its shape before the layer that stores it
-    exists is precisely the mistake step 1 avoided by removing it.
-
-**Leaf-adjacent.** ``omicsclaw.schema`` and the standard library, nothing
-else. No I/O, no logging, no vendor SDK.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

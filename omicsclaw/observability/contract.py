@@ -1,43 +1,6 @@
-"""The three shapes this layer records into, and the free default.
+"""Define tracing and metrics interfaces and their default implementations.
 
-:class:`Span`, :class:`Tracer` and :class:`Meter` — Protocols, plus a
-no-op implementation of each. Everything else in this package programs
-against these and never against a vendor, which is the same ruling
-:mod:`omicsclaw.provider` makes about model backends and for the same
-payoff: adding a backend is a new file, not an edit to the recorder.
-
-**Why not simply depend on ``opentelemetry-api``.** That package ships
-its own no-op and would make this module three lines. It was rejected on
-two grounds, both checkable rather than aesthetic:
-
-1. *It would be a hard dependency of an optional feature.* Every other
-   layer in this rebuild is importable with nothing installed —
-   ``provider/base.py`` says so in its own docstring — and a telemetry
-   contract that cannot be imported without a third-party package would
-   make ``import omicsclaw.entry`` fail on a machine that never wanted
-   telemetry.
-2. *It would decide the data model before the deployment does.* The
-   OTEL API's ``Span`` carries events, links, status codes and a context
-   API this package deliberately does not use (see
-   :mod:`omicsclaw.observability.scope` on explicit parenting). Writing
-   against the full interface and using a tenth of it is how the tenth
-   becomes hard to find.
-
-What is given up is real and is named so nobody rediscovers it: a
-third-party OpenTelemetry instrumentation — an HTTP client, a database
-driver — will **not** nest inside these spans, because it programs
-against OTEL's context and this package does not put anything there.
-:mod:`omicsclaw.observability.otel` does set the global tracer provider,
-so such a library still exports to the same pipeline; its spans simply
-arrive as roots of their own. Closing that gap means putting each span
-into OTEL's context as well, which is a change to one adapter and not to
-this contract.
-
-**Three methods on a span, not ten.** The set is exactly what
-``internal/observability`` uses across its three instrumented seams, and
-adding a fourth should require a seam that needs it.
-
-Stdlib only.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

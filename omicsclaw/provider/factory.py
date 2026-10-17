@@ -1,30 +1,6 @@
-"""``omicsclaw/provider`` — the assembly point: config in, adapter out.
+"""Build a provider adapter from configuration.
 
-Plan 0026 §1. The layer exists so that switching or adding a backend never
-touches loop logic, and that promise has one more hole in it than the
-:class:`~omicsclaw.provider.base.LLMProvider` interface alone can close:
-*somebody* still has to decide which adapter class to instantiate. If that
-somebody is the Main Loop, the loop imports ``anthropic_provider`` by path
-and hard-codes which preset names speak Messages — which is precisely the
-coupling the interface was introduced to prevent, reintroduced one import
-line lower down.
-
-So the decision lives here, as the reference harness's ``NewFromEnv``
-lives in its provider package: one unified assembly point that ``main``,
-a sub-agent, and a benchmark runner all call instead of each growing its
-own copy of the mapping.
-
-The mapping itself is *data* — :data:`ADAPTERS`, keyed by
-:class:`~omicsclaw.provider.config.ProviderDialect`, whose value for a
-given preset is recorded on the preset itself (see
-``ProviderPreset.dialect`` for why it belongs there rather than here). A
-third backend is then a new adapter module, a new dialect member, and one
-entry in this table; no branch in this file changes.
-
-**Importing this module installs no SDK requirement.** Both adapters load
-their vendor package inside their client factory, so naming their classes
-here — and re-exporting them from the package — costs an import of two
-stdlib-only modules and nothing else.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

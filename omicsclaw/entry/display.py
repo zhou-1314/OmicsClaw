@@ -1,21 +1,6 @@
-"""Text made safe to show a person, for every surface.
+"""Prepare runtime text for display across surfaces.
 
-A reason, a tool name, an argument or a line of output reaches a terminal
-or a chat from a model that may have read a hostile file. Everything here
-returns text in which no character can act on the display: control and
-format characters are escaped by
-:func:`~omicsclaw.tools.preview.escape_unsafe`, and line breaks are either
-drawn as a mark (:func:`inert_line`), kept behind a fixed prefix
-(:func:`inert_body`), so the text cannot start a line of its own, or
-kept as they are (:func:`inert_prose`), for an answer that is printed on
-lines of its own. :func:`inert_body` renders the body of a card, bounded
-and folded, and :func:`inert_body_note` repeats its note.
-:func:`approval_body` is the body of an approval card, with
-credential-named values in the call's arguments hidden by
-:func:`~omicsclaw.tools.preview.redact_credentials`;
-:func:`approval_body_note` repeats its note, and
-:func:`unreadable_arguments_note` is what stands for arguments that cannot
-be read as JSON.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

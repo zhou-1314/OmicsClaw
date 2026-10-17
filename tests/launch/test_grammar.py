@@ -242,6 +242,26 @@ def test_the_environment_handed_to_main_reaches_the_surface(env, expected, capsy
 
 
 MODULE_GUARDS = {
+    "skillenv/checkpoint_io.py": (
+        "Finite bounded serialization sink. Reads a byte limit and an owner-created "
+        "output path, drains R's serialization pipe and never starts a surface."
+    ),
+    "skillenv/process_supervisor.py": (
+        "Host-PID child subreaper for one scientific launch. It records the "
+        "root wait status and descendant closure, without a product surface."
+    ),
+    "skillenv/contained_exec.py": (
+        "Finite child launch gate. It waits for host-owned durable process "
+        "evidence, then execs the fixed command under its existing supervisor."
+    ),
+    "skillenv/maintenance_probe.py": (
+        "Finite selected-environment worker for typed offline maintenance. "
+        "It inspects wheel requirements or verifies explicit package imports."
+    ),
+    "entry/ssh/notebook_owner.py": (
+        "Independent Notebook owner, launched only by the authenticated SSH "
+        "controller. It owns durable execution and opens no product HTTP service."
+    ),
     "remote/deadline.py": (
         "Finite execution-limit supervisor for one owned job session; parses only "
         "its existing job handle and timeout and never creates business state."
@@ -253,6 +273,11 @@ MODULE_GUARDS = {
     "entry/ssh/science_worker.py": (
         "Finite scientific job worker. Parses a request file, verifies its "
         "payload and runs in the selected interpreter without a root launcher."
+    ),
+    "skillenv/registered_probe.py": (
+        "Finite environment inspection child, launched by file path in the "
+        "selected scientific Python. Reads only the explicit import-name list; "
+        "the controller owns its environment, deadline and output limit."
     ),
     "launch/__main__.py": "the shell; plan 0037 §5.1",
     "__main__.py": (

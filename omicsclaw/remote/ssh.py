@@ -1,46 +1,10 @@
-"""Spawning the system ``ssh`` and ``sftp`` — and nothing else in between.
+"""Launch system OpenSSH and SFTP using the user's SSH configuration.
 
-The transport half of C1. The remote runtime plan's ruling is Claude
-Science's: the remote host is asked for **sshd and a POSIX shell**, so
-the client side should be the system's own OpenSSH — not a pip SSH
-library. Three reasons, all bought by somebody else's failures:
+BatchMode requires key or agent authentication. The transport does not relax
+host-key checking or rewrite known_hosts. Remote command quoting and process
+lifecycle remain explicit at this boundary.
 
-* **Zero new dependencies.** A pip SSH stack (paramiko and friends) is a
-  wheel matrix, a cryptography build and a CVE feed this project would
-  own forever, for capability ``/usr/bin/ssh`` already has.
-* **The user's config is the contract.** ``~/.ssh/config`` aliases,
-  ``ProxyJump`` chains, agent forwarding policy and known hosts all
-  resolve exactly as they do in the user's terminal. An in-process
-  client re-implements a subset of that, differently.
-* **Host keys stay the system's business.** Nothing here relaxes
-  ``StrictHostKeyChecking`` or writes a fresh ``known_hosts``; the
-  security posture of a remote run is the posture of the user's own
-  ``ssh`` invocation, no better and no worse.
-
-**Authentication is key- or agent-based only.** :data:`SSH_OPTIONS`
-pins ``BatchMode=yes``, so ``ssh`` fails rather than prompting for a
-password, and no password parameter exists anywhere in this package.
-That is the plan's explicit "not doing" and this is where it is enforced.
-
-**Construction and execution are separate layers**, so the construction
-half can be tested without a network: :func:`build_ssh_argv` and
-:func:`build_sftp_argv` return ``argv`` lists — pure functions — and
-:class:`SystemSshSpawner` is the only place a process starts. A test
-double for the spawner is a dict of canned outcomes; the real one writes
-output to a temporary file rather than a pipe, for the reason
-``builtin/bash.py`` measures at length: a remote command that
-backgrounds a grandchild holding the write end of a pipe makes ``wait``
-block on something that is not the command.
-
-**Injection is bounded twice over.** A ``host`` is validated against a
-closed alphabet (:func:`validate_host`) *and* the ``argv`` puts ``--``
-before the destination, so a value that slipped the alphabet could not
-become an option. A ``command`` is never filtered — it is a whole
-programming language and the boundary is the approval gate, the ruling
-``bash.py`` states for its own single argument — but it travels as one
-``argv`` element to an ``exec``-style spawn, so no *local* shell ever
-re-parses it; what the remote shell does with it is what the human
-approved.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

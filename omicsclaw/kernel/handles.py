@@ -1,36 +1,6 @@
-"""AnnData handles across the host/kernel boundary, with revision gating.
+"""Track AnnData handles and revisions across the kernel boundary.
 
-The sandwich the plan took from OmicOS ``session_store.py`` +
-``adata_kernel_runtime.py``: the caller (a job, a tool result) only ever
-sees an ``adata_id`` and a one-line shape summary; the object itself
-crosses as an h5ad snapshot, and the kernel holds it under
-``OV_KERNEL_ADATA[adata_id]`` — a plain dict in the kernel namespace,
-populated by :meth:`HandleRegistry.sync_in`.
-
-**Revision gating is the half OmicOS got wrong** (its agent face does a
-full h5ad round-trip every turn and its own comment expects that to fall
-over at 170K features). A handle records the host-side revision —
-``(st_mtime_ns, st_size)`` of the h5ad the kernel actually read — and a
-``sync_in`` whose revision matches the resident one is a **zero-copy
-skip**: no read, no write, the kernel keeps the object it already has.
-The host file's mtime is the version, which is honest for the inputs the
-job face declares (``inputs.adata_path`` names a file on the workspace)
-and requires nothing of the caller but a stat.
-
-**Cross-session access is refused, not routed.** A handle belongs to the
-session whose kernel holds it; a second session asking for the same id
-gets :exc:`HandleError`, because silently handing a second kernel the
-same mutable object through a fresh file read is how two analyses
-diverge while both believe they are looking at one thing.
-
-**This round's scope.** The job face ``code_run`` uses ``sync_in`` (the
-job declares ``adata_path``, the kernel gets ``OV_KERNEL_ADATA`` and the
-convenience binding ``adata``); ``sync_out`` writes ``*.out.h5ad`` back
-to the host for callers that ask. The chat face never crosses this
-bridge — its variables live in the session kernel's namespace already,
-which is the entire point of a persistent kernel there. R cells would
-cross the same seam when an R kernel lands (via IRkernel, same
-jupyter_client channel); today R stays on the step-runner subprocess.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

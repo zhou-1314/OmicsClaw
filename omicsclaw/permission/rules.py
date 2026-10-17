@@ -1,55 +1,10 @@
-"""The permission rule file: reading it, matching against it, writing it back.
+"""Read, match and persist tool permission rules.
 
-Rules say what this deployment has decided about individual tool calls, at a
-finer grain than a tool name. A rule file looks like this::
+A bare tool name matches all its arguments. toolName(pattern) matches its
+principal argument; an empty pattern also matches all arguments. Rule
+evaluation and persistence use the formats implemented below.
 
-    {
-      "permissions": {
-        "deny":  ["bash(rm -rf *)", "write_file(/etc/*)"],
-        "allow": ["read_file", "bash(git *)", "bash(python -m pytest*)"],
-        "ask":   ["bash(pip install*)"]
-      }
-    }
-
-**Pattern syntax.** Two forms, and no others:
-
-``toolName``
-    Matches that tool whatever its arguments.
-
-``toolName(pattern)``
-    Matches that tool when *pattern* matches its principal argument. An empty
-    ``toolName()`` matches any arguments, like the bare form.
-
-**What a pattern is matched against** is one string, not the whole argument
-payload: the value of the tool's first *required* ``string`` property, taken
-from the tool's own JSON Schema — ``command`` for ``bash``, ``path`` for the
-file tools, ``url`` for ``web_fetch``, ``query`` for ``web_search``. See
-:func:`principal_argument`, including what happens when a tool has no such
-property. Writing a pattern against the wrong thing is the easy mistake here:
-``write_file(*/tmp/*)`` is a statement about the destination path and says
-nothing about the content being written.
-
-**Matching.** A pattern containing none of ``*?[`` must equal the principal
-argument **exactly**; a pattern containing one of them is a :mod:`fnmatch`
-glob over the whole string. There is no substring fallback, so ``bash(ls)``
-does not match ``ls -la`` — write ``bash(ls*)`` for that. ``*`` crosses any
-character including ``/``, so ``bash(git *)`` matches
-``git log -- a/b/c.py``.
-
-**Matching is case-sensitive**, unlike :mod:`omicsclaw.permission.danger`.
-A rule naming a tool in the wrong case names a tool that does not exist,
-because the registry keys tools exactly; and a case-insensitive ``allow``
-would grant more than its author wrote.
-
-**Evaluation.** First match wins, and ``deny`` rules are loaded ahead of
-``allow`` ahead of ``ask``, so the key order inside the file does not matter
-and a ``deny`` always outranks an ``allow`` that would also have matched. A
-call no rule mentions returns ``None`` — not ``ask`` — which is what lets a
-caller fall through to further checks of its own.
-
-**A file that cannot be read as written raises** rather than being partly
-applied: an unknown action key, a malformed pattern, a scalar where a list
-belongs. A *missing* file is an empty rule set and not an error.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

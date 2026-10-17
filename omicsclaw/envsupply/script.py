@@ -1,33 +1,6 @@
-"""The local first-use install script, its disclosure, and its runner.
+"""Prepare and run approved local environment installation.
 
-C3's ``build_env_install_script`` (remote) is the vocabulary this module
-mirrors: ``set -e``; locate uv; ``uv python install``; ``uv venv``;
-``uv pip install`` the base + stack; verify by importing ipykernel at
-the end. Idempotent by construction the same way — every uv step is a
-no-op when its output exists, so a retried install heals a
-half-finished one instead of fighting it.
-
-The local differences are the plan's, not inventions:
-
-* **the uv ladder has no curl rung.** The App ships the uv binary
-  (Tier 0), so resolution is: the ``OMICSCLAW_UV_BIN`` environment
-  variable (what the App points at its shipped installer), then
-  ``$OMICSCLAW_UV_INSTALLERS_DIR/uv``, then ``command -v uv`` — and a
-  machine with none of the three is *reported* (exit 127, manual
-  commands in the error), never fixed over the network unprompted;
-* **mirrors are defaults, not opts-in.** ``UV_INDEX_URL`` prefixes the
-  pip line and ``UV_PYTHON_INSTALL_MIRROR`` the interpreter line with
-  the CN-friendly defaults from :mod:`.pins`, overridable per
-  deployment — the mirror URLs always come from configuration, never
-  from anything a model sent;
-* **step markers** (``===OMICSCLAW_ENV_STEP:<name>===``) echo before
-  each phase so the jobs plane can stream honest phase-level progress
-  without parsing uv's output format.
-
-POSIX sh, like the remote script: the desktop backend's install paths
-run where ``sh`` exists. A Windows-first-run bootstrap is the App's
-business (it drives the shipped ``uv.exe`` directly), not this
-script's.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

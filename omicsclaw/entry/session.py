@@ -1,55 +1,9 @@
-"""``omicsclaw/entry`` — conversations, their queues, and one Task each.
+"""Manage conversation state, per-session queues and exchange tasks.
 
-Plan 0031 Q4 and Q6. The engine below deliberately has no ``Session``
-("a conversation goes in, a conversation comes out"; plan 0027 declined
-to build half of one), so a conversation's history has to live
-somewhere, and this is the somewhere. The reference harness keeps it in
-SQLite from line one (``main.go:232-245``); this module keeps it behind
-a :class:`SessionStore` Protocol with one in-memory implementation,
-because **building half a persistence layer is a mistake this rebuild
-has already paid for once**.
+A session carries history and compaction state behind a SessionStore
+protocol. The registry owns admission and task lifecycle for its sessions.
 
-**Two things live on a session, not one.** ``history`` is the obvious
-one. :attr:`Session.compaction` is the one that goes missing:
-``context/compaction.py:214-220`` says outright that
-:class:`~omicsclaw.context.CompactionState` is "carried between turns by
-the caller; step 6 decides where it lives", and a deployment that drops
-it re-summarizes from ``FIRST_TEMPLATE`` every single time — paying for
-a summary it already has and losing the detail the last one chose to
-keep.
-
-**The registry is three guarantees and nothing else** (Q6):
-
-1. *One Task per exchange.* ``contextvars`` isolate per Task, so two
-   concurrent sessions are isolated only if each runs in its own —
-   otherwise "the second ``set`` wins and one user's tool call is offered
-   to the other user's approval prompt" (``tools/context.py`` Q4.5).
-2. *Serial within a session, concurrent across sessions.* A second
-   message to one conversation waits; a message to another does not.
-3. *Queueing is a semantic, not a lock* (Q7). :meth:`SessionRegistry.
-   submit` returns a handle **immediately**, publishes how many
-   exchanges are ahead of it, refuses outright past
-   ``max_queued_per_session``, and a queued exchange can be cancelled
-   before it ever starts. A ``submit`` that awaited a lock would give a
-   user who typed twice no handle, no feedback and no way out.
-
-**Persistence happens here, not in the exchange's Task** (trap 3b).
-Cancelling a Task injects :exc:`asyncio.CancelledError` at its next
-``await``, so ``finally: await store.save(...)`` does not finish — and
-an in-memory store whose ``save`` never actually suspends hides that
-until the day it becomes SQLite. So the registry, which is the side that
-*asks* for cancellation, reaps the Task first and saves afterwards. For
-the same reason :meth:`InMemorySessionStore.save` suspends once on
-purpose.
-
-With durable events enabled, the shared memory database records admission
-before lane execution. Restarted callers inspect that receipt and the existing
-event log; admission never grants an automatic retry of uncertain work.
-
-**What is not here.** No authentication or rate limiting. A sender allowlist is
-:class:`~omicsclaw.entry.ingress.SenderPolicy`'s, one layer out, and it
-is out there because a registry that decided who may talk to it would be
-a registry every surface had to configure identically.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

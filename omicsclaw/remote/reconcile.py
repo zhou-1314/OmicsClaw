@@ -1,24 +1,6 @@
-"""Re-estimating in-flight remote jobs after a restart or on demand.
+"""Reconcile remote jobs after restart or on request.
 
-The C2 half that makes a handle worth persisting. A backend restart
-loses nothing on the remote side — the job is SLURM's or init's — so
-the only question the new process must answer is "what happened while
-nobody was watching?", and this module is the asking.
-
-**Tolerance is the contract.** A host that cannot be reached moves its
-rows to ``unknown`` and keeps them; the plan is explicit that an
-outage must not cost a handle, and the reconciler honours that by
-catching :exc:`~omicsclaw.remote.ssh.RemoteHostUnreachable` and every
-``OSError`` the transport can raise on the way down, rather than by
-deleting anything. Rows leave the in-flight set only when the host
-itself says the job ended.
-
-**One seam: the plane.** :func:`refresh_in_flight` takes anything with
-``job_store()`` and ``executor_for()`` —
-:class:`~omicsclaw.remote.plane.RemotePlaneBinding` in production, a
-pair of fakes in the tests — and the jobs-plane bridge additionally
-hands it a callback so a restarted desktop backend can move the
-*local* job row with the remote answer.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

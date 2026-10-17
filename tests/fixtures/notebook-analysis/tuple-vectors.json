@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "encoding": "omicsclaw-tuples-v1",
+  "status": "v2: U+0000 rejected after real R/jsonlite precheck; positive cross-language comparison pending",
+  "cases": [
+    {
+      "name": "empty",
+      "keys": [
+        "id"
+      ],
+      "rows": [],
+      "axisUtf8Hex": "6f6d696373636c61772d617869732d76310a5b226964225d0a",
+      "orderedIdsSha256": "6cdc49c4efac2affb8bc47b683fe45cc2164316354c7e8d64d7d8cd6a7f897c0",
+      "membersUtf8Hex": "6f6d696373636c61772d73656c656374696f6e2d76310a5b226964225d0a",
+      "membersSha256": "bc158344ff1e1180b098b29589374bf221b5e5a86880fa10ef5db3be4f52f963",
+      "idFileUtf8Hex": "7b22736368656d6156657273696f6e223a312c226b657973223a5b226964225d7d0a",
+      "idFileSha256": "3a7e7087872cd5e0abf2b03199a4e10a6a4123dedcb7a80d877f8d89be95477a"
+    },
+    {
+      "name": "escaping",
+      "keys": [
+        "id"
+      ],
+      "rows": [
+        [
+          ""
+        ],
+        [
+          "quote\"slash\\"
+        ],
+        [
+          "\n\t"
+        ],
+        [
+          "/  "
+        ]
+      ],
+      "axisUtf8Hex": "6f6d696373636c61772d617869732d76310a5b226964225d0a5b22225d0a5b2271756f74655c22736c6173685c5c225d0a5b225c75303030615c7530303039225d0a5b222fe280a8e280a9225d0a",
+      "orderedIdsSha256": "d41177eef1d3703b67b38424889d40ba70632b6a2989be1a27cf40e8c34fcee3",
+      "membersUtf8Hex": "6f6d696373636c61772d73656c656374696f6e2d76310a5b226964225d0a5b22225d0a5b222fe280a8e280a9225d0a5b225c75303030615c7530303039225d0a5b2271756f74655c22736c6173685c5c225d0a",
+      "membersSha256": "584ecb32fccb1dd72cb1074b26eea88a10f3af9e7cd77ee574cb59b97fd0223b",
+      "idFileUtf8Hex": "7b22736368656d6156657273696f6e223a312c226b657973223a5b226964225d7d0a5b22225d0a5b2271756f74655c22736c6173685c5c225d0a5b225c75303030615c7530303039225d0a5b222fe280a8e280a9225d0a",
+      "idFileSha256": "8e5d771d57a2f854ecf8862b3778f72027c5323dff6c2b6f7ff29743f45709c1"
+    },
+    {
+      "name": "unicode",
+      "keys": [
+        "id"
+      ],
+      "rows": [
+        [
+          "汉字"
+        ],
+        [
+          "🧬"
+        ],
+        [
+          "é"
+        ],
+        [
+          "é"
+        ]
+      ],
+      "axisUtf8Hex": "6f6d696373636c61772d617869732d76310a5b226964225d0a5b22e6b189e5ad97225d0a5b22f09fa7ac225d0a5b22c3a9225d0a5b2265cc81225d0a",
+      "orderedIdsSha256": "7c766e916c476be4d769fec7c91b599d56239d9165023b42ea6518e63d951612",
+      "membersUtf8Hex": "6f6d696373636c61772d73656c656374696f6e2d76310a5b226964225d0a5b2265cc81225d0a5b22c3a9225d0a5b22e6b189e5ad97225d0a5b22f09fa7ac225d0a",
+      "membersSha256": "c58f7b9a5767a9e06c475560b96395adf73fd1640679663ab81cb7715d609a59",
+      "idFileUtf8Hex": "7b22736368656d6156657273696f6e223a312c226b657973223a5b226964225d7d0a5b22e6b189e5ad97225d0a5b22f09fa7ac225d0a5b22c3a9225d0a5b2265cc81225d0a",
+      "idFileSha256": "fd2ef97f31bbd3deed65ae08dcdf00038c1678b8281bb396b384eabbb2780cbb"
+    },
+    {
+      "name": "composite",
+      "keys": [
+        "sample",
+        "barcode"
+      ],
+      "rows": [
+        [
+          "S2",
+          "AA"
+        ],
+        [
+          "S1",
+          "AA"
+        ],
+        [
+          "S1",
+          "BB"
+        ]
+      ],
+      "axisUtf8Hex": "6f6d696373636c61772d617869732d76310a5b2273616d706c65222c22626172636f6465225d0a5b225332222c224141225d0a5b225331222c224141225d0a5b225331222c224242225d0a",
+      "orderedIdsSha256": "e1a0839259ef3071b88f7fcf4074122f5cc1643a8fce5bd04d485fe06c78e036",
+      "membersUtf8Hex": "6f6d696373636c61772d73656c656374696f6e2d76310a5b2273616d706c65222c22626172636f6465225d0a5b225331222c224141225d0a5b225331222c224242225d0a5b225332222c224141225d0a",
+      "membersSha256": "58e46c2b861600b2d8b9383a62f03e22a4153c2886c5031742f77b2605abeda2",
+      "idFileUtf8Hex": "7b22736368656d6156657273696f6e223a312c226b657973223a5b2273616d706c65222c22626172636f6465225d7d0a5b225332222c224141225d0a5b225331222c224141225d0a5b225331222c224242225d0a",
+      "idFileSha256": "5f3996587388ea112efd6f51fd7a93b28b15fac0a8267e21dfcdf5fc0597946c"
+    },
+    {
+      "name": "reordered",
+      "keys": [
+        "sample",
+        "barcode"
+      ],
+      "rows": [
+        [
+          "S1",
+          "BB"
+        ],
+        [
+          "S1",
+          "AA"
+        ],
+        [
+          "S2",
+          "AA"
+        ]
+      ],
+      "axisUtf8Hex": "6f6d696373636c61772d617869732d76310a5b2273616d706c65222c22626172636f6465225d0a5b225331222c224242225d0a5b225331222c224141225d0a5b225332222c224141225d0a",
+      "orderedIdsSha256": "c2bfdad2d8b1586d93317364c438f230554d5474a11f36176c90aa498bc7b89a",
+      "membersUtf8Hex": "6f6d696373636c61772d73656c656374696f6e2d76310a5b2273616d706c65222c22626172636f6465225d0a5b225331222c224141225d0a5b225331222c224242225d0a5b225332222c224141225d0a",
+      "membersSha256": "58e46c2b861600b2d8b9383a62f03e22a4153c2886c5031742f77b2605abeda2",
+      "idFileUtf8Hex": "7b22736368656d6156657273696f6e223a312c226b657973223a5b2273616d706c65222c22626172636f6465225d7d0a5b225331222c224242225d0a5b225331222c224141225d0a5b225332222c224141225d0a",
+      "idFileSha256": "89e7085d2ebc2f5a37207655e93544a550c1dc7a1a968239d58348d23ffd9167"
+    },
+    {
+      "name": "reversed-keys",
+      "keys": [
+        "barcode",
+        "sample"
+      ],
+      "rows": [
+        [
+          "AA",
+          "S2"
+        ],
+        [
+          "AA",
+          "S1"
+        ],
+        [
+          "BB",
+          "S1"
+        ]
+      ],
+      "axisUtf8Hex": "6f6d696373636c61772d617869732d76310a5b22626172636f6465222c2273616d706c65225d0a5b224141222c225332225d0a5b224141222c225331225d0a5b224242222c225331225d0a",
+      "orderedIdsSha256": "db9d0216820a959b628089b96c332270033ce7aa943184bc4c1b14e8ee844ce5",
+      "membersUtf8Hex": "6f6d696373636c61772d73656c656374696f6e2d76310a5b22626172636f6465222c2273616d706c65225d0a5b224141222c225331225d0a5b224141222c225332225d0a5b224242222c225331225d0a",
+      "membersSha256": "887621c624012d8324242442fb10a2382025a4017590fec3260ac8e2e8b69ebf",
+      "idFileUtf8Hex": "7b22736368656d6156657273696f6e223a312c226b657973223a5b22626172636f6465222c2273616d706c65225d7d0a5b224141222c225332225d0a5b224141222c225331225d0a5b224242222c225331225d0a",
+      "idFileSha256": "cb6cf365dbed8a2ac1a62e41b80cd353c8ea976da335c96e8f256f3649d61128"
+    }
+  ],
+  "negativeCases": [
+    {
+      "name": "nul-value",
+      "keys": [
+        "id"
+      ],
+      "rows": [
+        [
+          "A\u0000B"
+        ]
+      ],
+      "error": "notebook_analysis_invalid_reference"
+    },
+    {
+      "name": "nul-key",
+      "keys": [
+        "i\u0000d"
+      ],
+      "rows": [
+        [
+          "A"
+        ]
+      ],
+      "error": "notebook_analysis_invalid_reference"
+    }
+  ]
+}

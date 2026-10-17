@@ -1,22 +1,6 @@
-"""Reading a sub-agent definition out of a Markdown file with a YAML header.
+"""Read sub-agent definitions from Markdown headers.
 
-The supported subset is what an agent file uses and no more:
-
-* ``---`` on the first line and a closing ``---`` on its own line;
-* ``key: value`` at column zero, with matching surrounding quotes removed;
-* block sequences — ``- item`` lines under a bare key;
-* comma-separated scalars, accepted wherever a sequence is.
-
-A key whose value continues onto further lines — a block scalar (``>``,
-``|`` and their chomping variants) or a plain scalar folded over an
-indented line — is outside that subset, and the **whole key is dropped**
-rather than half-read. Keeping the first line would hand back ``'>'`` or
-a sentence cut at its first newline, which passes validation and is worse
-than the field being absent: an absent ``description`` falls back to the
-body's first line and an absent ``name`` to the file's stem.
-
-Everything after the closing delimiter is the sub-agent's system prompt.
-Nothing here touches the filesystem; :func:`parse_agent_file` takes text.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

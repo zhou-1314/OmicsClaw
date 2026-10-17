@@ -1,68 +1,9 @@
-"""``omicsclaw/context`` — how much room is left, and how worried to be.
+"""Compute usable context and classify the conversation's current token cost.
 
-Plan 0030 task A, decisions Q9, Q9-a and Q9-b. One question this module
-answers before the model is called rather than after: *does this fit, and
-if not, how badly?*
+Usable context subtracts output, tool-definition and safety reserves from
+the model window. Token estimates come from context.tokens.
 
-**The denominator is a subtraction, not a percentage.** The reference
-harness compares against a flat fraction of the context window — 80% in
-``internal/memory/compaction.go:87-92``, 60/70/80/95% of the window in
-``progressive_compactor.go:124-134``. It uses a fraction because it has
-no better number to hand. We do::
-
-    usable = context_tokens
-           - reserve_output_tokens      # ModelLimits.output_tokens
-           - reserve_tool_tokens        # estimate_tool_tokens(tools)
-           - context_tokens * safety_ratio
-
-That this is the harness's own intent rather than a local invention is
-something the harness says out loud. Its real benchmark does not use the
-80% default: ``cmd/swebench/runner.go:293-299`` sets the budget to
-**55%** of the window, and the comment on ``:294`` spends the missing
-45% on "tool definitions (~25K) + output reserve + chars/4 estimation
-error" — the three subtrahends above, folded into one fraction because
-Go had nowhere to put them separately.
-
-**Neither reserve has a default, and that is the point.** A default of
-zero is the convenient value, not the guarded one: a caller who forgets
-``reserve_tool_tokens`` gets a budget 20-30K tokens larger than the
-space that actually exists (``token.go:32``), and nothing in this
-package can notice, because :func:`~omicsclaw.context.compaction.
-plan_compaction` is never shown the tools. Both numbers are *known* to
-the caller — one from ``get_model_limits(model)``, one from
-:func:`~omicsclaw.context.tokens.estimate_tool_tokens` — so demanding
-them costs a line and buys the whole argument above. Forgetting one is a
-``TypeError`` at construction.
-
-A warning that travels with ``reserve_output_tokens``: an output ceiling
-of 8192 out of ``omicsclaw/provider/_model_limits.py`` means *not
-known*, not *known to be 8192*. Where the real ceiling is higher, this
-budget is optimistic by the difference.
-
-**"No budget configured" is not a budget of zero.** ``context_tokens
-<= 0`` raises rather than modelling anything; a caller who does not know
-the window holds ``ContextBudget | None`` and does not construct one.
-The opposite case — a window so small, or reserves so large, that
-``usable_tokens`` is zero or negative — is real and is
-:attr:`Pressure.EMERGENCY`, because not one message of history fits and
-"do nothing" means posting the whole conversation into a refusal. The
-harness's ``ContextWindow <= 0 → TierNone`` (``progressive_compactor.go:
-211-213``) is deliberately **not** ported: after the denominator
-changed, that line answers a different question than it used to.
-
-**The four ratios are the harness's, uncalibrated here.** 0.60 / 0.70 /
-0.80 / 0.95 come from ``progressive_compactor.go:124-134``. They have
-never been measured against this repository's traffic, and the number
-they are compared to now has a different denominator than the one they
-were chosen for (plan 0030 §11.A-7). Saying so is worth more than
-inventing four fresh numbers with the same amount of evidence behind
-them.
-
-**Where ``local_budget_status`` went.** The replaced layer had a second
-grading function, because grading against a 1M-token window says "fine"
-forever and only a local budget says anything useful. ``usable_tokens``
-*is* that local budget, so the capability is not missing — it is the
-only mode this class has.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

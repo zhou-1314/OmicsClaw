@@ -33,7 +33,19 @@ def source_closure(root: Path) -> dict[str, Path]:
         "omicsclaw.entry.ssh.__main__",
         "omicsclaw.entry.ssh.science_runner",
         "omicsclaw.entry.ssh.science_worker",
+        "omicsclaw.entry.ssh.notebook_owner",
         "omicsclaw.remote.deadline",
+        # Started by file path in the selected scientific Python, not imported.
+        "omicsclaw.skillenv.registered_probe",
+        "omicsclaw.skillenv.maintenance_probe",
+        "omicsclaw.skillenv.contained_exec",
+        "omicsclaw.skillenv.process_supervisor",
+        "omicsclaw.skillenv.notebook_inspect",
+        "omicsclaw.skillenv.notebook_identity",
+        "omicsclaw.skillenv.notebook_checkpoint",
+        "omicsclaw.skillenv.checkpoint_io",
+        "omicsclaw.skillenv.checkpoint_science",
+        "omicsclaw.skillenv.checkpoint_restore",
     ]
     included = {}
 
@@ -85,8 +97,15 @@ def build(root: Path, destination: Path, *, allow_dirty: bool = False):
         )
     closure = source_closure(root)
     files = sorted(closure.values())
-    # The catalogue is data. Algorithms and SDK code belong in science payloads.
+    # Instructions and AST-checked definitions are data injected into science kernels.
     files.extend(sorted((root / "skills").rglob("SKILL.md")))
+    from omicsclaw.skills.sidecar import validate_kernel_ast
+    for sidecar in sorted((root / "skills").rglob("kernel.py")):
+        if validate_kernel_ast(sidecar.read_text(encoding="utf-8")):
+            raise ValueError(f"invalid controller skill sidecar: {sidecar.relative_to(root)}")
+        files.append(sidecar)
+    # The R inspector is sourced in the explicitly registered scientific kernel.
+    files.extend(root / "omicsclaw/skillenv" / name for name in ("notebook_identity.R", "notebook_inspect.R", "notebook_checkpoint.R", "checkpoint_science.R", "checkpoint_restore.R"))
     files.extend([root / "OMICSCLAW.md", root / "LICENSE"])
     files.extend(sorted((root / "omicsclaw/entry/ssh/profiles").glob("*")))
     records = []

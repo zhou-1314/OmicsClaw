@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import dataclasses
 import fcntl
+import importlib
 import json
 import os
 import pwd
@@ -48,8 +49,12 @@ from omicsclaw.provider import ModelLimits, ProviderConfig, ProviderDialect
 from omicsclaw.tools.context import context_value
 
 from .manifest import verified_source_metadata
+from .environments import EnvironmentRegistry, REGISTRY_SCHEMA_VERSION
+from .notebook_ipc import NotebookOwnerClient
+from ..notebook.binding import SSHNotebookBinding
+from omicsclaw.entry.notebook.service import NotebookError
 from .model_bridge import ModelSnapshot, bridged_provider
-from .protocol import MAX_FRAME_BYTES, JsonPeer, RpcError
+from .protocol import MAX_FRAME_BYTES, JsonPeer, PublicRpcError, RpcError
 from .science_deployment import verified_science_deployment
 from .science_runner import RunSkillJobTool, ScienceJobRunner
 
@@ -121,6 +126,10 @@ class Controller:
         self.interactions = None
         self.jobs = None
         self.science = None
+        self.environments = None
+        self.notebook_client = None
+        self.environment_guard = None
+        self.maintenance_jobs_task = None
         self._configuring = False
         self.factory = None
         self.model_snapshot = None
@@ -163,11 +172,84 @@ class Controller:
                 "sessions.list": self.sessions,
                 "sessions.live": self.session_live,
                 "runtime.imports": self.imports,
+                "environments.list": self.environment_list,
+                "environments.register": self.environment_register,
+                "environments.preflight": self.environment_preflight,
+                "environments.accept": self.environment_accept,
                 "desktop.request": self.desktop_request,
                 "model.title": self.title,
                 "model.test": self.provider_test,
             }
         )
+        for method in ("attach", "list", "bind", "admit", "run", "snapshot", "execution", "events", "cancel", "release", "binding", "receipt", "changes", "cell", "save", "resume", "selectEnvironment", "artifactInfo", "artifactChunk"):
+            async def notebook_handler(params, method=method):
+                return await self.notebook_request(method, params)
+            peer.handlers["notebooks." + method] = notebook_handler
+
+        for action in ("Plan", "Approve", "Interrupt", "Cancel", "Repair", "Restart", "Get", "List", "Impact", "Events", "Receipt"):
+            async def maintenance_handler(params, action=action):
+                return await self.maintenance_request(action.lower(), params)
+            peer.handlers["environments.maintenance" + action] = maintenance_handler
+        for method in ("analysisState", "analysisPage", "analysisCommand"):
+            async def analysis_handler(params, method=method):
+                return await self.analysis_request(method, params)
+            peer.handlers["notebooks." + method] = analysis_handler
+
+    async def analysis_request(self, method, params):
+        self._app()
+        if self.notebook_client is None:
+            raise PublicRpcError("notebook_analysis_unavailable")
+        read = method != "analysisCommand"
+        field = "scope" if read else "target"
+        base = self._environment_target()
+        target = params.get(field)
+        if read:
+            if target != {key: base[key] for key in ("authorityId", "workspaceId")}:
+                raise PublicRpcError("notebook_target_changed")
+        elif not isinstance(target, dict) or any(target.get(key) != value for key, value in base.items()):
+            raise PublicRpcError("notebook_target_changed")
+        try:
+            health = await self.notebook_client.attach()
+            owner = {key: health["owner"][key] for key in ("ownerId", "ownerEpoch")}
+            if not read and target != {**base, **owner}:
+                raise PublicRpcError("notebook_target_changed")
+            result = await self.notebook_client.call(
+                {"analysisState": "analysis_state", "analysisPage": "analysis_page", "analysisCommand": "analysis_command"}[method],
+                {key: value for key, value in params.items() if key != field}, expected_owner=owner)
+            if not read:
+                snapshot = await self.notebook_client.call("snapshot", {"notebookId": params["notebookId"], "limit": 1}, expected_owner=owner)
+                if snapshot["binding"]:
+                    for tool in ("python", "r", "notebook_analysis"):
+                        self.interactions.invalidate_tool(snapshot["binding"]["session_id"], tool, "Notebook data state changed; prepare a new request after Resume.")
+            return result
+        except NotebookError as error:
+            raise PublicRpcError(error.code) from error
+        except (OSError, TimeoutError):
+            raise PublicRpcError("notebook_analysis_unavailable") from None
+
+    async def maintenance_request(self, action, params):
+        self._app()
+        if self.notebook_client is None:
+            raise PublicRpcError("environment_maintenance_unavailable")
+        base = self._environment_target()
+        read = action in {"get", "list", "impact", "events", "receipt"}
+        target = params.get("scope" if read else "target")
+        if read:
+            if target != {k: base[k] for k in ("authorityId", "workspaceId")}:
+                raise PublicRpcError("environment_target_changed")
+        elif not isinstance(target, dict) or any(target.get(k) != v for k, v in base.items()):
+            raise PublicRpcError("environment_target_changed")
+        try:
+            health = await self.notebook_client.attach()
+            owner = {k: health["owner"][k] for k in ("ownerId", "ownerEpoch")}
+            if not read and target != {**base, **owner}:
+                raise PublicRpcError("environment_target_changed")
+            return await self.notebook_client.call("maintenance", {"action": action,
+                "params": {k:v for k,v in params.items() if k != ("scope" if read else "target")}}, expected_owner=owner)
+        except NotebookError as error:
+            raise PublicRpcError(error.code) from error
+        except (OSError, TimeoutError):
+            raise PublicRpcError("environment_maintenance_unavailable") from None
 
     async def hello(self, params):
         if params.get("protocolVersion") != PROTOCOL_VERSION:
@@ -201,6 +283,9 @@ class Controller:
                 "stable_event_subframes",
                 "read_only_history",
                 "external_science_binding",
+                "registered_science_environments_v1",
+                "notebook_owner_v1",
+                "notebook_model_v1",
             ],
         }
 
@@ -303,16 +388,28 @@ class Controller:
             )
             / "skills",
         )
+        from omicsclaw.entry.environment_runtime import ProcessEnvironmentGuard
+        self.environment_guard = ProcessEnvironmentGuard(
+            self.workspace, workspace_id=self.identity.workspace_id, role="ssh_controller"
+        )
+        self.notebook_client = NotebookOwnerClient(
+            self.workspace,
+            {"authorityId": self.identity.authority_id, "workspaceId": self.identity.workspace_id},
+            self.instance_id, self.epoch,
+            sandbox_config=config.sandbox_config(),
+        )
+        self.notebook_binding = SSHNotebookBinding(self.notebook_client)
         assembled = build_app(
             config,
             additional_tools=(RunSkillJobTool(lambda: self.jobs),) if science else (),
             provider=provider,
             resolved_model=snapshot.model,
             model_limits=ModelLimits(snapshot.context_tokens, snapshot.output_tokens),
-            capabilities=DeploymentCapabilities(notebook=False),
+            capabilities=DeploymentCapabilities(notebook=True),
             telemetry=Telemetry(),
             provider_for_role=(self.role_providers.__getitem__ if production else None),
             review_call=review_call if production else None,
+            kernel_binding=self.notebook_binding,
         )
         bridge = None
         try:
@@ -347,6 +444,7 @@ class Controller:
             self.app, remote_runtime=bridge, register_default_runners=False
         )
         if science:
+            from omicsclaw.entry.environment_jobs import ScienceEnvironmentGuard
             self.jobs.register_runner(
                 "skill_run",
                 ScienceJobRunner(
@@ -358,12 +456,23 @@ class Controller:
                     manifest=science.payload_manifest,
                     environment_digest=science.environment_digest,
                     default_hard_timeout_s=3600.0,
+                    environment_guard=ScienceEnvironmentGuard(self.environment_guard,
+                        interpreter=science.python, rscript=science.rscript, r_library=science.r_library),
                     rscript=science.rscript,
                     r_library=science.r_library,
                 ),
             )
             self.science = science
         self.model_snapshot = snapshot
+        from omicsclaw.entry.environment_reads import EnvironmentReadGuard
+        self.environments = EnvironmentRegistry(
+            self.app.memory.database, self.workspace,
+            wrapper=self.app.sandbox.as_kernel_spawn_wrapper() if self.app.sandbox else None,
+            read_guard=EnvironmentReadGuard(self.environment_guard.coordinator,
+                self.workspace, self.identity.workspace_id, self.environment_guard.owner),
+        )
+        from omicsclaw.entry.maintenance_jobs import poll_job_interrupts
+        self.maintenance_jobs_task = asyncio.create_task(poll_job_interrupts(self))
         if self.app.shadow_review:
             self.app.shadow_review.bind_store(self.jobs.artifacts)
         return {
@@ -911,7 +1020,108 @@ class Controller:
             ),
         }
 
+    def _environment_registry(self, params, *, mutation=False):
+        self._app()
+        if self.environments is None:
+            raise PublicRpcError("environment_registry_unavailable")
+        if mutation and params.get("target") != self._environment_target():
+            raise PublicRpcError("environment_target_changed")
+        return self.environments
+
+    def _environment_target(self):
+        return {"authorityId": self.identity.authority_id,
+                "workspaceId": self.identity.workspace_id,
+                "controllerEpoch": self.epoch}
+
+    async def environment_list(self, params):
+        registry = self._environment_registry(params)
+        if set(params) - {"after", "limit"}:
+            raise PublicRpcError("invalid_environment_request")
+        missing = []
+        for name in ("jupyter_client", "zmq"):
+            try:
+                importlib.import_module(name)
+            except Exception:
+                missing.append(name)
+        try:
+            page = registry.page(after=params.get("after", ""), limit=params.get("limit", 20))
+        except ValueError as error:
+            raise PublicRpcError(str(error)) from error
+        return {**page, "schemaVersion": REGISTRY_SCHEMA_VERSION,
+                "target": self._environment_target(),
+                "controlClient": {"ready": not missing, "missing": missing},
+                "notebook": {"enabled": True, "reason": "", "ownerRpcAvailable": True},
+                "maintenance": {"enabled": True, "reason": ""}}
+
+    async def environment_register(self, params):
+        registry = self._environment_registry(params, mutation=True)
+        if set(params) != {"target", "spec"}:
+            raise PublicRpcError("invalid_environment_request")
+        try:
+            return {"environment": await registry.register(params["spec"])}
+        except ValueError as error:
+            raise PublicRpcError(str(error)) from error
+
+    async def environment_preflight(self, params):
+        registry = self._environment_registry(params, mutation=True)
+        if set(params) != {"target", "environmentId"}:
+            raise PublicRpcError("invalid_environment_request")
+        try:
+            return {"environment": await registry.preflight(params["environmentId"])}
+        except ValueError as error:
+            raise PublicRpcError(str(error)) from error
+
+    async def environment_accept(self, params):
+        registry = self._environment_registry(params, mutation=True)
+        if set(params) != {"target", "environmentId", "revision"}:
+            raise PublicRpcError("invalid_environment_request")
+        try:
+            return {"environment": await asyncio.to_thread(registry.accept, params["environmentId"], params["revision"])}
+        except ValueError as error:
+            raise PublicRpcError(str(error)) from error
+
+    async def notebook_request(self, method, params):
+        self._app()
+        if self.notebook_client is None:
+            raise PublicRpcError("notebook_owner_unavailable")
+        target = params.get("target")
+        base = self._environment_target()
+        if not isinstance(target, dict) or any(target.get(k) != v for k, v in base.items()):
+            raise PublicRpcError("notebook_target_changed")
+        try:
+            health = await self.notebook_client.attach()
+            fence = {**base, "ownerId": health["owner"]["ownerId"],
+                     "ownerEpoch": health["owner"]["ownerEpoch"]}
+            if method == "attach":
+                if set(params) != {"target"} or set(target) != set(base):
+                    raise PublicRpcError("invalid_notebook_command")
+                return {**health, "writeFence": fence}
+            if target != fence:
+                raise PublicRpcError("notebook_target_changed")
+            result = await self.notebook_client.call(
+                {"run": "admit", "selectEnvironment": "select_environment", "artifactInfo": "artifact_info", "artifactChunk": "artifact_chunk"}.get(method, method), {k:v for k,v in params.items() if k != "target"},
+                expected_owner={k: target[k] for k in ("ownerId", "ownerEpoch")},
+            )
+            receipt = result.get("receipt") if method == "receipt" else result
+            if method in {"run", "admit", "save"} or (method == "bind" and params.get("takeControl")):
+                nid = params.get("notebookId") or params.get("command", {}).get("notebookId")
+                snapshot = await self.notebook_client.call("snapshot", {"notebookId": nid, "limit": 1},
+                    expected_owner={k: target[k] for k in ("ownerId", "ownerEpoch")})
+                if snapshot["binding"]:
+                    for language in ("python", "r"):
+                        self.interactions.invalidate_tool(snapshot["binding"]["session_id"], language, "Notebook state changed under user control; prepare a new request after Resume.")
+            if isinstance(receipt, dict) and receipt.get("kind") == "resume":
+                receipt["newTurnRequired"] = not receipt.get("continuationPrepared", False) and not self.notebook_binding.waiters.get(receipt["sessionId"])
+            return result
+        except NotebookError as error:
+            raise PublicRpcError(error.code) from error
+        except (OSError, TimeoutError):
+            raise PublicRpcError("notebook_owner_unavailable") from None
+
     async def aclose(self):
+        if self.maintenance_jobs_task:
+            self.maintenance_jobs_task.cancel()
+            await asyncio.gather(self.maintenance_jobs_task, return_exceptions=True)
         # EOF stops new model and side-effect admission before draining shared state.
         for task in list(self.observers.values()):
             task.cancel()

@@ -1,34 +1,6 @@
-"""``omicsclaw/context`` — message lists in, message lists out.
+"""Transform conversation message lists.
 
-Plan 0030 task C. Pure transforms over a conversation: no clock, no
-I/O, no model. Everything here is ``(messages, budget) -> messages``,
-which is what makes the whole compaction story testable without
-inventing half a session to test it in.
-
-**Every return value is a tuple, and none of them is the caller's
-list.** The reference harness has a scar here: issue #117 was an
-aliasing bug, and ``progressive_compactor.go:354-360`` still carries the
-defensive copy and the explanation. Python looks safer than it is —
-:class:`~omicsclaw.schema.Message` is frozen, so no single entry can be
-edited behind a caller's back — but a returned *slice* of the caller's
-list is the same bug in a different spelling: one ``append`` and two
-conversations are one conversation.
-
-**Nothing here truncates a message.** Capacity is solved at the
-granularity of whole messages — :func:`fit_to_budget` drops the oldest
-ones first, :func:`emergency_fit` skips the ones that do not fit — never
-by shortening one. In particular
-:attr:`~omicsclaw.schema.ToolCall.arguments` is never rewritten: ADR
-0077 requires it to stay the unparsed JSON text the model emitted, byte
-for byte, because prompt-prefix caching and replay evidence both read
-those bytes. A truncated argument payload is also an *invalid* one,
-which the model will be handed and will retry against forever.
-
-:func:`drop_unanswered_calls` is the one function here that edits a
-message. It takes whole tool calls off a turn when no tool result
-answers them, and it leaves the text and the arguments of what it keeps
-as they were. A tool result with no call, and an answered call whose
-arguments do not parse, are still there afterwards.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

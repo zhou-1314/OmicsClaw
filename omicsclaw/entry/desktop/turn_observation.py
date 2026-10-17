@@ -1,69 +1,10 @@
-"""The ``/chat/stream`` SSE body: turn events projected onto Desktop frames.
+"""Project observed turn events onto the Desktop SSE contract.
 
-Each frame is one ``data:`` line carrying a JSON object with exactly two
-keys, ``type`` and ``data``, followed by a blank line. ``data`` is a
-string: plain text for ``text``, ``thinking``, ``tool_output`` and the
-terminal frames, and a JSON-encoded object for the rest.
-:func:`~omicsclaw.entry.desktop._chat_sse.render_chat_sse_frame` keeps
-every frame under 4 MiB.
+Frames carry type and data, with an event sequence id when resumable. Frames
+without an id remain provisional until done; a reconnect may send them again.
+The SSE renderer enforces the frame size bound.
 
-A frame an event produced is preceded by an ``id:`` line holding that
-event's sequence number, which is a resume cursor: a client that has
-received ``id: N`` has every frame of the events numbered up to N, and a
-``/chat/stream`` request with ``after_seq: N`` continues after them. The
-frames that end the stream (a ``/compact`` exchange's reported
-``status``, ``result``, ``error``, ``done``), the ``error`` and ``done``
-a body adds when its observation ends early, and ``keep_alive`` carry no
-``id:`` line. A client holds the frames without one until ``done``
-arrives, and drops them if the connection breaks first, because a
-resumed stream sends them again.
-
-The frames of ``sse_schema_version`` 3:
-
-* ``text`` / ``thinking`` — an answer delta / a reasoning delta.
-* ``tool_use`` — ``tool_use_id``, ``tool_name``, ``arguments`` (the call's
-  raw JSON string, byte for byte), ``turn``, and the identity keys.
-* ``tool_result`` — ``tool_use_id``, ``tool_name``, ``content``,
-  ``is_error``, ``elapsed_s`` (which includes any approval wait),
-  ``elapsed_includes_approval_wait``, ``turn``, and the identity keys.
-* ``tool_output`` — a tool's progress message.
-* ``suggestions`` — additive in ``sse_schema_version`` 3 (P6 item 2):
-  up to three follow-up questions the model offered with the finished
-  answer, ``{"suggestions": [...]}`` plus the identity keys. Sent only
-  when the answer ended with the prompt's suggestion block; a client
-  that does not know the type drops it, which is the frame's absence
-  case exactly.
-* ``status`` — a compaction: ``kind`` is ``"compaction"``, with the
-  before/after counts, ``degraded``, ``written_back`` and the identity
-  keys. A ``/compact`` exchange always sends one, including when nothing
-  was compacted (``written_back`` false).
-* ``permission_request`` — ``request_id``, ``tool_name``, ``arguments``,
-  ``reason``, ``reason_shows_call``, ``risk_level``, ``approval_mode``,
-  ``ask_every_time``, ``can_remember`` (whether "always allow" can take
-  effect for this call) and the identity keys. Sent only while the
-  request is outstanding; a request a session grant or ``full_access``
-  answers is allowed without a card.
- * ``shadow_review`` — additive in ``sse_schema_version`` 3 (P6 item
-   4): an automatic reviewer's ``warn`` or ``fail`` verdict on this
-   session's recent artifacts, ``{"verdict", "note"}`` plus the
-   identity keys. Sent only while an exchange of the session is live; a
-   client that does not know the type drops it, and ``pass`` is never
-   sent — quiet is the frame's absence case exactly.
- * ``event_omitted`` — frames were lost to this cursor, or one frame was
-  too large to send. Its ``id:`` is the sequence number just before the
-  first event still available, or the oversized event's own.
-* ``result`` — once, before ``done``, when the exchange converged:
-  ``usage`` (the key-wise sum of every model call's ``input_tokens``,
-  ``output_tokens``, ``cache_read_tokens`` and ``cache_write_tokens`` in
-  the exchange, as read by this body and any earlier one over the same
-  exchange, or ``null`` if none reported usage), ``usage_reported``
-  (every call reported usage and no call can have gone unread),
-  ``model_calls``, ``provider`` and ``model``.
-* ``keep_alive`` — after :data:`KEEPALIVE_INTERVAL_S` of silence.
-* ``error`` then ``done`` — the exchange was cancelled (``"cancelled"``) or
-  failed (the exception's type name only); ``done`` alone — it converged.
-
-The identity keys are ``sequence``, ``turn_id`` and ``session_id``.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

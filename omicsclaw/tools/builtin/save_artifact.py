@@ -1,50 +1,10 @@
-"""``save_artifact`` — capture channel ① of the P2 artifacts plane.
+"""Register an existing workspace file as an artifact with checksum and lineage.
 
-The explicit half: the model (or a skill calling through the tool
-surface) names a file it just produced, and the tool registers that file
-as an artifact so it appears in the desktop tray with a kind, a checksum
-and a lineage. Claude-Science's ``save_artifacts`` is the reference; the
-difference worth stating is that this tool **creates nothing** — the
-file is already on disk, the tool's whole effect is one registry row.
+The tool resolves the path and rejects escaped, sensitive and hidden paths.
+Composition supplies the registry sink. Registration does not create the
+source file, and approval receives the original call payload.
 
-**Hand-written like ``write_file``, and for the same reason**: the
-approval prompt must quote the bytes the model actually sent, and a
-decoded-and-reconstructed payload would not.
-
-**Path fencing follows the house style**: the path goes through
-:class:`~omicsclaw.tools._workspace.Workspace.resolve`, so a symlink
-pointing out of the workspace, a ``..`` climb and a sensitive name
-(``.env`` and friends) are all refused before anything is registered —
-the same boundary ``read``/``write``/``edit`` stand on. One more rule is
-enforced here to match ``/files/serve`` exactly: any path segment that
-starts with a dot (``.omicsclaw/jobs.db``, ``results/.hidden/x.png``)
-is refused, because the serve route refuses every hidden segment and a
-registered artifact must always be a servable one.
-
-**The registrar is injected** (:class:`ArtifactSink`), because this
-layer is a leaf: it may import ``omicsclaw.schema`` and nothing else,
-while the artifact registry lives in the memory layer. The composition
-root (:func:`~omicsclaw.entry.assembly.build_app`) binds the sink over
-the workspace's shared artifact store; a tool constructed without one
-refuses at execution time with a :exc:`RuntimeError`, the same "the
-surface binds it" refusal ``resolve_workspace`` makes, because no
-argument the model can send could supply a database. The sink call runs
-in ``asyncio.to_thread``: it hashes the file (up to the store's
-half-gigabyte ceiling) before writing its row, and that read must not
-pause the event loop that is serving every other HTTP and SSE client.
-
-**Approval follows the write category**, per the P2 plan: ``HIGH`` risk,
-``ASK`` mode. The blast radius is not the filesystem (nothing is
-written) but the *surface*: a registered artifact is pushed at the human
-through the tray, and a path the person did not mean to surface is a
-leak the prompt has to catch.
-
-**Session, not job**: the row is registered with the ``session_id`` of
-the running context (:func:`~omicsclaw.tools.context.context_value`),
-an empty ``job_id`` — a tool call belongs to a session, and it is the
-job-plane scanner that owns job-bound rows. The ``artifact.created``
-job-stream event is therefore emitted by the scanner and not by this
-tool: a tool call with no job has no stream to speak on.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

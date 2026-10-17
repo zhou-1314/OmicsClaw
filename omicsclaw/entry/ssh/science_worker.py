@@ -29,6 +29,7 @@ MAX_EVENT_BYTES = 64 * 1024
 
 def write_result(value, target: Path, suffix: str) -> None:
     """Write a scientific return using the established file-format conventions."""
+
     def json_value(item):
         if hasattr(item, "tolist"):
             return item.tolist()
@@ -50,7 +51,9 @@ def write_result(value, target: Path, suffix: str) -> None:
     elif suffix in {".png", ".pdf", ".svg"} and hasattr(value, "savefig"):
         value.savefig(target, dpi=150, bbox_inches="tight", format=suffix[1:])
     elif suffix == ".json" and isinstance(value, (dict, list)):
-        target.write_text(json.dumps(value, indent=2, default=json_value) + "\n", encoding="utf-8")
+        target.write_text(
+            json.dumps(value, indent=2, default=json_value) + "\n", encoding="utf-8"
+        )
     elif suffix in {".md", ".txt"} and isinstance(value, str):
         target.write_text(value, encoding="utf-8")
     else:
@@ -99,9 +102,7 @@ def persist_result(result, workspace, *, writer):
             path.unlink(missing_ok=True)
 
 
-async def execute(request_path: Path, *, result_writer):
-    with request_path.open("rb") as source:
-        raw = source.read(MAX_REQUEST_BYTES + 1)
+async def _execute(request_path: Path, *, result_writer, raw):
     if len(raw) > MAX_REQUEST_BYTES:
         raise ValueError("science_request_budget")
     request = json.loads(raw)
@@ -228,11 +229,51 @@ async def execute(request_path: Path, *, result_writer):
     os.replace(temporary, workspace / "_omicsclaw_worker.json")
 
 
+async def execute(request_path: Path, *, result_writer, contained_directory=None):
+    from omicsclaw.entry.environment_jobs import (
+        finish_worker_reservation,
+        start_worker_reservation,
+    )
+
+    with request_path.open("rb") as source:
+        raw = source.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("science_request_budget")
+    request = json.loads(raw)
+    from .science_containment import supervise, validate_child
+
+    reservation = start_worker_reservation(
+        request,
+        register=False,
+        directory=contained_directory,
+        check_scopes=contained_directory is None,
+    )
+    if contained_directory is not None:
+        if reservation is None:
+            raise ValueError("science_containment_requires_reservation")
+        validate_child(reservation)
+        return await _execute(request_path, result_writer=result_writer, raw=raw)
+    if reservation is not None and sys.platform.startswith("linux"):
+        return await supervise(request_path.resolve(strict=True), reservation)
+    reservation = start_worker_reservation(request)
+    try:
+        await _execute(request_path, result_writer=result_writer, raw=raw)
+    finally:
+        finish_worker_reservation(reservation)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--contained-coordinator", type=Path)
     arguments = parser.parse_args()
-    asyncio.run(execute(arguments.request, result_writer=write_result))
+    asyncio.run(
+        execute(
+            arguments.request,
+            result_writer=write_result,
+            contained_directory=arguments.contained_coordinator,
+        )
+    )
 
 
 if __name__ == "__main__":

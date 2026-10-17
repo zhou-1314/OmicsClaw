@@ -1,3 +1,209 @@
+## 2026-10-17：整理 SSH Notebook 核心实现并修复非 Linux 启动
+
+- 将 SSH Notebook、环境协调、Python/R 持久执行、对象保存与显式恢复的实现和测试纳入本批提交；运行时历史说明归档到工程文档，演示材料不纳入。
+- 提交前审查发现本地内核初始化提前导入 Linux 协调依赖。现仅在 Linux 创建环境守卫，Windows/macOS 保持原本的本地内核路径；新增两项子进程回归在修复前失败、修复后通过，相关定向检查为 60 passed、1 xfailed，独立复核确认关闭问题。
+- 2026-10-17 按 Level 4 验证，基线为 `b04fd509` 加本地改动，解释器为 Python 3.11.15。完整框架检查为 9,338 passed、72 skipped、77 deselected、4 xfailed、1 xpassed，退出码为 0；脚本化评测为 23 passed、8 skipped；技能与 Desktop 契约检查为 248 passed；已知 v3 和当前 App 源码的 hello、approval、abort 代理检查全部通过。完整套件在上述平台导入修复前启动，该修复另经定向检查。命令、源码哈希和日志保存在本地 `build/push-main-20261017/`；本次未重跑实际模型服务或原生安装包验收。
+
+## 2026-10-16：Notebook 交付收敛为核心 SSH 闭环
+
+- 按用户要求，当前只完成环境登记、自动绑定、Python/R 持久交互、已登记组学对象保存与恢复；环境维护扩展、Job 回填、Replay、交互圈选扩展和原生发布延期。
+- 新的实际 SSH owner 故障恢复已独立核验通过；App 匹配组件、旧部署缓存和 Notebook 客户端依赖修复已合入。实际 SSH 自动绑定、用户与 Agent 共享 AnnData、继续执行和重连通过。首次联网依赖安装超时，成功场景使用离线准备的控制依赖，见[使用顺序与验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Notebook 恢复与保存修复合入工作树
+
+- 已审的整组 Restore 与故障后 Release 修复合入两端 37 个路径；合入后后端 36 项、App 56 项及 Web/Electron 类型检查通过。
+- Linux 低额度 AnnData 保存修复随后合入五个路径，相关检查为 32 passed、1 条件跳过；保存写入失败保留原内核。新的 SSH 故障、带对象维护、Job 和复现验收仍待完成，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Notebook 保存与故障释放修复通过复审
+
+- 低额度 AnnData 保存和恢复后 Release 的修复已获独立接纳；带对象维护、Job 与显式升级的固定后端组合为 9,437 passed、0 failed，验证期间源码未变。
+- 上述后续代码仍在冻结候选中，尚未全部合入当前工作树。Replay 执行链、完整 SSH/界面验收、组件预算和最终交付继续推进；分批通过不代表全功能完成，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Restore 故障验收发现释放遗漏
+
+- 真实 SSH 中途终止 owner 后，新连接保留了原 Restore 回执和阻断；明确 Release 关闭监督进程后，原 Python 内核仍在，操作返回停止未确认。
+- Restore 批次暂停合入，原现场与失败证据保留，先修复并验证进程回收路径。低额度 AnnData 保存修复也仍在独立审查，完整功能尚未交付，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：继续减少 SSH 控制组件中的历史说明
+
+- 75 个模块的详细介绍完整移至[补充设计记录](docs/engineering/runtime-additional-design-notes.md)，源码减少 118,772 字节，组件限额不变。
+- 独立审查和合入核对确认首段字符串之外的字节及执行 AST 不变；模块 `__doc__` 与源码行号改变。既有冻结组件与验收证据保留原版本。
+
+## 2026-10-16：科学恢复通过实跑，发现低额度保存缺口
+
+- Python PBMC 和真实 R/DESeq2 的显式整组 Restore 均通过独立实跑审计，原分析未重放，模型请求为零；owner 故障验收继续进行。
+- 独立复现确认旧 AnnData 保存核心在稀疏对象含 raw、额度极低时崩溃，尚不满足失败保留内存的要求，正专项修复；维护完整 CI 的 13 项失败已定位到测试进程 RSS 夹具，修正仍待复核。详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：SSH 浏览器整组恢复通过独立验收
+
+- 实际 Next/OpenSSH 流程完成整组 Restore、丢回执恢复、断线后同代读取与编辑，以及明确 Release；独立复核确认原分析只运行一次、保存文件未变、相关进程已退出。
+- 此结果覆盖小型 AnnData 界面流程。Python/R 科学整组恢复、owner 故障与后续批次继续验证，模型 API 连接失败单列；详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：维护保存的迟到回执修复通过复审
+
+- 全局维护记录现在能接纳原唯一 prepare 的迟到回执，并继续拒绝操作替换和状态倒退；真实 owner 探针和定向检查通过，公开维护链仍在验收。
+- Restore 实测保留了模型错误及浏览器定位失败的现场，后续沿原会话续接；已完成的 Python 分析不重放。详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Notebook 整组保存通过验收并合入
+
+- Python/R 科学保存、浏览器回执恢复与保存失败处理，以及完整 CI 均已独立核验；57 项已审文件合入两端工作树。
+- 合入后后端 48 项、App 127 项检查全部通过，类型检查通过，来源无漂移。显式 Restore 及后续组学功能继续实施，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：保存浏览器流程完成，Restore App 回执竞态关闭
+
+- 同现场浏览器续接完成修正 Run、阶段自动保存及显式 Release，原分析未重放，科学进程和 owner 均退出；实际证据待独立复核后合入保存批次。
+- Restore App 的迟到旧回执不会再清除另一窗口的新待定 Release，六项独立边界及三十项 UI 检查通过；真实 SSH Restore 继续验收。范围见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Restore 修复版通过完整回归
+
+- 最终后端副本为 9331 passed、无失败；1452 个验证文件前后哈希一致，原失效目标换代绕过和旧能力断言均已修复。
+- App 释放入口仍在独立审查，真实 SSH 科学 Restore、浏览器流程和 owner 进程死亡验收继续进行，尚未合入本批。具体范围见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Restore 失效目标阻断修复通过独立复审
+
+- Restore 目标失联后，持久恢复门禁继续阻止 Bind 和 Run；只有精确目标的显式 Release 确认进程闭包退出，才解除对应 gate 和源 hold。独立实际故障探针及四项回归通过，原换代绕过已关闭。
+- 最终完整 CI 正在运行，App 失联目标释放入口和实际 SSH 科学恢复仍待验收；该后端候选尚未合入工作树。范围见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：继续归档控制组件内的历史设计说明
+
+- 三十个模块的历史介绍完整移至[框架设计记录](docs/engineering/runtime-framework-design-notes.md)，源码保留简述及文档位置，减少 89,043 字节。
+- 独立核对确认首段说明之外的源码逐字一致、执行 AST 一致；31 个文件已按覆盖前哈希合入。模块 `__doc__` 与源码行号改变，既有冻结组件和测试证据保持原版本。
+
+## 2026-10-16：Restore 审查发现失效内核换代遗漏
+
+- 独立探针确认：Restore 失败目标结束并变为 lost 后，Bind 能创建新代并实际 Run，旧 hold 尚未解除，原目标 Release 却被判代次变化。该候选暂不接纳，修复将保留按 Notebook 和语言查询的持久阻断，并要求明确 Release 后才能换代。
+- 浏览器保存已完成手工保存回执恢复、实际重连及目录不可写后的重试；后续脚本因同名按钮定位不唯一停止，原内核和失败现场保留，继续同现场验收。详细证据见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Notebook 保存批次通过完整回归
+
+- 最终完整 CI 为 9300 passed、无失败，1444 个验证文件哈希不变；原 12 项资源计量失败由两个测试文件的隔离修复解决，产品配额未改。
+- 实际 Python/R 保存已通过独立核验。浏览器验收脚本发现的未知回执清理问题正在复修，待实测通过后合入保存批次；Restore 继续实施，见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：Python/R 实际 SSH 保存通过独立核验
+
+- 六组保存点的十二个文件按原科学标准独立重读通过；回执、源执行、失败阻断、重试与明确继续，以及 EOF 后原内核保留均有持久证据。
+- 测试隔离修复通过独立复审，最终完整 CI 正在运行；浏览器保存驱动仍在审查，显式 Restore 继续实施。范围和副作用见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：保存排队检查修复通过窄审，完整回归仍有失败
+
+- S4b candidate 2 的五文件修复通过独立五场景和十项回归，关闭保存失败后的排队 Inspect 阻断；冻结组合 89 项通过。实际 Python/R SSH 保存的 13 项断言通过，持久科学证据正在独立核验。
+- candidate 1 完整 CI 为 13 failed、9284 passed；修复旧夹具后，candidate 2 为 12 failed、9288 passed。剩余失败已通过压力对照定位到 pytest 进程内存计量，两个测试文件的隔离修复正在独立审查，产品配额未改。原候选与日志保留，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：保存审查发现排队后的对象检查阻断
+
+- S4b 完整保存候选的 210 项组合检查通过；独立审查另复现保存失败停止后，排队单元导致固定 Inspect 被误拒绝的问题，候选暂不接纳，修复另批进行。
+- 科学文件验收已补查 AnnData 的 X/lognorm 和 DDS 拟合结果，独立正负例通过；实际 SSH 保存验收等待修复后的匹配组件，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-16：整理控制组件内的历史工具说明
+
+- 六个基础工具模块保留职责与关键约束，原长篇说明完整移至[工程记录](docs/engineering/runtime-tool-design-notes.md)，源码减少 45,112 字节，为后续 Notebook 功能留出固定打包预算。
+- 独立检查确认首段说明之外的源码逐字一致，执行 AST 一致；本次整理已合入工作树，正在验收的 S4b 保存候选保持原冻结版本。新组件将在后续批次重新打包、固定来源并验证。
+
+## 2026-10-15：Notebook 对象与选择功能通过完整 CI 并合入
+
+- S4a 最终完整 CI 为 9243 passed，保留跳过、预期结果及一条异步清理警告；后端/App 共 63 个已审文件按哈希合入，合入后 43 项后端和 116 项 App 检查全部通过。
+- 保存核心的取消保护 P1 已独立复验关闭，完整 checkpoint 仍在接线；已部署旧组件的正常升级与匹配安装包留待 S6，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：SSH Notebook 科学场景通过独立核验
+
+- PBMC、真实 IRkernel/DESeq2 和对象恢复三组实际 SSH 场景通过独立核验：八项检查、18 个完成的执行；科学结果满足预先固定的标准，断线保活、旧选择拒绝及显式恢复均有持久记录。
+- 测试隔离与 Channel 等待修复通过独立压力检查，最终全量 CI 仍在运行。S4a 尚未合入，checkpoint、Job 和复现导出继续实施，详见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：Notebook 运行上下文与当前对象恢复入口通过复审
+
+- App 历史目录读取失败不再连带禁用有效 Run；当前对象独立于历史分页显示，失效对象仍可检查或取消登记。原两条失败复现及新增边界共 36 项独立检查通过。
+- 后端运行上下文与文件额度修复已通过窄审，实际 PBMC 链路结果正独立核验；checkpoint 核心已冻结，完整保存与恢复仍待接线。范围和原失败见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：SSH 环境维护故障验收通过并合入
+
+- 实际终止维护 owner 后，新 owner 保留损伤；验证进程存活时拒绝修复，确认退出后仍须显式 Repair。独立核验确认未重复安装，两边新内核均实际导入修复后的包，记录进程全部退出。
+- 维护后端和 App 共 78 个最终文件已按哈希核对合入，保留并行界面改动。当前通过范围是开发组件的无对象维护；有分析对象的保存、恢复及发布安装包仍待后续批次，见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：Notebook 对象审查确认恢复与文件额度问题
+
+- S4a 冻结副本的 152 项定向检查通过；独立审查另复现无效登记阻断后续内核运行，以及发布失败留下的文件绕过额度检查，当前候选暂不接纳。
+- 修复将提供明确的取消登记入口，保留对象内存、历史和失效选择；失败产物需清理并纳入额度。原失败与后续复审保存在[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：SSH Python/R 环境维护与失败修复通过实测
+
+- 专用账户中，Python/R 的跨工作区影响、获准维护后的 controller 断线续行、新环境版本与内核代次、checkpoint 阻止更新及取消后保留内存均通过真实 SSH 验证。独立复核确认四个工作区的执行已持久完成，记录的进程均已退出。
+- 从原失败现场续接，Python/R 各通过 14 项检查；独立复核确认取消修复仍保留损伤，显式修复验证成功后才解除保护，两边内核均导入新包，过期 Restart 无法替换新内核。owner 故障恢复尚未通过，完整维护仍待验收，见[记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+- 修复环境错误提示后，实际浏览器的维护批准、安装、刷新历史及取消后保留内存四项检查通过，结果已独立核验；1134 个 App 源文件前后不变。真正的 owner 崩溃维护恢复仍待验收。
+
+## 2026-10-15：维护恢复修复通过独立审查，实际验收补齐账户隔离
+
+- 第三版维护候选关闭 owner 恢复、提交后取消、并发重启结果及后台任务回收问题；六文件测试隔离修复通过独立压力复验，产品配额不变。完整回归为 9159 通过、1 项入口清单检查失败；补齐三个内部进程入口后，原失败用例已独立复验通过。
+- 首轮实际 SSH 在安装前发现驱动身份假设错误及测试账户共享协调库的占用冲突。保留原现场，修正驱动并准备专用账户重验；完整维护尚未验收，见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：环境维护独立审查确认三项恢复问题
+
+- 完整维护候选的独立审查确认 owner 换代后的修复目标、提交后的取消终态及并发重启结果三项问题；已复现并进入修复，当前不予验收。
+- 维护 App 与并行界面改动的整合候选通过独立窄审；真实 SSH 只读预检通过。安装、故障恢复和完整回归仍待完成，见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：Notebook 对象界面完成首轮独立审查
+
+- 首份对象与选择界面的独立审查发现跨语言 Run 遗漏全局当前选择；五文件修复经原失败用例、29 项定向测试及延迟绑定检查复审通过，尚未合入。
+- 维护 App 的精确请求错误映射通过窄批复审，实际验收驱动已固定到修复版。完整维护通路与组学恢复仍待验证，见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：补齐组学 checkpoint 与恢复实施合同
+
+- 独立预审明确阶段保存的持久顺序、非破坏性停止策略、登记对象的覆盖边界、恢复目标屏障及整组发布规则；实际 AnnData 微型失败实验揭示默认保存会先转换列类型。
+- 对象界面增加显式清除当前选择的合同，保留历史并拒绝陈旧清除请求。上述均为实施约束，产品接线和科学验收仍待完成，见[方案](docs/engineering/2026-10-15-notebook-comparison-and-roadmap.md)与[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：环境维护进程回收通过窄批复审
+
+- 宿主 subreaper 方案通过实际 R/NumPy 兼容检查；正常 Job 取消后可由新进程确认后代退出并回收环境占用，退出证据不明时继续阻止维护。三文件修复的独立 17 项检查全部通过。
+- 该候选尚未合入，完整维护审批、安装和重连仍待验收，记录见[实施与验收文档](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：SSH IRkernel 完成 DESeq2 科学预检
+
+- 已验收的 S3a 开发组件在实际 App/OpenSSH 通路中完成 1201 基因、8 样本的冻结 DESeq2 流程；数值、样本对齐、反向比较及 NA 检查通过，SSH 断线重连后保留原拟合对象和用户修改。
+- 父任务复核 1045 个冻结源文件及输出哈希，结果 CSV 与固定参考逐字节一致，显式释放后的内核和 owner 均退出。自动 checkpoint、Job 回接和复现导出仍待实施，范围与首次连接失败见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：SSH R 持久交互通过批次验收
+
+- 独立 S3a 开发组件经 App/OpenSSH 使用登记的 IRkernel，验证双语言隔离、R 对象连续交互、富输出、纯 EOF 保活及 R 取消/释放后的 Python 可用性。真实模型另用 4 次请求读取用户编辑，全部 1201 个基因汇总与固定期望一致。
+- App 跨语言草稿 rebase 问题已在 candidate 2 通过独立复审；实际浏览器九项检查通过。补齐首轮复制遗漏的公开夹具后，完整后端 CI 为 9074 passed、无失败，1370 个文件哈希稳定；原失败和驱动修正分别保留。
+- 两端已合入冻结改动并保留并行 UI 内容，App 定向测试 109 项、Web/Electron 类型检查及 scoped lint 通过；并行 UI 测试的初次类型错误与后续修正分别记录。环境维护继续在独立副本实施，证据与开发组件限制见[验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+- 单独修复聊天流测试在迟到中断后遗留 GC 的清理竞态，独立复审通过；根树 Notebook/协议/聊天流组合测试 138 项全部通过并自然退出，产品保留策略未变。
+
+## 2026-10-15：SSH Python Notebook 默认交互通过批次验收
+
+- 首次获准分析自动打开 Notebook，用户可保存、运行、接管和继续 Agent；原对象、内核代次、固定技能来源及有界富输出经实际 Next/OpenSSH 验证。
+- 独立审查修复了丢弃续接后的迟到发送、草稿覆盖、跨聊天误选、临时 waiter 丢失续接和新 cell 继承旧 revision 五项 App 问题；最终候选通过完整浏览器流程。
+- 完整后端 CI 为 9066 passed、60 skipped、无失败，1363 个验证文件哈希稳定；后端独立审查 273 项通过。App 冻结副本的通过与并行工作树的合同/测试超时失败分别记录在[验收文档](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+- S3 已在独立副本中开始真实 R 内核和双语言界面实现，后续接原地维护；组学恢复、复现和匹配发布包仍未交付。
+
+## 2026-10-15：SSH Notebook 默认分析与接管完成中途联调
+
+- 首次获准 Python 分析可自动创建 Notebook，普通聊天保持零科学内核；S1 owner 代理导致聊天组装失败的回归已在完整开发组件上修复并经实际 OpenSSH 验证。
+- 实际模型完成 AnnData 的 Agent、用户编辑、Resume 与后续计算，保留对象身份及内核代次；脚本化模型另验证推理和审批期间接管，以及拒绝同回复中的陈旧后续调用。
+- 请求上下文核心通过独立审查，实际 wire 证据经过补核。当前仍是 S2 中途组件；App 页面、富输出、完整输入检查及最终冻结验收继续实施，详见 [验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+
+## 2026-10-15：SSH Notebook 独立 owner 通过批次验收
+
+- 已接纳的 Python 计算可跨 controller EOF、SIGKILL 和 App 关闭继续运行，重连访问原内核、变量及持久输出；明确取消和释放使用内核身份校验，重试复用原执行。
+- App 的 SSH Notebook 可查看状态与历史、取消计算和释放内核；独立审查修复了 owner 切换竞争、遗留执行占用、进程清理、旧代状态、重连按钮及超时问题，并修复 Jupyter 同步桥的上下文复用。
+- 最终开发组件通过独立复审、真实 App/OpenSSH、Desktop 兼容和浏览器组合验证；完整后端 CI 为 9033 passed、60 skipped、无失败，1348 个验证文件哈希稳定，scripted eval 为 23 passed、8 skipped。
+- [验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md) 保留原失败和补验边界。S2 开始实现默认绑定与用户/Agent 交互；R、组学恢复、复现和发布安装包仍待后续批次。
+- 后续真实 SSH 普通聊天预检发现 owner 代理缺少旧上下文入口假定的属性，导致模型调用前失败；已单列为 S2 优先修复项，S1 的 owner 范围通过不代表该组件已可交付聊天使用。
+
+## 2026-10-15：SSH Notebook 环境登记通过修复复审
+
+- App 的 SSH 设置可登记现有 Python/R 环境、预检依赖、查看版本与指纹，并明确接受变化后的环境；控制端依赖与科学端内核依赖分别检查。
+- 独立审查后修复凭据屏蔽路径、预检进程清理、公开 RPC 错误和打包进程入口，复审后端 64 项、App 25 项通过；完整后端 CI 为 8985 passed、60 skipped，无失败。
+- 使用不含科学包的轻量控制环境，经真实 App/OpenSSH 验证登记、重连与错误码；单一旧库迁移保留聊天和 Notebook 历史。开发组件、原生文件隔离及发布安装包的证据边界见 [实施与验收记录](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md)。
+- 实际浏览器补验发现并修复 Next 路由 bundle 间错误构造器身份不同的问题；窄批独立复审 23 项通过，页面登记 Python/R、非法路径提示及刷新保留均通过真实 SSH 检查。
+- 开始 S1 独立 Notebook owner 实施。环境登记批通过不等于 Notebook 执行已开放，R 持久交互、环境维护、checkpoint 和复现导出仍按后续阶段交付。
+
+## 2026-10-15：Notebook 对比、独立审查与实施规格
+
+- 对照 Claude Science 0.1.60 解包代码、当前后端和 App，确认 SSH controller 明确关闭 Notebook，普通后端已有自动绑定与共享内核闭环。
+- 完成 [Notebook 对比及优化方案](docs/engineering/2026-10-15-notebook-comparison-and-roadmap.md)，保留现状诊断与初次验证记录，将 11 项已确认决策整合为 SSH 下 Python/R 持久交互的实施规格。
+- 新增 [SSH Notebook 方案独立审查](docs/engineering/2026-10-15-notebook-plan-review.md)，提出 9 项设计补充，前移环境身份、内核代次和状态校验，并明确组学数据选择、Python/R 交互、长任务回接与分段复现的交付边界和验收场景。
+- 确认断线保活、现有环境登记、单台服务器、手动释放与额度限制、用户接管；允许确认后原地升级并重启相关内核，关键阶段自动 checkpoint，保存失败暂停数据修改并允许明确继续，默认轻量导出。
+- 用 S0–S6 重排环境、owner、SSH 交互、组学恢复与复现的依赖，列出 18 项验收和三条科学主线。核实当前 bulk RNA helper 为 Python Welch 检验，R DESeq2 需新增真实交互验收。本次仅更新文档，未实施功能或重跑历史测试。
+
 ## 2026-10-15：删除根目录冗余入口
 
 - 科学作业直接启动 `omicsclaw.entry.ssh.science_worker`，移除根目录转发脚本，并同步控制器打包与来源校验。

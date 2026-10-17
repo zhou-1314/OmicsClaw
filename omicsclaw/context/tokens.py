@@ -1,83 +1,9 @@
-"""``omicsclaw/context`` — what a conversation costs, in tokens.
+"""Estimate token costs for messages, text and tool definitions.
 
-Plan 0030 task A. Every budget decision in this package divides by a
-number produced here, so the counting rule is written once, in this
-module, and nowhere else: :mod:`~omicsclaw.context.budget`,
-:mod:`~omicsclaw.context.prompt` and
-:mod:`~omicsclaw.context.compaction` call these functions instead of
-growing a second ``len(text) // 4``. The layer this one replaces had
-three estimators living side by side, in two different units.
+Budget, prompt and compaction code share these counting functions. They are
+estimates rather than a provider tokenizer; callers must reserve headroom.
 
-**The rule, and why it is not the reference harness's.** The harness
-counts ``len(m.Content) / 4`` (``internal/memory/token.go:15,19-29``),
-and Go's ``len`` on a string counts **bytes**. Python's ``len`` counts
-code points, so the literal translation is not the same function::
-
-    s = '这是一个中文句子，用于测试 token 估算。'
-    len(s)          == 23      # code points — what a naive port counts
-    len(s.encode()) == 55      # bytes — what the harness counts
-    55 // 4 == 13   vs   23 // 4 == 5
-
-A naive port under-counts Chinese text two to three fold.
-Under-counting is the dangerous direction: it means
-believing there is room, sending the request, and being truncated or
-refused by the API. So the harness's *intent* — roughly four ASCII
-characters to a token — is re-derived here rather than transliterated::
-
-    tokens(text) = ceil(ascii_chars / 4) + non_ascii_chars
-
-Pure ASCII agrees with the harness to within the rounding, and errs
-*above* it where they differ: ``token.go:29`` divides a running total
-once, which floors, while this rounds each field up. ``"hello"`` is one
-token there and two here. Anything outside ASCII is billed a whole
-token per character, which is deliberately pessimistic in the same
-direction: a CJK character is usually somewhat less than one token, and
-erring above the truth is the only safe error here.
-
-**Accuracy is not claimed. This estimator is UNCALIBRATED.** No
-tokenizer was available to measure against (``tiktoken`` is not
-installed on the machine this was written on and cannot be installed —
-there is no network), so no error figure appears anywhere in this
-package. Plan 0030 §11.A-8 carries the debt. A deployment that has a
-real tokenizer injects one through :class:`TokenCounter`; nothing here
-reaches for ``tiktoken`` on its own, and nothing here changes behaviour
-because ``tiktoken`` happens to be installed — a local budget that
-silently moves when an optional package appears is not a budget.
-
-**What is counted, per message.** Content, ``reasoning_content``,
-``tool_call_id``, ``name``, and for every tool call its id, name and
-raw ``arguments``. ``token.go:19-29`` counts content, ``tool_call_id``
-and the three parts of a tool call — the two it leaves out are
-``reasoning_content`` and ``name``, and it leaves them out because
-``internal/schema/message.go:33-63`` has no field for either. This
-repository's :class:`~omicsclaw.schema.Message` has both, and ADR 0077
-added ``reasoning_content`` on purpose (thinking endpoints reject a
-history that has lost it), so copying the harness's field list would
-systematically under-count exactly the field this repository went out of
-its way to keep.
-
-Each field is estimated and rounded up **separately**, where the harness
-sums raw lengths and divides once at the end. Many short fields
-therefore cost slightly more here than there — again the safe direction,
-and it is what makes "add a field, the estimate grows" true rather than
-true-above-four-characters.
-
-**No separate prompt estimator.** The layer this replaces had
-``estimate_prompt_tokens(system, messages)``. It is not missing, it is
-an addition::
-
-    estimate_text_tokens(system_prompt) + estimate_messages_tokens(msgs)
-
-**Known blind spot: images cost zero.** ``Message.content`` is a
-``str`` — ADR 0077 deliberately left multimodal content parts out — so
-an image reaching this layer has no representation to count and is
-billed nothing. No image reaches this layer today: the channel adapters
-refuse or drop inbound photos and attachments, and an MCP image result
-arrives as a one-line text placeholder. Once the schema carries image
-parts, the budget will be optimistic by roughly a thousand tokens per
-picture. **Do not paper over it with a heuristic**: "looks
-like base64, add 1300" misfires on ordinary text, which is a worse
-failure than the one it treats. Plan 0030 §11.B-11.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

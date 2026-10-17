@@ -1,54 +1,22 @@
-"""The hub: registration, exposure, dispatch — and nothing else.
+"""Register, expose and dispatch tools.
 
-Plan 0028 §2. Three jobs in one place, so the loop can use tools while
-knowing none of them:
-
-    registry.register(tool)                 # mount
-    defs = registry.available_tools()       # expose  → provider
-    result = await registry.execute(call)   # dispatch → Observation
-
-:class:`ToolRegistry` satisfies
-:class:`omicsclaw.engine.executor.ToolExecutor` **structurally** — same
-two methods, same signatures — without importing :mod:`omicsclaw.engine`.
-That is the whole point of the seam being a Protocol: the dependency runs
-one way, from the engine's test suite to here, and never back.
-
-Two further methods satisfy that layer's two **optional** seams the same
-way. :meth:`ToolRegistry.is_concurrency_safe` answers
-``ConcurrencyAwareExecutor``, which is what finally gives
-:attr:`~omicsclaw.tools.base.ToolPolicy.concurrency_safe` a consumer: a
-tool that declares itself unsafe is scheduled alone instead of beside a
-sibling writing the same file. :meth:`ToolRegistry.use_timeout_pause`
-answers ``DeadlineAwareExecutor`` and carries the engine's per-call
-timeout pause down to :func:`~omicsclaw.tools.context.require_approval`,
-so a human's thinking time stops being reported as a tool running long.
-Both report or relay; neither schedules and neither decides.
-
-**What is absent is the design.** There is no ``request``, no
-``surface``, no ``stage`` anywhere on this class. Deciding *which* tools
-a particular caller may see is the assembly layer's business (plan 0028
-§5); a registry that knew about requests would be the thing this rebuild
-is walking away from. What is offered instead is the full set, in a
-stable order, plus :meth:`ToolRegistry.policy_for` so a filter can be
-written elsewhere.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, and the standard library.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import AbstractContextManager, contextmanager
 
 from omicsclaw.schema import ToolCall, ToolDefinition, ToolResult
+from omicsclaw.schema.request import ModelRequestContext, ToolInvocationContext
 
 from .base import Tool, ToolPolicy
 from .context import (
     TimeoutPause,
-    use_effective_policy,
     current_context,
+    use_effective_policy,
     use_tool_context,
 )
 from .context import use_timeout_pause as publish_timeout_pause
@@ -116,13 +84,26 @@ class ToolRegistry:
     **Not thread-safe, on purpose.** See :meth:`register`.
     """
 
-    def __init__(self, tools: Iterable[Tool] = ()) -> None:
+    def __init__(
+        self, tools: Iterable[Tool] = (), *,
+        before_execute: Callable[[ToolCall], Awaitable[None]] | None = None,
+    ) -> None:
         self._tools: dict[str, Tool] = {}
         self._policies: dict[str, ToolPolicy] = {}
+        self.before_execute = before_execute
         for tool in tools:
             self.register(tool)
 
     # ---- registration ---------------------------------------------------
+
+    @contextmanager
+    def use_request_context(self, request: ModelRequestContext, position: int, call: ToolCall):
+        outer = current_context()
+        with use_tool_context(
+            approval=outer.approval, progress=outer.progress, question=outer.question,
+            values=outer.values, invocation=ToolInvocationContext(request, position, call),
+        ):
+            yield
 
     def register(self, tool: Tool, policy: ToolPolicy | None = None) -> None:
         """Mount ``tool`` at the end of the order.
@@ -366,9 +347,12 @@ class ToolRegistry:
                     approval=outer.approval,
                     progress=outer.progress,
                     question=outer.question,
+                    invocation=outer.invocation,
                     values={**outer.values, "tool_call_id": call.id},
                 ),
             ):
+                if self.before_execute is not None:
+                    await self.before_execute(call)
                 output = await tool.execute(call.arguments)
         except Exception as exc:
             return _failed(

@@ -1,30 +1,6 @@
-"""``omicsclaw/provider`` — the one contract the Main Loop programs against.
+"""Define the provider interface used by the engine.
 
-Plan 0026, step 2 of the staged framework rebuild. ADR 0077 gave the
-system a vendor-neutral vocabulary; nothing could yet turn those types
-into a request. This layer can::
-
-    Engine ──▶ LLMProvider ──▶ vendor SDK
-                 (here)         (OpenAI / Anthropic / DeepSeek / Ollama …)
-
-A provider is a *simultaneous interpreter*: :mod:`omicsclaw.schema` types
-go in, :mod:`omicsclaw.schema` types come out, and every vendor-shaped
-field name lives and dies inside one adapter module. Adding a backend is
-then a new file, not an edit to the loop.
-
-**What is absent from the interface is the point.** ``generate`` takes the
-conversation and the tools available for this turn, and nothing else — no
-model, no temperature, no ``max_tokens``, no thinking budget. Those live
-on the instance, in a :class:`~omicsclaw.provider.config.ProviderConfig`
-fixed at construction, so the Engine cannot acquire model configuration:
-there is nowhere to put it. Per-request variation goes through
-:meth:`LLMProvider.bind`, which hands back a *different provider* rather
-than widening the hot-path signature.
-
-**Leaf-adjacent.** This package imports ``omicsclaw.schema`` and the
-standard library, nothing else. No vendor SDK is imported here — that is
-each adapter's private business, so importing the contract never requires
-an optional extra to be installed.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

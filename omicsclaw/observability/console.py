@@ -1,27 +1,6 @@
-"""A working backend with nothing installed: JSON lines and a metric summary.
+"""Write telemetry as JSON lines and metric summaries.
 
-Satisfies :data:`~omicsclaw.observability.config.ExporterType.STDOUT`.
-The reference's equivalent is an OpenTelemetry SDK component
-(``stdouttrace`` / ``stdoutmetric``); this one is **standard library
-only**, and the difference buys two things worth having:
-
-- a contributor can see the trace tree of a real run without installing
-  anything, which is the state a bug report usually arrives in;
-- the test suite can exercise a genuine backend end to end, so the
-  contract in :mod:`omicsclaw.observability.contract` is pinned by
-  something other than the no-op that trivially satisfies it.
-
-**Where it writes, and why that is not stdout.** The name of the exporter
-type is the reference's, kept for parity; the stream is
-:data:`sys.stderr`, kept for survival. Two of this repository's three
-surfaces draw on stdout — ``oc tui`` owns the whole screen and ``oc
-interactive`` owns the line — so a span printed there corrupts the thing
-the user is looking at. stderr is also where the reference sends its OTEL
-*error* handler output, and for the same stated reason.
-
-Imports this package and the standard library. No vendor SDK, which is
-what makes it the fallback when :mod:`omicsclaw.observability.otel`
-cannot load.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

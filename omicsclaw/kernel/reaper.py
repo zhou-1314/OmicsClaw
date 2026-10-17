@@ -1,26 +1,6 @@
-"""The kernel reaper: idle soft top, hard top, protection set.
+"""Apply kernel capacity and idle policies with protected sessions.
 
-Fused from the two houses, per the plan: Claude-Science's
-``kernel_idle_timeout=1800s`` with a protection set (never reap a
-session that is executing or waiting on a human) and ``21600s`` hard
-ceiling, plus the double restart signal the manager evaluates per cell
-(OmicOS's counter and CS's memory threshold together, because either
-alone fires on healthy sessions — a long-running analysis is not a
-leak).
-
-The reaper is a plain asyncio task the manager starts on the first
-execute and cancels at :meth:`~omicsclaw.kernel.manager.PersistentKernelManager.aclose`
-— the desktop surface's ``finally: await app.aclose()`` is the hook the
-plan asked for, and no FastAPI lifespan wiring is needed for a task the
-app object already owns.
-
-Every recycle goes through the manager's planned path: **the namespace
-summary cell runs first** (the kernel is still alive, which is the only
-moment it can be captured), then the kill, then the handle-cache drop,
-and the next execute cold-starts with the handover notice. A sweep that
-cannot take a session's lock (an execute snuck in) simply skips it —
-the next sweep reconsiders, which is the low-drama answer to the
-reaper-versus-execute race.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

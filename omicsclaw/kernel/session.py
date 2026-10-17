@@ -1,47 +1,14 @@
-"""One live IPython kernel and the iopub consumption primitive.
+"""Manage one Python or R kernel and consume its output.
 
-P4 track B of the front-back plan. The module below is the OmicOS
-``session_notebook_executor`` pattern re-derived for OmicsClaw: start one
-ipykernel through :mod:`jupyter_client`, send code with ``kc.execute``,
-then **poll** ``get_iopub_msg(timeout=1.0)`` and dispatch by message
-type, keeping only frames whose ``parent_header.msg_id`` is the request
-we are waiting for (a kernel that posts status for a comm or a
-background thread must not be read as our cell finishing), and ending at
-``status: idle``.
-
-The kernel starts from a temporary kernelspec whose ``argv`` names the
-selected interpreter. IPython and Jupyter directories point
-into a per-session scratch folder under ``<workspace>/.omicsclaw/kernel/``,
-so the user's ``~/.ipython`` startup profile never runs inside an
-analysis kernel, and the kernel never writes under ``$HOME``.
-
-**This class is synchronous and thread-confined.** Every method blocks
-(zmq reads, process waits); the manager calls it through
-``asyncio.to_thread`` and owns the asyncio half (locks, cancellation,
-the reaper). ``interrupt``/``kill`` are the two methods safe from any
-thread — jupyter_client's own shutdown path relies on the same.
-
-**The output ceilings are three, not one** (Claude-Science
-kernel_worker.py:113/126/176, re-derived here as characters because a
-Python ``str`` cannot cut a code point in half — the argument
-``bash.py`` makes for its own limit):
-
-1. *streaming* — once a stream (stdout, stderr — each measured alone)
-   has delivered ``stream_emit_max`` characters to the callback, the
-   callback stops being called and one truncation marker is emitted.
-   The run keeps going; the audience stops paying.
-2. *cell buffer* — the in-memory buffer of one cell keeps at most
-   ``cell_buffer_max`` characters per stream; whatever overflows is
-   counted and reported exactly: ``...(N further bytes dropped)``.
-3. *result* — the :class:`CellResult` text fields are clamped to
-   ``result_max`` characters each, a last line of defence before
-   anything serialises the outcome into JSON or a model's context.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
+import contextvars
 import ctypes
 import json
 import logging
@@ -61,6 +28,8 @@ from typing import Any, Callable, Final, Protocol, runtime_checkable
 
 from queue import Empty
 
+from .r_launch import RegisteredRLaunch
+
 __all__ = [
     "CellResult",
     "KernelCallbacks",
@@ -74,30 +43,32 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-_KERNEL_CREDENTIAL_NAMES: frozenset[str] = frozenset({
-    "OMICSCLAW_REMOTE_AUTH_TOKEN",
-    "OMICSCLAW_API_KEY",
-    "LLM_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "DASHSCOPE_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "GOOGLE_API_KEY",
-    "MOONSHOT_API_KEY",
-    "NVIDIA_API_KEY",
-    "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY",
-    "SILICONFLOW_API_KEY",
-    "VOLCENGINE_API_KEY",
-    "ZHIPU_API_KEY",
-    "TELEGRAM_BOT_TOKEN",
-    "FEISHU_APP_SECRET",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-    "DISCORD_BOT_TOKEN",
-    "DINGTALK_CLIENT_SECRET",
-    "QQ_APP_SECRET",
-    "SSH_AUTH_SOCK",
-})
+_KERNEL_CREDENTIAL_NAMES: frozenset[str] = frozenset(
+    {
+        "OMICSCLAW_REMOTE_AUTH_TOKEN",
+        "OMICSCLAW_API_KEY",
+        "LLM_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GOOGLE_API_KEY",
+        "MOONSHOT_API_KEY",
+        "NVIDIA_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "VOLCENGINE_API_KEY",
+        "ZHIPU_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "FEISHU_APP_SECRET",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "DISCORD_BOT_TOKEN",
+        "DINGTALK_CLIENT_SECRET",
+        "QQ_APP_SECRET",
+        "SSH_AUTH_SOCK",
+    }
+)
 
 
 @runtime_checkable
@@ -126,11 +97,11 @@ KERNEL_NAME: Final = "omicsclaw-session"
 _ANSI: Final = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 STREAM_EMIT_MARKER: Final = (
-    "...[stream output reached the 10 MB streaming cap; "
-    "further output is suppressed]"
+    "...[stream output reached the 10 MB streaming cap; further output is suppressed]"
 )
 STREAM_IDLE_AFTER_S: Final = 30.0
 """Output silence that long, while a cell runs, is worth an idle notice."""
+TIMEOUT_INTERRUPT_GRACE_S = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +111,9 @@ class OutputLimits:
     stream_emit_max: int = 10 * 1024 * 1024
     cell_buffer_max: int = 1024 * 1024
     result_max: int = 1024 * 1024
+    figure_count_max: int | None = None
+    figure_encoded_max: int | None = None
+    ordered_output_max: int = 24576
 
 
 @dataclass(slots=True)
@@ -165,6 +139,7 @@ class CellResult:
     execution_count: int | None = None
     usage: dict[str, Any] = field(default_factory=dict)
     notice: str = ""
+    outputs: list[dict[str, Any]] = field(default_factory=list)
     """A kernel-restart handover notice, prepended to stderr by the manager."""
 
 
@@ -183,6 +158,9 @@ class KernelCallbacks:
 
     on_usage: Callable[[dict[str, Any]], None] | None = None
     """``{wall_s, cpu_s, peak_rss_kb}`` after the cell finished."""
+    on_output: Callable[[dict[str, Any]], None] | None = None
+    on_timeout_pending: Callable[[float], None] | None = None
+    """A protected operation exceeded its interrupt grace and still owns the kernel."""
 
 
 class _StreamTally:
@@ -256,8 +234,8 @@ def _r_spec_manager() -> Any:
     if "ir" not in manager.find_kernel_specs():
         raise RuntimeError(
             "language 'r' needs the IRkernel kernelspec; enable it with "
-            "R -e 'install.packages(\"IRkernel\", "
-            "repos=\"https://cloud.r-project.org\")' followed by "
+            'R -e \'install.packages("IRkernel", '
+            'repos="https://cloud.r-project.org")\' followed by '
             "R -e 'IRkernel::installspec()'"
         )
     return manager
@@ -288,22 +266,29 @@ class SessionKernel:
         *,
         workspace: Path,
         python: str | None = None,
+        python_isolated: bool = False,
         limits: OutputLimits | None = None,
         on_figure: Callable[[Path, str], tuple[str, str]] | None = None,
         startup_timeout: float = 120.0,
         language: str = "python",
+        r_launch: RegisteredRLaunch | None = None,
         spawn_wrapper: SpawnWrapper | None = None,
         env_scrubber: Callable[[Mapping[str, str]], dict[str, str]] | None = None,
+        signal_guard_factory: Callable[[int], Callable[[int], bool]] | None = None,
     ) -> None:
         self.session_id = session_id
         self.workspace = Path(workspace)
         self.python = python or sys.executable
+        self._python_isolated = python_isolated
         self.limits = limits or OutputLimits()
         self._on_figure = on_figure
         self._startup_timeout = startup_timeout
         self.language = language
+        self._r_launch = r_launch
         self._spawn_wrapper = spawn_wrapper
         self._env_scrubber = env_scrubber
+        self._signal_guard_factory = signal_guard_factory
+        self._signal_guard = None
         self._km: Any = None
         self._kc: Any = None
         self._scratch: Path | None = None
@@ -326,7 +311,7 @@ class SessionKernel:
 
     def is_alive(self) -> bool:
         try:
-            return bool(self._km is not None and self._km.is_alive())
+            return bool(self._km is not None and self._jupyter_sync(self._km.is_alive))
         except Exception:  # noqa: BLE001 - a dead manager object is a dead kernel
             return False
 
@@ -342,7 +327,10 @@ class SessionKernel:
         from jupyter_client.kernelspec import KernelSpecManager
         from jupyter_client.manager import KernelManager
 
-        slug = re.sub(r"[^0-9A-Za-z_.-]", "-", self.session_id)[:48].strip("-") or "session"
+        slug = (
+            re.sub(r"[^0-9A-Za-z_.-]", "-", self.session_id)[:48].strip("-")
+            or "session"
+        )
         scratch = self.workspace / ".omicsclaw" / "kernel" / slug
         scratch.mkdir(parents=True, exist_ok=True)
         runtime_dir = scratch / "runtime"
@@ -371,7 +359,45 @@ class SessionKernel:
                 extra_write_paths.append(self._ipc_dir)
                 ipc_prefix = str(self._ipc_dir / "ipc")
 
-        if self.language == "r":
+        if self.language == "r" and self._r_launch is not None:
+            # Registered SSH kernels never consult a user or system kernelspec.
+            for name in tuple(env):
+                if name.startswith(
+                    ("R_LIBS", "R_ENVIRON", "R_PROFILE", "PYTHON")
+                ) or name in {"R_HOME", "VIRTUAL_ENV", "CONDA_PREFIX"}:
+                    env.pop(name)
+            env.update(
+                R_LIBS_USER=os.pathsep.join(self._r_launch.library_paths),
+                R_LIBS_SITE="",
+            )
+            argv = self._r_launch.argv()
+            if self._spawn_wrapper is not None:
+                argv, env = self._spawn_wrapper.wrap(
+                    argv,
+                    cwd=self.workspace,
+                    env=env,
+                    extra_read_paths=(
+                        Path(self._r_launch.executable).parent.parent,
+                        *(Path(p) for p in self._r_launch.library_paths),
+                    ),
+                    extra_write_paths=tuple(extra_write_paths),
+                )
+            spec_dir = scratch / "kernels" / KERNEL_NAME
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            (spec_dir / "kernel.json").write_text(
+                json.dumps(
+                    {"argv": argv, "display_name": "OmicsClaw R", "language": "r"}
+                ),
+                encoding="utf-8",
+            )
+            manager = KernelManager(
+                kernel_name=KERNEL_NAME,
+                kernel_spec_manager=KernelSpecManager(
+                    kernel_dirs=[str(scratch / "kernels")], ensure_native_kernel=False
+                ),
+                connection_file=str(runtime_dir / "kernel.json"),
+            )
+        elif self.language == "r":
             r_specs = _r_spec_manager()
             if self._spawn_wrapper is None:
                 manager = KernelManager(
@@ -426,6 +452,7 @@ class SessionKernel:
 
             base_argv: list[str] = [
                 self.python,
+                *(["-I"] if self._python_isolated else []),
                 "-m",
                 "ipykernel_launcher",
                 "-f",
@@ -470,19 +497,65 @@ class SessionKernel:
         # kernel. Passing independent=True prevents jupyter_client from setting
         # the host's JPY_PARENT_PID, which would mismatch PID 1 and trigger
         # ipykernel's ParentPollerUnix immediate shutdown.
+        if self.language == "r" and self._r_launch is not None:
+            # Wrappers may add environment values; scrub at the last launch boundary.
+            env = (
+                dict(self._env_scrubber(env))
+                if self._env_scrubber
+                else {
+                    k: v
+                    for k, v in env.items()
+                    if k.upper() not in _KERNEL_CREDENTIAL_NAMES
+                }
+            )
+            for name in tuple(env):
+                if name.startswith(
+                    ("R_LIBS", "R_ENVIRON", "R_PROFILE", "PYTHON")
+                ) or name in {"R_HOME", "VIRTUAL_ENV", "CONDA_PREFIX"}:
+                    env.pop(name)
+            env.update(
+                R_LIBS_USER=os.pathsep.join(self._r_launch.library_paths),
+                R_LIBS_SITE="",
+            )
+        if self.language == "python" and self._python_isolated:
+            # Match the registered probe after wrappers finish composing the launch.
+            env = (
+                dict(self._env_scrubber(env))
+                if self._env_scrubber
+                else {
+                    k: v
+                    for k, v in env.items()
+                    if k.upper() not in _KERNEL_CREDENTIAL_NAMES
+                }
+            )
+            for name in tuple(env):
+                if name.startswith("PYTHON") or name in {"VIRTUAL_ENV", "CONDA_PREFIX"}:
+                    env.pop(name)
         env.pop("JPY_PARENT_PID", None)
-        manager.start_kernel(
+        self._jupyter_sync(
+            manager.start_kernel,
             env=env,
             cwd=str(self.workspace),
             independent=bool(self._spawn_wrapper is not None and os.name == "posix"),
         )
+        lifecycle = getattr(self._spawn_wrapper, "terminate", None)
+        if lifecycle is not None:
+            manager._omicsclaw_terminate = lifecycle
+        if self._signal_guard_factory is not None:
+            # Even persistence failure during registration must fence cleanup.
+            birth = _linux_birth(manager.provisioner.pid)
+            self._signal_guard = lambda pid: (
+                birth is not None and _linux_birth(pid) == birth
+            )
         client = manager.client()
         client.start_channels()
         try:
-            client.wait_for_ready(timeout=self._startup_timeout)
+            if self._signal_guard_factory is not None:
+                self._signal_guard = self._signal_guard_factory(manager.provisioner.pid)
+            self._jupyter_sync(client.wait_for_ready, timeout=self._startup_timeout)
         except Exception:
             self._shutdown_client(client)
-            self._kill_manager(manager)
+            self._kill_manager(manager, guard=self._signal_guard)
             self._cleanup_ipc_dir()
             raise
         self._km = manager
@@ -522,17 +595,46 @@ class SessionKernel:
 
     def interrupt(self) -> None:
         """Tier 1 of the cancel ladder. Safe from any thread."""
+        if self._signal_guard is not None and not self._signal_guard(self.pid):
+            return
         self._interrupted = True
         if self._km is not None:
             try:
-                self._km.interrupt_kernel()
+                self._jupyter_sync(self._km.interrupt_kernel)
             except Exception as exc:  # noqa: BLE001 - interrupting a dead kernel
                 _log.debug("interrupt failed for %s: %s", self.session_id, exc)
+
+    @staticmethod
+    def _jupyter_sync(operation, *args, **kwargs):
+        """Isolate Jupyter's cached loop without changing caller authorization."""
+        from jupyter_core.utils import ensure_event_loop
+
+        def invoke():
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    previous = asyncio.get_event_loop()
+                except RuntimeError:
+                    previous = None
+                loop = ensure_event_loop()
+                try:
+                    return operation(*args, **kwargs)
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(previous)
+            # Jupyter's own sync bridge handles calls made on a running loop.
+            return operation(*args, **kwargs)
+
+        # to_thread copies ContextVars, including Jupyter's cache of a loop
+        # running on another thread. Guards and callbacks stay outside this
+        # library-only scope, with the caller's authorization context intact.
+        return contextvars.Context().run(invoke)
 
     def kill(self) -> None:
         """SIGKILL the kernel's process group. Safe from any thread."""
         if self._km is not None:
-            self._kill_manager(self._km)
+            self._kill_manager(self._km, guard=self._signal_guard)
         self._cleanup_ipc_dir()
 
     def shutdown(self) -> None:
@@ -540,21 +642,38 @@ class SessionKernel:
         if self._km is None:
             self._cleanup_ipc_dir()
             return
+        if self._signal_guard is not None and not self._signal_guard(self.pid):
+            self._shutdown_client(self._kc)
+            return
         descendants = (
             _descendant_pids(self.pid)
             if (os.name == "posix" and self.pid and self.pid > 0)
             else []
         )
+        # Capture each child's birth while the root still proves ownership.
+        # A polite shutdown may reap that root before fallback cleanup runs.
+        descendant_births = (
+            {child: _linux_birth(child) for child in descendants}
+            if self._signal_guard is not None
+            else None
+        )
         try:
             self._shutdown_client(self._kc)
         finally:
             try:
-                if self._km.has_kernel:
-                    self._km.shutdown_kernel(now=True)
+                if self._km.has_kernel and not getattr(
+                    self._km, "_omicsclaw_terminate", None
+                ):
+                    self._jupyter_sync(self._km.shutdown_kernel, now=True)
             except Exception:  # noqa: BLE001
                 pass
             finally:
-                self._kill_manager(self._km, descendants=descendants)
+                self._kill_manager(
+                    self._km,
+                    descendants=descendants,
+                    descendant_births=descendant_births,
+                    guard=self._signal_guard,
+                )
                 self._km = None
                 self._kc = None
                 self._cleanup_ipc_dir()
@@ -567,10 +686,26 @@ class SessionKernel:
             pass
 
     @staticmethod
-    def _kill_manager(manager: Any, *, descendants: Sequence[int] | None = None) -> None:
+    def _kill_manager(
+        manager: Any,
+        *,
+        descendants: Sequence[int] | None = None,
+        descendant_births=None,
+        guard=None,
+    ) -> None:
         provisioner = getattr(manager, "provisioner", None)
         pid = getattr(provisioner, "pid", None)
         pgid = getattr(provisioner, "pgid", None)
+        root_allowed = guard is None or guard(pid)
+        lifecycle = getattr(manager, "_omicsclaw_terminate", None)
+        if root_allowed and lifecycle is not None and lifecycle(pid, guard):
+            process = getattr(provisioner, "process", None)
+            if process is not None:
+                with contextlib.suppress(Exception):
+                    process.wait(timeout=1)
+            return
+        if not root_allowed and not descendant_births:
+            return
         if os.name != "posix":
             if pid and pid > 0:
                 with contextlib.suppress(Exception):
@@ -588,14 +723,26 @@ class SessionKernel:
         # sandboxed children (bwrap/unshare -> bridge -> kernel) are all reached.
         if descendants is None:
             descendants = _descendant_pids(pid) if (pid and pid > 0) else []
+        births = (
+            descendant_births
+            if descendant_births is not None
+            else (
+                {child: _linux_birth(child) for child in descendants} if guard else {}
+            )
+        )
         try:
-            if pgid and pgid > 0 and pgid != os.getpgrp():
+            if root_allowed and pgid and pgid > 0 and pgid != os.getpgrp():
                 os.killpg(pgid, sig)
-            elif pid and pid > 0:
+            elif root_allowed and pid and pid > 0:
                 os.kill(pid, sig)
         except (ProcessLookupError, PermissionError, OSError):
             pass
         for child_pid in reversed(descendants):
+            if guard is not None and (
+                not births.get(child_pid)
+                or _linux_birth(child_pid) != births[child_pid]
+            ):
+                continue
             if child_pid != pid and child_pid > 0 and child_pid != os.getpid():
                 with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
                     os.kill(child_pid, sig)
@@ -650,7 +797,6 @@ class SessionKernel:
                 continue
         return (total_ticks / clk_tck) if found else None
 
-
     # ---- execution ----
 
     def execute(
@@ -660,6 +806,7 @@ class SessionKernel:
         timeout_s: float = 1800.0,
         callbacks: KernelCallbacks | None = None,
         store_history: bool = True,
+        preserve_on_timeout: bool = False,
     ) -> CellResult:
         """Run one cell to ``status: idle`` and return its outcome.
 
@@ -668,8 +815,16 @@ class SessionKernel:
         retained (30 min) with idle detection beside it. On deadline the
         ladder is started here — interrupt, then a short grace — and the
         result carries ``status="timeout"`` for the manager to finish.
+        Protected internal operations instead keep draining until idle or
+        confirmed process death; their deadline never authorizes a kernel reset.
         """
         callbacks = callbacks or KernelCallbacks()
+        from .outputs import OrderedOutputs
+        from .outputs import text as bounded_text
+
+        ordered = OrderedOutputs(
+            limit=self.limits.ordered_output_max, sink=callbacks.on_output
+        )
         result = CellResult()
         tallies = {
             "stdout": _StreamTally("stdout", self.limits),
@@ -695,13 +850,37 @@ class SessionKernel:
 
         self._interrupted = False
         msg_id = self._kc.execute(code, store_history=store_history)
-        deadline = began + max(1.0, float(timeout_s))
+        deadline = began + max(0.0, float(timeout_s))
         interrupted_at: float | None = None
+        pending_noticed = False
         alive_checks = 0
         idle = False
         while not idle:
+            now = time.monotonic()
+            if now >= deadline and interrupted_at is None:
+                interrupted_at = now
+                self.interrupt()
+            if (
+                interrupted_at is not None
+                and now - interrupted_at > TIMEOUT_INTERRUPT_GRACE_S
+            ):
+                if not preserve_on_timeout:
+                    result.status = "timeout"
+                    break
+                if not pending_noticed:
+                    pending_noticed = True
+                    if callbacks.on_timeout_pending is not None:
+                        try:
+                            callbacks.on_timeout_pending(now - began)
+                        except Exception:  # noqa: BLE001 - retain the kernel if an observer fails
+                            _log.debug("Protected execution timeout observer failed")
             try:
-                msg = self._kc.get_iopub_msg(timeout=1.0)
+                wait = (
+                    1.0
+                    if interrupted_at is not None
+                    else min(1.0, max(0.001, deadline - now))
+                )
+                msg = self._jupyter_sync(self._kc.get_iopub_msg, timeout=wait)
             except Empty:
                 now = time.monotonic()
                 alive_checks += 1
@@ -723,12 +902,6 @@ class SessionKernel:
                             callbacks.on_idle(now - last_output, label)
                         except Exception:  # noqa: BLE001
                             pass
-                if now > deadline and interrupted_at is None:
-                    interrupted_at = now
-                    self.interrupt()
-                if interrupted_at is not None and now - interrupted_at > 5.0:
-                    result.status = "timeout"
-                    break
                 continue
             except Exception:  # noqa: BLE001 - the socket died under us
                 result.status = "dead"
@@ -752,18 +925,69 @@ class SessionKernel:
                 text = str(content.get("text", ""))
                 if text:
                     tally.feed(text, _emit(name))
+                    ordered.add(
+                        {
+                            "type": "stream",
+                            "name": name,
+                            "text": bounded_text(text, 4096),
+                        }
+                    )
             elif kind == "error":
                 error = {
-                    "ename": str(content.get("ename", "Error")),
-                    "evalue": str(content.get("evalue", "")),
-                    "traceback": _ANSI.sub("", "\n".join(content.get("traceback") or [])),
+                    "ename": bounded_text(content.get("ename", "Error"), 256),
+                    "evalue": bounded_text(
+                        content.get("evalue", ""), min(self.limits.result_max, 2048)
+                    ),
+                    "traceback": bounded_text(
+                        _ANSI.sub(
+                            "",
+                            "\n".join(
+                                bounded_text(line, 512)
+                                for line in (content.get("traceback") or [])[:32]
+                            ),
+                        ),
+                        min(self.limits.result_max, 4096),
+                    ),
                 }
-            elif kind in ("display_data", "execute_result"):
+                ordered.add(
+                    {
+                        "type": "error",
+                        **error,
+                        "traceback": error["traceback"].splitlines(),
+                    }
+                )
+            elif kind == "clear_output":
+                ordered.add({"type": "clear", "wait": bool(content.get("wait"))})
+            elif kind in ("display_data", "execute_result", "update_display_data"):
                 data = content.get("data") or {}
+                if not isinstance(data, dict):
+                    continue
+                ref = None
                 png = data.get("image/png")
                 if isinstance(png, str) and png:
+                    if (
+                        self.limits.figure_count_max is not None
+                        and len(figures) >= self.limits.figure_count_max
+                    ) or (
+                        self.limits.figure_encoded_max is not None
+                        and len(png) > self.limits.figure_encoded_max
+                    ):
+                        tallies["stderr"].feed(
+                            "[Notebook figure output truncated]\n", _emit("stderr")
+                        )
+                        ordered.add(
+                            {"type": "truncated", "reason": "figure_output_budget"}
+                        )
+                        continue
                     self._figure_seq += 1
                     ref = self._save_figure(png, self._figure_seq)
+                    if ref is None or not ref.artifact_id:
+                        ordered.add(
+                            {
+                                "type": "truncated",
+                                "reason": "image_artifact_unavailable",
+                            }
+                        )
                     if ref is not None:
                         figures.append(ref)
                         if callbacks.on_display is not None:
@@ -771,6 +995,12 @@ class SessionKernel:
                                 callbacks.on_display(ref)
                             except Exception:  # noqa: BLE001
                                 pass
+                ordered.display(
+                    data,
+                    image=ref,
+                    display_id=(content.get("transient") or {}).get("display_id"),
+                    update=kind == "update_display_data",
+                )
         if idle:
             if interrupted_at is not None:
                 result.status = "timeout"
@@ -780,28 +1010,27 @@ class SessionKernel:
                 result.status = "ok"
             reply = self._shell_reply(msg_id)
             if reply is not None:
-                result.execution_count = reply.get("content", {}).get(
-                    "execution_count"
-                )
+                result.execution_count = reply.get("content", {}).get("execution_count")
         if error is not None:
             result.error = error
             if interrupted_at is not None or result.status == "timeout":
                 result.status = "timeout"
-            elif (
-                error.get("ename") == "KeyboardInterrupt"
-                or self._interrupted
-            ):
+            elif error.get("ename") == "KeyboardInterrupt" or self._interrupted:
                 result.status = "interrupted"
             else:
                 result.status = "error"
         result.stdout = tallies["stdout"].text()
         result.stderr = tallies["stderr"].text()
         result.figures = figures
+        result.outputs = ordered.items
         result.usage = {
             "wall_s": round(time.monotonic() - began, 3),
             "cpu_s": self.cpu_seconds(),
             "peak_rss_kb": self.peak_rss_kb(),
         }
+        if preserve_on_timeout:
+            result.usage["stop_confirmed"] = idle or not self.is_alive()
+            result.usage["deadline_exceeded"] = interrupted_at is not None
         if store_history:
             self.cells += 1
         if callbacks.on_usage is not None:
@@ -816,22 +1045,27 @@ class SessionKernel:
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             try:
-                msg = self._kc.get_shell_msg(timeout=2.0)
+                msg = self._jupyter_sync(self._kc.get_shell_msg, timeout=2.0)
             except Empty:
                 continue
             except Exception:  # noqa: BLE001
                 return None
-            if msg.get("msg_id") == msg_id or msg.get("parent_header", {}).get(
-                "msg_id"
-            ) == msg_id:
+            if (
+                msg.get("msg_id") == msg_id
+                or msg.get("parent_header", {}).get("msg_id") == msg_id
+            ):
                 return msg
         return None
 
     def _save_figure(self, png_b64: str, number: int) -> FigureRef | None:
         """Decode one ``image/png`` onto the workspace and register it."""
         try:
-            raw = base64.b64decode(png_b64)
+            # IRkernel emits MIME base64 with line breaks; other characters stay invalid.
+            payload = png_b64.encode("ascii").translate(None, b" \t\r\n")
+            raw = base64.b64decode(payload, validate=True)
         except (ValueError, TypeError):
+            return None
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
             return None
         directory = self.workspace / "figures"
         directory.mkdir(parents=True, exist_ok=True)
@@ -856,6 +1090,13 @@ def _last_label(tallies: dict[str, _StreamTally]) -> str:
             if tail:
                 return f"{name}: {tail[-1][:80]}"
     return "no output yet"
+
+
+def _linux_birth(pid: int):
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
 
 
 def _descendant_pids(root_pid: int) -> list[int]:
@@ -950,7 +1191,9 @@ def _win_cpu_seconds(pid: int) -> float | None:
             ctypes.byref(user_time),
         ):
             return None
-        k_ticks = (int(kernel_time.dwHighDateTime) << 32) | int(kernel_time.dwLowDateTime)
+        k_ticks = (int(kernel_time.dwHighDateTime) << 32) | int(
+            kernel_time.dwLowDateTime
+        )
         u_ticks = (int(user_time.dwHighDateTime) << 32) | int(user_time.dwLowDateTime)
         return (k_ticks + u_ticks) / 10_000_000.0
     finally:

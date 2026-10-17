@@ -1,35 +1,6 @@
-"""``omicsclaw/context`` — the vocabulary a system prompt is built from.
+"""Define the sections used to build system prompts.
 
-Plan 0030 task B. A :class:`Section` is one titled block of the system
-prompt and, more importantly, one place where knowledge this package is
-not allowed to have gets in.
-
-**Every source is a callable, and it is called on every render.** The
-reference harness takes a function for exactly one of its blocks —
-long-term memory, ``builder.go:56-59`` — with the reason written beside
-it: ``memory_write`` rewrites ``MEMORY.md`` *while the agent runs*, so a
-snapshot taken at construction would have the agent reasoning from the
-version before the one it just wrote. That argument is not special to
-memory here. ``create_omics_skill`` adds skills mid-run, ``edit_file``
-rewrites ``AGENTS.md`` mid-run. So it is generalised: no section holds a
-snapshot, all of them are closures, and "what was written is visible on
-the next turn" is a property of the shape rather than a mechanism
-someone has to remember to trigger.
-
-**That generalisation has a price, and it is charged in cache.** See
-:meth:`~omicsclaw.context.prompt.PromptAssembler.render`.
-
-**Exceptions from a source are not caught, and nothing here logs.** The
-layer being replaced wrapped every block in fail-closed error handling
-with a warning. Three reasons it is gone: this is a leaf package and the
-engine beside it already settled "no I/O, no logging"; a
-:data:`SectionSource` is an *arbitrary callable* — not the harness's one
-fixed ``os.ReadFile`` — and swallowing arbitrary exceptions is a Python
-anti-pattern; and the failure mode it produced was the wrong one. A
-prompt file that fails to read turning quietly into "the prompt lacks
-that section" is more expensive than a crash, because nobody finds out. The
-consequence is real and belongs to the caller: wrap a source that may
-fail if a degraded prompt is genuinely better than no prompt.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

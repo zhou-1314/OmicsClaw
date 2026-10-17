@@ -1,86 +1,9 @@
-"""The span tree of one run, built from the events the loop already emits.
+"""Build run and turn spans from emitted engine events.
 
-This module is this layer's answer to ``engine/observer.go`` plus
-``observability/observer.go``, and it is the one place where the design
-genuinely departs from the reference rather than merely being spelled
-differently. **No seam was added to the engine.**
+The observer consumes the existing event stream. Turn spans begin lazily;
+the scope owns their lifecycle and records the measurements it observes.
 
-The reference has to add one. Go's loop can only be observed by being
-called back, so ``internal/engine`` declares a four-method
-``EngineObserver`` interface, stores one, and invokes it at four points.
-This rebuild's loop already publishes a richer record of the same four
-moments — :class:`~omicsclaw.engine.EngineEvent`, yielded by
-``AgentEngine.run_stream`` — so the observer is a *consumer* of something
-that exists rather than a hook that had to be cut into a leaf layer whose
-own docstring forbids I/O. ``omicsclaw/engine/`` is unmodified by this
-step, and ``tests/observability/test_observability_boundaries.py``
-asserts that nothing in ``engine`` imports this package.
-
-Three consequences are worth knowing before reading the code.
-
-**There is no ``TURN_START`` event, so a turn span is created lazily.**
-The kernel begins turn *N+1*'s work inside the very ``__anext__`` that
-follows turn *N*'s ``TURN_END``, so the only honest moment to open the
-next turn span is the instant after the previous one closed — at which
-point nobody knows yet whether the run continues. Opening it eagerly
-would export one empty phantom span at the end of every run.
-:class:`TurnScope` therefore holds the *intent* to open a span and
-materialises it the first time somebody asks for a parent, which is the
-model call. A run that stops instead discards an intent, which costs
-nothing and exports nothing. The price, stated so it is not rediscovered
-as a bug: a turn span starts at its **model call**, so the compaction and
-plan-injection that precede it fall outside — they are inside the
-interaction span, just not inside the turn.
-
-**The blocking path gets two levels, not three, and has to say so.**
-``AgentEngine.run`` drives the same kernel and the kernel produces the
-same events — ``run`` then **drops them** ("a caller who wants to watch a
-run asked for ``run_stream``"). So a scope driving it is never told where
-a turn ended, and the honest answer to *why* is in two halves, because
-only the first half is forced:
-
-- Turn 1 genuinely cannot be inferred in time. Its model call asks for a
-  parent *before* any event could have arrived, so no amount of waiting
-  helps and eager staging is the only option.
-- Turns 2..N are a different matter. ``TURN_END`` for turn *N* exists
-  inside the kernel at the moment turn *N+1* begins; it is discarded by
-  ``run``'s own pre-existing contract, not by anything this layer decided.
-
-So **two levels here is the cost of ``run``'s contract, not a limit of
-the event model**: an observer attached inside the kernel, the way the
-reference's ``EngineObserver`` is, would get three levels on both paths.
-That trade was taken deliberately — not cutting a seam into a leaf layer
-beats three levels on a path no surface drives — and it is written down
-here rather than left in a commit message, so that reopening it is a
-decision rather than a discovery.
-
-Hence :attr:`RunScope.turn_events`, which
-:func:`~omicsclaw.entry.turn.run_turn` sets to ``False`` and every
-streaming caller leaves alone.
-
-Getting it wrong is what the flag is designed against rather than what it
-invites. Told ``False`` and sent turn events anyway, a scope starts
-grouping from the next boundary — self-correcting. Told ``True`` and sent
-none, it warns at exit naming the run it could not segment, because the
-alternative is the failure this flag exists to prevent: **one turn span
-labelled ``agent.turn=1`` silently containing every model call of a
-five-turn run**, which is not a missing level but a wrong number.
-Every count, duration and token figure is unaffected either way.
-
-**Parenting is carried by one :class:`~contextvars.ContextVar`, and it is
-a stack of one slot.** :func:`current_parent` is what
-:class:`~omicsclaw.observability.provider.TracedProvider` and
-:class:`~omicsclaw.observability.hook.TracingHook` call; they never
-receive a parent as an argument, because the engine sits between them and
-this module and must not learn that either exists. A
-:class:`~contextvars.ContextVar` is the right carrier for the same reason
-``omicsclaw/tools/context.py`` already uses one: each tool call runs in
-its own :class:`asyncio.Task`, a Task copies the context at creation, so
-concurrent tool calls cannot see each other's bindings and two
-simultaneous sessions in one process cannot see each other's traces.
-
-Imports :mod:`omicsclaw.engine`, :mod:`omicsclaw.schema` and the standard
-library.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

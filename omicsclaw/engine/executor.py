@@ -25,6 +25,7 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager, suppre
 from typing import Protocol, TypeAlias, runtime_checkable
 
 from omicsclaw.schema import Message, ToolCall, ToolDefinition, ToolResult
+from omicsclaw.schema.request import ModelRequestContext
 
 from .config import EngineConfig
 from .types import EngineEvent
@@ -139,6 +140,15 @@ class DeadlineAwareExecutor(Protocol):
         ...
 
 
+@runtime_checkable
+class RequestAwareExecutor(Protocol):
+    """Bind private request state to one tool Task, independent of its arguments."""
+
+    def use_request_context(
+        self, request: ModelRequestContext, position: int, call: ToolCall
+    ) -> AbstractContextManager[None]: ...
+
+
 # ---- scheduling one turn's calls ----------------------------------------
 
 
@@ -148,6 +158,8 @@ async def execute_tool_calls(
     config: EngineConfig,
     results: list[ToolResult | None],
     turn: int = 0,
+    *,
+    request_context: ModelRequestContext | None = None,
 ) -> AsyncIterator[EngineEvent]:
     """Run one turn's tool calls, yielding progress events as they happen.
 
@@ -219,7 +231,10 @@ async def execute_tool_calls(
             try:
                 queue.put_nowait(EngineEvent.tool_start(call, turn))
                 began = time.perf_counter()
-                result = await _execute(executor, call, config.tool_timeout)
+                with ExitStack() as scope:
+                    if request_context is not None and isinstance(executor, RequestAwareExecutor):
+                        scope.enter_context(executor.use_request_context(request_context, index, call))
+                    result = await _execute(executor, call, config.tool_timeout)
                 elapsed = time.perf_counter() - began
             finally:
                 if semaphore is not None:

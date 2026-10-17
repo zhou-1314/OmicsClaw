@@ -1,142 +1,16 @@
-"""``read_file`` — how the model looks at a file it is allowed to see.
+"""Read workspace files through bounded line or byte windows.
 
-Plan 0029 §4 Q2b, Q9, Q11 and traps 7, 10 and 11. The reference is
-harness9's ``internal/tools/read_file.go``; what was taken from it is its
-**structure** — two modes, a line-number prefix, and truncation notices
-that tell the model what to send next — while every *literal* is
-re-derived below under Python semantics, because a number that was true
-of ``bufio.Scanner`` is not thereby true of :func:`open`.
+start_line selects line mode and takes precedence over offset and limit.
+Numbered lines use the format shared with edit; callers must remove the
+prefix when editing source. Byte mode supports files that line mode refuses.
+Missing or unreadable paths raise tool errors; an empty file is valid output.
 
-**Two modes, and the precedence is deliberate.** ``start_line`` selects
-line mode and makes ``offset``/``limit`` inert
-(``read_file.go:127-130``); with no ``start_line`` the call is byte mode.
-Line mode is the one a model should reach for — a line number is what it
-will cite back, and what ``edit`` will be asked about — so byte mode is
-documented as the fallback for the files line mode refuses (see
-:data:`MAX_LINE_CHARS`) rather than as an equal option.
+FunctionTool supplies decoding and schema validation. Workspace resolution
+and filesystem errors remain explicit. An injected FileReadEnvironment owns
+the routed read; otherwise the local reader applies its bounds and path lock.
 
-**The line-number prefix is a cross-tool contract, not decoration.**
-``read`` renders ``%6d\\t%s`` (:func:`numbered_line`,
-``read_file.go:218``) and ``edit`` — a later step — has to recognise and
-strip it, because a model that pastes a line straight back into
-``source_text`` pastes the number too. harness9 says so twice, in the
-tool description and again in a code comment (``read_file.go:64-67`` and
-``215-218``), and the repetition is the point: the two tools ship
-separately, and whoever writes ``edit`` will read this file's description
-even if they never read plan 0029. Both copies are reproduced here, and
-``tests/tools/test_read.py`` pins the format and pins that the warning is
-still in the description.
-
-**Trap 7 — a missing file is an error; an empty file is not.** The
-criterion is not "did something go wrong", it is **what should the model
-change next**. A path that does not resolve to a readable file is
-something the model can fix by sending a different ``path``, so it is
-raised and the registry turns it into ``is_error=True``. A file that
-exists and happens to be empty is a fact about the world with nothing for
-the model to correct, so it comes back as ordinary output. Both halves
-are pinned, adjacently, in ``tests/tools/test_read.py``. (The other half
-of plan 0029's trap 7 — a non-zero exit from ``bash`` being
-``is_error=False`` — belongs to the task that delivers ``bash``; the two
-could not be put in one file because they ship separately.)
-
-**An** :exc:`OSError` **from the filesystem is rephrased, never leaked.**
-``Workspace.resolve`` deliberately does not touch the filesystem for a
-non-existent leaf, so a 5,000-character filename resolves cleanly and
-then fails at :func:`os.stat` with ``ENAMETOOLONG``. That is correctable
-— the model must send a shorter path — so it is caught and reported as a
-sentence naming the operating system's own reason, rather than allowed to
-reach the model as a bare ``OSError`` traceback fragment.
-
-**Why this one is a** :class:`~omicsclaw.tools.function_tool.FunctionTool`
-**and ``write`` is not.** Plan 0029 §5 says all three foundation tools
-should be hand-written, and gives one reason: they are ``ASK`` tools, and
-an approval prompt has to show the bytes the model actually sent, which
-:class:`~omicsclaw.tools.function_tool.FunctionTool` cannot do. That
-reason does not apply here, because plan 0029 Q2b makes ``read`` ``AUTO``
-— it never asks anyone anything, so it never needs the raw payload. What
-it does need is the other half of the adapter: an undecodable payload
-reported with a character count and an excerpt (plan 0028 trap 8) and
-every schema problem listed at once (trap 9), in wording byte-identical
-to the fifty tools already in service. Hand-writing it would mean
-re-deriving both, and plan 0028's ``save_gene_panel`` is the recorded
-evidence of how that goes: its private copy of ``decode_arguments`` had
-already dropped the excerpt, which is why that helper was made public.
-(The tool itself was removed with the other two reference tools; the
-lesson it paid for is the reason this one is a ``FunctionTool``.)
-
-The five arguments are exactly a Python signature, so
-``func(**arguments)`` makes the schema and the code two statements of
-one thing.
-
-**The ``Environment`` seam (plan 0029 Q11), at the width that matters.**
-Isolation that covers ``bash`` but not the file tools is decoration — a
-model wanting out would simply use ``write``. So this tool takes an
-``environment`` too, and *uses* it: ``None`` means the local filesystem,
-and anything else has its :meth:`FileReadEnvironment.read_file` awaited
-instead. harness9 stores the environment on its file tools and never
-reads it (``read_file.go:35-37`` is a TODO), which would be dead state
-here and is what plan 0029 trap 15 forbids. The Protocol is narrowed to
-the one method this tool calls rather than copying harness9's five-method
-``sandbox.Environment``: Protocols are structural, so one object
-implementing the whole shape satisfies this one and ``write``'s and, in
-due course, ``bash``'s — and a test double for ``read`` is not forced to
-stub a shell. **No isolated implementation is written here**, per plan
-0029 Q11; in particular harness9's ``LocalEnvironment`` is not copied,
-for the reason that plan gives.
-
-**Compared against** ``omicsclaw/runtime/tools/builders/engineering.py``
-``file_read`` (line 601), which this layer may not import (plan 0028
-§9-4). Plan 0029 §6 requires every row to be accounted for:
-
-* ``_validate_file_read_input`` (``engineering.py:44``) rejects
-  ``end_line < start_line``. **Kept**, and with a better claim to exist
-  than the reference has: harness9 lets that combination through, reads
-  nothing, and reports "start_line is past the end of the file", which
-  points the model at the wrong argument. Same check, this layer's
-  wording.
-* The line-number prefix is ``f"{index}: {line}"`` there and ``%6d\\t%s``
-  here. **Changed deliberately**, per plan 0029 §6: a tab is one
-  separator to strip, while ``": "`` also occurs inside real source
-  lines. *What breaks on migration*: anything that parsed the old form,
-  and the two header lines the old tool prepended (``File: <path>`` and
-  ``Lines: A-B of N``), which are gone — a caller that wants the total
-  line count now learns it only when it reads past the end. Nothing in
-  this repository parses either; the strings are quoted only in prose
-  (``runtime/agent/loop_pathology.py`` keys on the *tool name*, not on
-  its output).
-* ``max_chars`` (``_bounded_int(..., maximum=100000)``) has no
-  counterpart in harness9, which lets a model ask for any number of
-  bytes. **Kept** as :data:`MAX_LIMIT_BYTES`; dropping it would be a
-  silent capability regression on the one axis this project cares about,
-  the context window. It clamps rather than refuses, and the truncation
-  notice states the number of bytes actually read, so the model is told.
-  Two differences inside the "kept": the old one counts **characters of
-  the rendered, numbered output** while ``limit`` counts **bytes of the
-  file**, and the old default of 12,000 becomes :data:`MAX_READ_BYTES`.
-* **The old tool reports failure as ordinary output** — it returns
-  ``"Error: file not found or outside allowed roots: …"`` as the tool's
-  result, so the run never sees ``is_error``. This one raises, and the
-  registry marks the Observation. That is plan 0029 trap 7, and it is a
-  behaviour change the migration has to expect: a model that had learned
-  to read the word "Error" out of a successful result will instead get a
-  result that says it failed.
-* ``_bounded_int`` coerces an unusable argument to a default —
-  ``start_line="abc"`` silently becomes 1. Here the schema names the
-  argument and the type, because a tool that answers a different question
-  than the one it was asked is worse than one that asks again.
-* ``start_line``/``end_line`` defaulting to the whole file is **not**
-  kept: the old tool reads every line and then truncates a character
-  budget, so a 200,000-line file is fully read into memory first. Line
-  mode here is bounded before reading, by :data:`MAX_LINES`.
-* Multi-root discovery (``_resolve_path_for_read`` tries the workspace,
-  the pipeline workspace, the project root and trusted data roots in
-  turn) is **not** kept. One workspace, one answer — see
-  ``omicsclaw/tools/_workspace.py``, which records the same decision.
-
-**Leaf-adjacent.** ``omicsclaw.tools._pathlock``,
-``omicsclaw.tools._workspace``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, ``omicsclaw.tools.function_tool``, and the
-standard library.
+Historical migration notes and literal derivations are preserved in
+docs/engineering/runtime-tool-design-notes.md, under this module's path.
 """
 
 from __future__ import annotations

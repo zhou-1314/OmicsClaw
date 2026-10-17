@@ -1,41 +1,6 @@
-"""The plane: one object that does what the remote tool family asks for.
+"""Coordinate the remote execution tools.
 
-The composition half of C1. :class:`RemotePlaneBinding` implements the
-:class:`~omicsclaw.tools.builtin.remote.RemotePlane` Protocol
-structurally — it imports nothing from the tool layer except the
-result shapes, which is the same direction ``bash.py``'s environment
-seam faces — and is what :func:`~omicsclaw.entry.assembly.build_app`
-binds when :attr:`~omicsclaw.entry.config.AppConfig.remote_execution`
-is on.
-
-**One host, one executor, one connection policy.** All traffic for a
-host goes through :class:`RemoteExecutor`, which builds every command
-with the pure functions of :mod:`omicsclaw.remote.ssh` and
-:mod:`omicsclaw.remote.jobs` and runs them through the injected
-:class:`~omicsclaw.remote.ssh.SshSpawner`. ControlMaster multiplexing
-(the spawner's fixed options) makes the second command on a host cheap;
-the plane adds no connection state of its own on top of that.
-
-**The scratch is probed once and remembered.** Submission needs a
-directory to work in; the plane reads the host knowledge base for the
-last probe and probes fresh when there is none, then creates
-``<scratch>/omicsclaw/<stamp>-<rand>`` per job. A probe that cannot
-parse still yields a scratch (the home directory), because a host with
-a broken ``free`` is more often a working cluster than a paperweight.
-
-**Declared outputs travel with the job, not in a schema column.**
-``remote_submit`` writes the names it was given into
-``_omicsclaw_outputs`` inside the work directory, so what a fetch by
-``job_ref`` should bring back is a fact the remote side holds and any
-later session can read — no column to migrate, and a person poking at
-the workdir sees the same list the agent sees. With nothing declared,
-fetch brings back ``job.log``, which is the one file every job has.
-
-**Fetch refuses rather than transports, past the threshold.** Sizes are
-checked over SSH before any byte moves; a file over ``max_mb`` is
-answered with a ``remote://<host>/<path>`` reference and nothing
-travels. The reference is the plan's "data stays put, the handle
-travels" rule made concrete.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

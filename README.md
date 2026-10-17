@@ -100,7 +100,7 @@ network access in
 
 ## Desktop App
 
-The SSH controller path on main is available for manual testing of chat, approval and configured scientific jobs. It currently requires a prepared remote deployment; automatic environment preparation and the complete Notebook/MCP migration remain unfinished. See the [controller integration notes](docs/engineering/2026-10-14-ssh-controller.md).
+Matching App source now bundles the core SSH Notebook component and prepares its Jupyter client in a separate control environment. Register an existing scientific Python or R/IRkernel environment, then the first approved analysis creates a persistent Notebook. Users can edit, Run and Continue Agent; controller reconnects retain a live kernel's variables. Supported registered omics objects can be saved and explicitly restored. Environment maintenance with analysis objects, Job load-back, full replay and native installer publication are deferred. See the [Notebook setup and acceptance record](docs/engineering/2026-10-15-notebook-implementation-and-acceptance.md). Existing installed Apps and running remote owners are not updated by changing this checkout.
 
 The SSH controller migration has an experimental source slice described in
 [its architecture record](docs/engineering/2026-10-14-ssh-controller.md).

@@ -1,49 +1,6 @@
-"""The Desktop jobs plane: a manager, a store, and runner plugins.
+"""Manage Desktop jobs, persistence and runner plugins.
 
-P1 of the front-back plan. A *job* is one unit of work the desktop client
-started on purpose — today ``kind="skill_run"``, a direct call into a
-skill's ``_api.py`` entry function with no model in the loop. The manager
-owns each job's asyncio task, its lifecycle events and its approval gate;
-the routes in :mod:`~omicsclaw.entry.desktop.jobs` are a thin adapter over
-this module, which like the rest of ``entry.desktop`` keeps no web
-framework in its signatures.
-
-**The event vocabulary** (the ``type`` of every ``/jobs/{id}/events``
-frame, shared with the chat stream where both exist)::
-
-    job.created -> job.started ->
-      llm_chunk | tool_started{tool, human_description} |
-      tool_output_chunk | progress{label, percent} | heartbeat{state} |
-      tool_approval_request{call_id, risk, summary} | usage{tokens} |
-      artifact.created{artifact_id, kind, title, path} ->
-    job.done{status} | job.failed{error, phase}
-
-``human_description`` is the one-line plain-language summary of what a
-tool call does ("run spatial_domains clustering (n=12)"), generated from
-the tool name and its arguments by :func:`human_tool_description`.
-``artifact.created`` is P2's: the output-contract scanner
-(:mod:`~omicsclaw.entry.desktop.artifacts_manager`) emits one frame per
-artifact it registers for a finished job, before the terminal event.
-
-Every event is persisted to the ``job_events`` ring (most recent
-:data:`JOB_EVENTS_RETAINED` per job) *before* it is broadcast, so a
-``Last-Event-ID`` reconnect replays from SQLite and then continues live
-with no window in which an event can be lost or duplicated.
-
-**The approval gate reuses the tool layer's channel.** A job runs its
-runner inside :func:`~omicsclaw.tools.context.use_tool_context` with a
-per-job :class:`JobApprovalGate` as the approval channel and a progress
-sink that maps :class:`~omicsclaw.tools.context.ProgressUpdate` onto
-``progress`` events — the same seams ``bash`` and every other tool
-already speak, so anything that calls
-:func:`~omicsclaw.tools.context.require_approval` inside a job is gated
-without this module knowing about it.
-
-Not thread-safe as a whole: routes, runners and the gate all run on the
-server's event loop. The SQLite store is reached synchronously (it is a
-local file and the writes are single-row), which the memory layer's
-:class:`~omicsclaw.memory.database.Database` serialises under its own
-lock anyway.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
@@ -1994,7 +1951,23 @@ class JobsManager:
             status="queued",
             created_at=time.time(),
         )
-        record, newly_claimed = self.store.claim_job(record)
+        reserve = getattr(runner, "reserve_admission", None)
+        candidate = record
+        coordinated = runtime == "local" or getattr(runner, "binds_scientific_inputs", False)
+        if callable(reserve) and coordinated:
+            await reserve(candidate)
+        try:
+            record, newly_claimed = self.store.claim_job(candidate)
+        except BaseException:
+            abandon = getattr(runner, "abandon_admission", None)
+            if callable(abandon) and coordinated:
+                abandon(candidate)
+            raise
+        if callable(reserve) and coordinated:
+            if newly_claimed:
+                runner.commit_admission(record)
+            else:
+                runner.abandon_admission(candidate)
         self._ensure_job_projection(record)
         if not newly_claimed:
             return record
@@ -2841,6 +2814,9 @@ class JobsManager:
                 )
         finally:
             gate.abandon()
+            finish_observation = getattr(runner, "observation_finished", None)
+            if callable(finish_observation):
+                finish_observation(record)
             final = self.store.get_job(job_id)
             if final:
                 self._sync_run_status(job_id, final.status)

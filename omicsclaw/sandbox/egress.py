@@ -1,21 +1,6 @@
-"""Default-deny HTTP/HTTPS CONNECT egress filtering proxy with SSRF protection.
+"""Apply the configured policy to outbound HTTP and HTTPS connections.
 
-Pure standard-library asyncio implementation:
-- Preset domain groups (``EGRESS_GROUPS``) and non-overridable exfiltration
-  denylist (``EGRESS_DENYLIST``).
-- Enforces the 6-step evaluation order:
-  1. Valid hostname check (``invalid-host``)
-  2. Resolved IP SSRF check (``blocked-by-resolved-ip``), unless matched by
-     ``egress_endpoints`` or ``allow_private_cidr``
-  3. Exfiltration denylist check (``blocked-by-denylist``)
-  4. Port check ``{80, 443}`` or ``egress_endpoints`` (``blocked-by-port``)
-  5. Group / allowlist / dynamic grant check (``allowed``)
-  6. Default deny (``blocked-by-allowlist``)
-- Supports Unix domain socket listener (Linux ``bwrap`` / ``netns``) and
-  localhost TCP listener with optional 64-hex ``Proxy-Authorization`` token
-  verification (macOS ``seatbelt`` / Windows ``appcontainer``).
-- Supports upstream HTTP/HTTPS proxy chaining when ``HTTP_PROXY`` / ``HTTPS_PROXY``
-  is configured on the host.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

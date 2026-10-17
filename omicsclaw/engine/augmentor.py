@@ -5,8 +5,18 @@ from __future__ import annotations
 from typing import Protocol, Sequence, runtime_checkable
 
 from omicsclaw.schema import Message, ToolDefinition
+from omicsclaw.schema.request import PreparedModelRequest
 
 __all__ = ["TurnAugmentor"]
+
+
+@runtime_checkable
+class RequestPreparingAugmentor(Protocol):
+    """Prepare messages and private state together before one provider request."""
+
+    async def prepare_request(
+        self, history: tuple[Message, ...], tools: tuple[ToolDefinition, ...], request_id: str
+    ) -> PreparedModelRequest: ...
 
 
 @runtime_checkable

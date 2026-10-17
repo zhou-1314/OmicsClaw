@@ -1,49 +1,10 @@
-"""``omicsclaw/entry`` — turning "ask a human" into a frame and a future.
+"""Connect tool approval requests to observable frames and decision futures.
 
-Plan 0031 trap 1. A tool that needs consent calls
-:func:`omicsclaw.tools.require_approval`, which awaits the
-:data:`~omicsclaw.tools.ApprovalChannel` bound for its Task. That
-``await`` happens **inside** the tool, inside
-``AgentEngine.run_stream``'s ``__anext__``. The generator that would have
-to announce the question is the same generator that is suspended waiting
-for its answer, so no arrangement of a single consumer loop can both show
-the prompt and produce the decision:
+The engine runs in a separate task while observers display pending requests.
+The broker publishes approval lifecycle events and settles the matching
+future when a decision, timeout or cancellation occurs.
 
-- a consumer that *polls* between engine events never sees the request,
-  because the request is issued after it went back to waiting;
-- a consumer that stops iterating to show a dialog stops the engine, and
-  with two concurrent tools the second request never even happens.
-
-The way out this layer takes is the first of the two
-``omicsclaw/tools/context.py:136-141`` names: the engine runs in **its
-own Task**, and this broker is the seam between it and whoever answers.
-The request becomes an ``APPROVAL_REQUIRED`` frame on the exchange's
-:class:`~omicsclaw.entry.stream.TurnStream` — which any number of
-observers can be reading — plus an :class:`asyncio.Future` that a
-*different* Task resolves through :meth:`ApprovalBroker.settle`.
-
-**This channel is asynchronous**, and that is a decision rather than an
-accommodation. ``ApprovalChannel`` is typed ``Callable[[ApprovalRequest],
-Any]`` and ``require_approval`` awaits the result only when it is
-awaitable, so a synchronous channel is legal; a synchronous broker is
-not, because the whole of its job is to suspend one Task until another
-one answers, and there is no synchronous spelling of that which does not
-block the event loop the answer has to arrive on. :meth:`settle` is the
-synchronous half, and it is synchronous for the mirror-image reason: it
-is called from a click handler, an HTTP route or an IM callback, and
-none of those should have to await anything to deliver one boolean.
-
-**The deadline denies** (plan 0031 Q12). ``timeout_s=None`` waits for as
-long as the exchange lives, which is what a CLI with a person in front of
-it wants. A channel surface must set a number, and when that number
-expires the answer is *no*: an approval that expired into consent would
-be a security control that a silent user disables.
-
-**Never logs an argument.** ``omicsclaw.entry``'s logging rule (Q22) is
-at its sharpest here — an :class:`~omicsclaw.tools.ApprovalRequest`
-carries the raw argument payload of the call about to run, which is
-exactly the ``bash`` command line or ``write_file`` body that may name a
-subject. Only the tool name, the request id and the outcome are logged.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

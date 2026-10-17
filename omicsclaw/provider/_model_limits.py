@@ -1,35 +1,6 @@
-"""``omicsclaw/provider`` — how much a model can be asked to hold and emit.
+"""Resolve model context and output limits.
 
-A static table, mirroring the reference harness's ``model_limits.go``.
-Two numbers per model: the context window a conversation must be
-compacted to fit, and the output ceiling a request may name.
-
-Three rules, each earned rather than chosen:
-
-**Keys are bare model names.** A gateway prefixes the vendor
-(``"openai/gpt-4o"``, ``"anthropic/claude-sonnet-4.6"``), so the lookup
-strips everything up to the last ``/`` before matching. Without that,
-every model would need one entry per gateway that resells it. An exact
-match on the full identifier is tried first, for the cases where a
-gateway genuinely publishes a different window than the vendor does.
-
-**Unknown models get a conservative fallback, never zero.** 256K context
-and 8K output — big enough that a modern model is not throttled, small
-enough that a genuinely small model is not overrun. A table miss must
-degrade, not fail: local Ollama tags and brand-new releases are missed
-routinely and by design, since this table is maintained by hand.
-
-**Context windows come from this repo's catalog where it has one.**
-``omicsclaw/providers/models.py`` is the in-repo source of truth and
-disagrees with the reference harness on several shared models (it lists
-``claude-opus-4-7`` at 1M, the harness at 200K); the local figure wins
-here. Output ceilings are the reverse — the repo records none, so the
-harness's figures are used where they overlap and the conservative
-default stands in everywhere else. An entry's output number being the
-default therefore means "not known", not "known to be 8192"; a caller
-that needs a larger ceiling sets ``max_tokens`` explicitly.
-
-Last reviewed 2026-09.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

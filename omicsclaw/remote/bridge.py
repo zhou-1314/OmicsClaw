@@ -1,25 +1,6 @@
-"""The P1 jobs-plane bridge: one ``POST /jobs`` request, run remotely.
+"""Route Desktop job requests to remote execution.
 
-C2's routing half. A job created with ``runtime="remote:<alias>"`` is
-executed by :class:`RemoteJobsBridge` instead of its kind's local
-runner, and the bridge speaks the P1 event vocabulary through the
-:class:`~omicsclaw.entry.desktop.jobs_manager.JobExecutionContext` it is
-handed — ``job.started`` and ``job.done`` come from the manager's own
-``_run`` exactly as for a local job, and the bridge adds ``progress``
-frames for submission and each poll, plus ``tool_output_chunk`` frames
-carrying the *new* bytes of the remote ``job.log``.
-
-**Today the remote job is a command.** ``inputs.command`` is what runs;
-``inputs.inputs`` / ``inputs.outputs`` / ``inputs.scheduler`` map onto
-the tool-plane ``remote_submit`` arguments. A remote *skill* (running
-skill code next to the data) is C3's persistent-kernel territory, not
-this bridge's — saying so here is cheaper than discovering it in a
-stack trace.
-
-Observation timeout or controller shutdown detaches this runner while
-the admitted job keeps running. JobsManager sends an explicit cancel
-through the plane and waits for observed terminal evidence. The existing
-stores and reconciler remain responsible for job state.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

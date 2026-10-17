@@ -1,49 +1,10 @@
-"""``omicsclaw/entry`` — one exchange's event truth, observable more than once.
+"""Store one exchange's ordered events for multiple cursor-based observers.
 
-Plan 0031 Q14. The drafted design had a single ``TurnHandle`` that was the
-exchange's identity *and* its only consumer *and* the approval entry point.
-Two of the three Surfaces break that shape immediately:
+TurnStream owns exchange event truth. Each TurnObservation tracks its own
+cursor through the bounded history and reports when retained events no
+longer cover that cursor. Detaching an observer does not cancel the exchange.
 
-- **Desktop.** An SSE reconnect is a *new HTTP request*. It cannot be
-  handed the iterator the previous request was holding, and the frames
-  that request already consumed are gone.
-- **Channel.** A failed IM delivery is retried, which means replaying from
-  a cursor.
-
-So identity and observation are separated here: one :class:`TurnStream`
-per exchange, any number of :class:`TurnObservation` over it, each with
-its own cursor. The vocabulary is deliberately the deleted control
-plane's — ``sequence``, a bounded ring, ``cursor_evicted``,
-``EventObserverDetached`` — because that code had already solved
-cross-process streaming delivery, and a rebuild that renamed the concepts
-would have had to re-derive them (``git show
-HEAD:omicsclaw/control/event_hub.py``).
-
-**What is new, and why** — three departures from that implementation, each
-because the old behaviour has a failure mode this layer must not inherit:
-
-1. *A slow observer is no longer detached.* The old hub dropped an
-   observer whose queue filled up (``_DETACHED``). Here the **droppable**
-   types are discarded instead and the observer is told, because a Desktop
-   client on a slow link should lose text tokens, not the approval prompt
-   that its user is expected to answer.
-2. *A gap does not throw the retained suffix away.* The old hub skipped
-   replay entirely on a gap, on the grounds that the retained suffix was
-   incomplete. Once a ``GAP`` frame names the hole the suffix is no longer
-   ambiguous, and discarding frames the process is still holding buys
-   nothing.
-3. *A cursor past the end is not an error.* ``cursor_ahead`` made sense
-   against a durable log. Against a live in-process stream it just means
-   "caught up", so the cursor is clamped and no gap is reported.
-
-**Concurrency: Tasks, not threads.**
-:meth:`TurnStream.publish` is safe between Tasks of **one** event loop and
-is *not* thread-safe — neither ``asyncio.Queue`` nor a ``deque`` plus an
-``asyncio.Event`` is, whatever the reference harness's goroutine-safe
-``p.Send`` may suggest (plan 0031 trap 10). A callback running on a vendor
-SDK's own thread — the normal case on the Channel Surface — must go
-through :meth:`TurnStream.publish_threadsafe`, which is the
-``loop.call_soon_threadsafe`` hop spelled out.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

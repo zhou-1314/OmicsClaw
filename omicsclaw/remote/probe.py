@@ -1,35 +1,6 @@
-"""The host probe: one read-only script, one JSON object, best effort.
+"""Probe a remote host and return structured observations.
 
-The knowledge-gathering half of C1. The plan's ruling (Claude Science's
-probe, adapted): a host is characterised by running **one POSIX shell
-script in a login shell** and parsing the JSON it prints between two
-sentinel lines — not by installing anything, not by assuming Python
-exists remotely, not by parsing human-formatted tool output a second
-time.
-
-**Read-only, and visibly so.** The script touches nothing: ``nproc``,
-``free -m``, ``nvidia-smi -L``, ``command -v``, ``sinfo``, ``hostname``,
-``uname``, and existence tests on scratch candidates. A host
-administrator reading the base64 blob can decode it and find no writes
-anywhere, which is the only audit story a "just probe it" feature can
-offer.
-
-**Everything is optional.** Every field is emitted best-effort: a
-machine without ``nvidia-smi`` answers an empty GPU list, a machine
-without SLURM answers no partitions, a shell without ``free`` answers
-``null`` memory. :func:`parse_probe_output` carries the same tolerance —
-a missing field, a truncated tail, a marker pair that never closes, or
-JSON that will not parse all yield a :class:`HostProbe` rather than an
-exception, with :attr:`HostProbe.parse_error` saying what was imperfect.
-A probe that crashes on half the fleet is worse than no probe.
-
-**The logic is local, the facts are remote.** Which scratch candidate to
-prefer (:meth:`HostProbe.scratch_root`) is decided in Python where it
-can be tested and changed; the script merely reports which candidates
-are defined and which exist. The script is delivered base64-wrapped
-(:func:`~omicsclaw.remote.ssh.encode_login_script`) so no quoting
-question exists in either shell, and runs under ``bash -l`` so the
-module/conda environment a user actually gets is the one measured.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

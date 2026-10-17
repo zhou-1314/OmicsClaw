@@ -324,7 +324,7 @@ class ChildRunner:
     override — which lives on the parent registry and not on the tools.
     """
 
-    __slots__ = ("_config", "_parent", "_provider", "_sandbox", "_skills")
+    __slots__ = ("_config", "_notebook_augmentor", "_parent", "_provider", "_sandbox", "_skills")
 
     def __init__(
         self,
@@ -334,12 +334,14 @@ class ChildRunner:
         config: AppConfig,
         sandbox: SandboxBinding | None = None,
         skills: SkillIndex | None = None,
+        notebook_augmentor=None,
     ) -> None:
         self._provider = provider
         self._parent = parent
         self._config = config
         self._sandbox = sandbox
         self._skills = skills
+        self._notebook_augmentor = notebook_augmentor
 
     async def delegate(self, definition: SubAgentDefinition, prompt: str) -> str:
         """Run *definition* once over *prompt* and return its conclusion.
@@ -378,11 +380,15 @@ class ChildRunner:
         cannot put a question to the person.
         """
         outer = current_context()
+        values = {**outer.values, SUBAGENT_VALUE_KEY: definition.name}
+        if self._notebook_augmentor is not None:
+            from uuid import uuid4
+            values["session_id"] = "child-" + uuid4().hex
         with use_tool_context(
             approval=outer.approval,
             question=None,
             progress=outer.progress,
-            values={**outer.values, SUBAGENT_VALUE_KEY: definition.name},
+            values=values,
         ):
             return await self._run_child(definition, prompt)
 
@@ -415,7 +421,8 @@ class ChildRunner:
         )
         result: RunResult | None = None
         async for event in engine.exchange_stream(
-            prompt, prompt=self._child_prompt(definition)
+            prompt, prompt=self._child_prompt(definition),
+            augmentor=self._notebook_augmentor(values["session_id"]) if self._notebook_augmentor else None,
         ):
             if event.type is EngineEventType.TOOL_START and event.tool_call:
                 await report_progress(
@@ -444,7 +451,7 @@ class ChildRunner:
         The parent's registration order is preserved, so two sub-agents
         with the same tool set present it to the model identically.
         """
-        child = ToolRegistry()
+        child = ToolRegistry(before_execute=self._parent.before_execute)
         for name in definition.resolve_tools(self._parent.names()):
             if name in _WITHHELD_FROM_SUB_AGENTS:
                 continue

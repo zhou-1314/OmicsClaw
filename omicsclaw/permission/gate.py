@@ -1,43 +1,11 @@
-"""Where a tool call is permitted, refused, or put to a person.
+"""Decide and enforce tool-call permissions through wrapped tools.
 
-:class:`PermissionGate` decides; :class:`GatedTool` acts on the decision.
+Composition must apply gate_tools to every tool requiring this policy.
+PermissionGate decides; GatedTool enforces the decision. Tools that prompt
+for themselves may present effect-specific approval requests, subject to
+the gate's mandatory checks.
 
-**The gate decorates a tool, not the registry.** :func:`gate_tools` wraps each
-:class:`~omicsclaw.tools.Tool` that a registry is built over, so the gate runs
-*inside* :meth:`~omicsclaw.tools.ToolRegistry.execute` and reads the policy
-that registry already resolved. Two consequences for a caller:
-
-- Nothing wraps the registry, so the optional Protocols the engine probes for
-  (``DeadlineAwareExecutor``, ``ConcurrencyAwareExecutor``) keep working — in
-  particular a human's approval time still stays out of the per-tool timeout.
-- **A tool registered without passing through :func:`gate_tools` is not
-  gated.** Composing the registry is where that has to be got right.
-
-**Who asks a human.** A verdict of ``ask`` does not mean *the gate* asks. A
-tool that declares :attr:`~omicsclaw.tools.ToolPolicy.prompts_for_itself` puts
-the question itself, with a prompt that can describe the actual effect — the
-diff ``edit_file`` is about to write, the whole URL ``web_fetch`` is about to
-request. The gate asks in every other case, and in two cases even when the
-tool claims otherwise:
-
-- the tool would self-approve this time, because its resolved
-  ``approval_mode`` is ``AUTO`` and a rule escalated the call;
-- a dangerous-command pattern matched, where the pattern's reason is
-  something the tool does not know and a person needs to read.
-
-Either way a call is put to a human **at most once**: after the gate asks, it
-runs the tool with consent already recorded, so the tool's own
-``require_approval`` returns immediately.
-
-**Which questions a standing grant may answer.** A surface can offer "stop
-asking me about this tool" (the CLI's ``s``). That is only safe for questions
-the tool's *own default* raised. On both paths above —— the gate asking, and
-the gate handing the question down —— the gate binds
-:func:`~omicsclaw.tools.ask_every_time` to say whether anything more specific
-than that raised this one: a rule, a dangerous-command pattern, a protected
-path. It has to be both paths, because a rule outranks a danger pattern: an
-``ask: ["bash"]`` rule turns ``rm -rf /`` into a *rule* question, which is
-handed down to ``bash`` like any other (plan 0049 §3).
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

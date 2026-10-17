@@ -118,6 +118,7 @@ class ScienceJobRunner:
         rscript: Path | None = None,
         r_library: Path | None = None,
         default_hard_timeout_s: float | None = None,
+        environment_guard=None,
     ):
         import re
 
@@ -126,6 +127,7 @@ class ScienceJobRunner:
         if not re.fullmatch(r"[a-f0-9]{64}", environment_digest):
             raise JobError("science_environment_digest_required")
         self._app = app
+        self.environment_guard = environment_guard
         self._bridge = bridge
         self.target_alias = bridge.target_alias
         self.interpreter = interpreter.absolute()
@@ -146,6 +148,22 @@ class ScienceJobRunner:
         self.r_library = r_library.resolve(strict=True) if r_library else None
         if self.rscript and (not self.rscript.is_file() or self.r_library is None):
             raise JobError("science_r_binding_incomplete")
+
+    async def reserve_admission(self, record):
+        if self.environment_guard is not None:
+            await self.environment_guard.reserve(record)
+
+    def commit_admission(self, record):
+        if self.environment_guard is not None:
+            self.environment_guard.committed(record)
+
+    def abandon_admission(self, record):
+        if self.environment_guard is not None:
+            self.environment_guard.abandoned(record)
+
+    def observation_finished(self, record):
+        if self.environment_guard is not None:
+            self.environment_guard.finished(record)
 
     async def resolve_target(self, alias, **kwargs):
         return await self._bridge.resolve_target(alias, **kwargs)
@@ -219,6 +237,8 @@ class ScienceJobRunner:
             "payloadDigest": snapshot["payloadDigest"],
             "dataFiles": snapshot["dataFiles"],
         }
+        if self.environment_guard is not None:
+            request["environmentReservation"] = self.environment_guard.request(record)
         content = json.dumps(
             request, sort_keys=True, ensure_ascii=False, allow_nan=False
         )
@@ -294,6 +314,8 @@ class ScienceJobRunner:
             + shell_quote(str(self.interpreter))
             + " -B -m omicsclaw.entry.ssh.science_worker --request science-request.json"
         )
+        if self.environment_guard is not None:
+            self.environment_guard.dispatching(record)
         outcome = await self._bridge.plane.submit(
             record.target_alias,
             command,
@@ -311,6 +333,8 @@ class ScienceJobRunner:
         if result is None:
             row = self._bridge.plane.job_store().get(outcome.job_ref)
             await self.recover_evidence(record, row, ctx)
+        if self.environment_guard is not None:
+            self.environment_guard.finished(record)
         return result
 
     async def _read_evidence(self, row, name, maximum):

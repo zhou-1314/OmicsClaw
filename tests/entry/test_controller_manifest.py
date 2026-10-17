@@ -48,9 +48,12 @@ def test_component_manifest_verifies_files_and_refuses_changed_payload(tmp_path)
         verified_source_metadata(tmp_path)
 
 
-@pytest.mark.parametrize("relative", ["skills/sc-filter/algorithm.py", "omicsclaw_science_worker.py"])
+@pytest.mark.parametrize(
+    "relative", ["skills/sc-filter/algorithm.py", "omicsclaw_science_worker.py"]
+)
 def test_component_manifest_refuses_algorithm_payload_and_retired_entry(
-    tmp_path, relative,
+    tmp_path,
+    relative,
 ):
     from omicsclaw.entry.ssh.manifest import verified_source_metadata
 
@@ -99,3 +102,48 @@ def test_finite_execution_wrapper_is_in_the_fixed_controller_archive():
 
     closure = source_closure(Path(__file__).parents[2])
     assert "omicsclaw.remote.deadline" in closure
+
+
+def test_registered_probe_runs_from_the_archive_without_the_checkout(tmp_path):
+    import subprocess
+    import sys
+    import zipfile
+    from pathlib import Path
+
+    from scripts.build_controller import build
+
+    artifact = tmp_path / "artifact"
+    manifest = build(Path(__file__).parents[2], artifact, allow_dirty=True)
+    source = "omicsclaw/skillenv/registered_probe.py"
+    assert any(row["path"] == source for row in manifest["files"])
+    assert {"omicsclaw/skillenv/notebook_inspect.py", "omicsclaw/skillenv/notebook_identity.py",
+            "omicsclaw/skillenv/notebook_inspect.R", "omicsclaw/skillenv/notebook_identity.R"} <= {row["path"] for row in manifest["files"]}
+    packaged = {row["path"] for row in manifest["files"]}
+    assert {"omicsclaw/entry/ssh/notebook_owner.py", "omicsclaw/entry/ssh/notebook_ipc.py",
+            "omicsclaw/entry/notebook/runtime.py", "omicsclaw/entry/notebook/policy.py"} <= packaged
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(artifact / "controller.zip") as archive:
+        archive.extract(source, extracted)
+        sidecar = "skills/singlecell/scrna/sc-filter/kernel.py"
+        assert sidecar in packaged
+        archive.extract(sidecar, extracted)
+    # Helper definitions load from the payload without importing any scientific package.
+    helper_source = (extracted / sidecar).read_text()
+    from omicsclaw.skills.sidecar import extract_kernel_exports, validate_kernel_ast
+
+    assert not validate_kernel_ast(helper_source)
+    namespace = {}
+    exec(compile(helper_source, str(extracted / sidecar), "exec"), namespace)
+    assert all(callable(namespace[name]) for name, _, _ in extract_kernel_exports(helper_source))
+    # Only this file is extracted; isolated Python cannot import the checkout.
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", str(extracted / source), '["json"]'],
+        cwd=extracted,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["prefix"] == sys.prefix
+    assert observed["missing"] == []

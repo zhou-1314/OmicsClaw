@@ -1,67 +1,6 @@
-"""``omicsclaw/engine`` — the ReAct loop itself.
+"""Run the model and tool execution loop.
 
-Plan 0027 §2 and §6, the third step of the staged rebuild. Step 1 gave
-the system a vocabulary and step 2 gave it a way to speak; this is the
-loop that keeps
-
-    Message → ToolCall → ToolResult → Message
-
-moving until the model stops asking to act::
-
-    engine = AgentEngine(provider, tools, EngineConfig(max_turns=50))
-
-    result = await engine.run(messages)               # blocking
-    async for event in engine.run_stream(messages):   # streaming
-        ...
-
-Plan 0027 §12.4.4 adds a second pair of entry points over that same
-kernel, for the caller who has a system prompt and a history rather than
-a finished list of messages::
-
-    engine = AgentEngine(provider, tools, prompt=assembler)
-
-    result = await engine.exchange("分析这份 Visium 数据", conversation=chat)
-    async for event in engine.exchange_stream("…", conversation=chat):
-        ...
-
-``exchange`` and ``exchange_stream`` are **shells**, not a second loop:
-they render, splice, delegate to ``run`` / ``run_stream``, and hand the
-finished trajectory back to the conversation. Everything about turns,
-tools and stopping stays in the one kernel below.
-
-**One kernel, two mouths.** :meth:`AgentEngine.run` and
-:meth:`AgentEngine.run_stream` share a single copy of the turn / tool /
-Observation logic, because a second copy is how a blocking path and a
-streaming path start disagreeing about when a run is finished — and the
-disagreement surfaces as a bug report about one of them. What differs is
-one injected turn strategy: ``run`` calls ``generate`` and
-``run_stream`` calls ``generate_stream``, so a blocking caller never pays
-for streaming and never reassembles a message out of deltas it did not
-want.
-
-Python cannot spell that seam the way the reference harness does. PEP 525
-forbids a non-empty ``return`` in an async generator, so a strategy
-cannot both yield events and hand back a :class:`Completion`; it fills a
-mutable outcome holder instead — the shape plan 0027 §6 blesses, and the
-one :func:`~omicsclaw.engine.executor.execute_tool_calls` already uses
-for its results.
-
-**What this layer is not.** No prompt assembly, no session persistence,
-no tool implementations. Nothing here renders a prompt or writes a
-conversation down: a :class:`~omicsclaw.engine.prompt.PromptSource` is
-*asked* for a render it made elsewhere, and a
-:class:`~omicsclaw.engine.conversation.Conversation` is *handed* the
-trajectory to do as it likes with. Compaction is not
-decided here either: a :class:`~omicsclaw.engine.compactor.
-HistoryCompactor` handed to :meth:`AgentEngine.run` is consulted before
-every model call and may rewrite what is sent, or the history itself.
-Nor is what a call is *reminded* of: a
-:class:`~omicsclaw.engine.augmentor.TurnAugmentor` is consulted after the
-compactor and may append to that call — and only to that call. The loop
-knows neither what a plan is nor that one exists.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.provider`` and the
-standard library. No logging, no I/O, no vendor SDK.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
@@ -69,6 +8,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
+from uuid import uuid4
 
 from omicsclaw.provider import Completion, LLMProvider, ProviderError
 from omicsclaw.schema import (
@@ -80,8 +20,9 @@ from omicsclaw.schema import (
     ToolResult,
     Usage,
 )
+from omicsclaw.schema.request import ModelRequestContext
 
-from .augmentor import TurnAugmentor
+from .augmentor import RequestPreparingAugmentor, TurnAugmentor
 from .compactor import HistoryCompactor
 from .config import EngineConfig
 from .conversation import Conversation
@@ -397,7 +338,14 @@ class AgentEngine:
                     sent = tuple(rewrite[0])
                     if rewrite[1]:
                         history = list(sent)
-            if augmentor is not None:
+            request_context = ModelRequestContext(uuid4().hex)
+            if isinstance(augmentor, RequestPreparingAugmentor):
+                prepared = await augmentor.prepare_request(sent, tools, request_context.request_id)
+                if prepared.context.request_id != request_context.request_id:
+                    raise EngineError("request preparation changed the request identity")
+                request_context = prepared.context
+                sent = (*sent, *prepared.messages)
+            elif augmentor is not None:
                 # After the compactor, and onto ``sent`` alone. An
                 # augmentor's whole purpose is to be read, so adding
                 # before compaction would let compaction remove it; and
@@ -440,7 +388,10 @@ class AgentEngine:
                 calls = completion.message.tool_calls
                 results: list[ToolResult | None] = []
                 async with aclosing(
-                    execute_tool_calls(self._tools, calls, config, results, turns)
+                    execute_tool_calls(
+                        self._tools, calls, config, results, turns,
+                        request_context=request_context,
+                    )
                 ) as tool_events:
                     async for event in tool_events:
                         yield event

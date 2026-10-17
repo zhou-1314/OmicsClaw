@@ -1,59 +1,6 @@
-"""``python`` — a cell in the session's persistent kernel.
+"""Execute a cell in the persistent session kernel.
 
-P4's chat-face half. What the model sends here runs on **one IPython
-kernel per session that survives between calls**: a variable defined in
-one ``python`` call is still there in the next, which is the entire
-difference from piping a snippet through ``bash`` and the reason this
-tool exists.
-
-**The division of labour with ``bash``, stated in the description so the
-model picks for itself:** short shell-shaped work — list a directory,
-probe a file, run a CLI — belongs to ``bash``; anything that builds on
-earlier Python state — load once, cluster next, plot after — belongs
-here. Nothing in ``bash`` changes.
-
-**Leaf-layer rule, like ``save_artifact``'s**: this module imports
-``omicsclaw.schema`` and the tool layer's own modules, nothing heavier.
-The kernel itself is a :class:`KernelRunner` Protocol the composition
-root binds (:func:`~omicsclaw.entry.assembly.build_app` mounts
-:class:`~omicsclaw.kernel.PersistentKernelManager` behind it); a tool
-constructed without one refuses at execution time with a
-:exc:`RuntimeError`, because no argument a model can send could supply
-a process. The Protocol is structural, so a test double stubs one
-method.
-
-**Approval follows the ``bash`` category**: arbitrary code is arbitrary
-code, whatever interpreter runs it — ``HIGH`` risk, ``ASK`` mode, the
-prompt quoting the first lines of the code the model actually sent
-(hand-written schema, hand-written reason, the ``write``/``save_artifact``
-discipline).
-
-**Streaming goes through the tool layer's progress channel.** The
-runner hands this tool a synchronous ``on_output`` callable it invokes
-from the kernel's worker thread as iopub stream frames arrive; the tool
-forwards each through :func:`~omicsclaw.tools.context.report_progress`,
-which the chat surface renders as ``tool_output`` frames — the same seam
-every other tool's progress speaks, so no new event type exists on the
-chat wire. The forwarding is coalesced (at most ~4 frames/s) because a
-runaway ``print`` loop must not become a frame storm.
-
-**The timeout arithmetic is ``bash``'s**, with its collision stated
-rather than hidden: the engine's per-call budget (:data:`DEFAULT_TIMEOUT`
-+ :data:`ENGINE_TIMEOUT_MARGIN` <= ``EngineConfig.tool_timeout``) bounds
-what a chat cell can do; a longer computation belongs on the job face
-(``POST /jobs {kind: "code_run"}``), whose ceiling is the job timeout.
-
-**C3's location argument is mounted, not always present.** A deployment
-with a remote plane constructs this tool with ``allow_remote=True`` and
-the schema grows an optional ``location`` ("local" — the default, the
-whole of P4 — or ``"remote:<ssh alias>"``); without the flag the schema
-is byte-identical to P4's, which is the "off changes nothing" contract
-a test pins. A remote cell rides the same ASK approval its local twin
-does, with the host named on the card, and the *first* remote cell on a
-host additionally surfaces the one-time environment-provisioning card
-the runtime asks for (the runner passes the location down; the approval
-itself happens in the entry layer, which is the only layer that may
-hold a tool context).
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
@@ -147,6 +94,7 @@ def _schema(allow_remote: bool) -> dict[str, Any]:
 def _description(allow_remote: bool) -> str:
     return _DESCRIPTION + (_LOCATION_DESCRIPTION if allow_remote else "")
 
+
 DEFAULT_TIMEOUT = 45.0
 ENGINE_TIMEOUT_MARGIN = 15.0
 """The ``bash`` arithmetic, copied on purpose: this tool's budget plus
@@ -206,7 +154,8 @@ class _StreamGate:
     call.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop, name: str = TOOL_NAME) -> None:
+        self._name = name
         self._loop = loop
         self._buffer: list[str] = []
         self._last = 0.0
@@ -220,7 +169,7 @@ class _StreamGate:
         payload = "".join(self._buffer)[-2000:]
         self._buffer.clear()
         self._loop.call_soon_threadsafe(
-            asyncio.ensure_future, report_progress(payload, tool_name=TOOL_NAME)
+            asyncio.ensure_future, report_progress(payload, tool_name=self._name)
         )
 
     def flush(self) -> None:
@@ -229,7 +178,7 @@ class _StreamGate:
         payload = "".join(self._buffer)[-2000:]
         self._buffer.clear()
         self._loop.call_soon_threadsafe(
-            asyncio.ensure_future, report_progress(payload, tool_name=TOOL_NAME)
+            asyncio.ensure_future, report_progress(payload, tool_name=self._name)
         )
 
 
@@ -246,6 +195,7 @@ class PythonKernelTool:
     """
 
     policy = _POLICY
+    language = "python"
 
     def __init__(
         self, *, runner: KernelRunner | None = None, allow_remote: bool = False
@@ -253,14 +203,21 @@ class PythonKernelTool:
         self._runner = runner
         self._allow_remote = bool(allow_remote)
         self._definition = ToolDefinition(
-            name=TOOL_NAME,
+            name=self.name,
             description=_description(self._allow_remote),
             input_schema=_schema(self._allow_remote),
         )
+        if runner is not None and hasattr(runner, "execution_timeout"):
+            self._definition.input_schema["properties"]["timeout_secs"][
+                "description"
+            ] = (
+                "Scientific execution budget in seconds; defaults to 1800. "
+                "Observation can finish while execution continues in the Notebook owner."
+            )
 
     @property
     def name(self) -> str:
-        return TOOL_NAME
+        return self.language
 
     def definition(self) -> ToolDefinition:
         return self._definition
@@ -281,38 +238,41 @@ class PythonKernelTool:
         code = str(decoded["code"])
         if not code.strip():
             raise ToolArgumentError(
-                "input.code is required and must be Python source, not whitespace"
+                f"input.code is required and must be {self.language} source, not whitespace"
             )
         description = decoded.get("description")
         description = description.strip() if isinstance(description, str) else ""
         timeout = decoded.get("timeout_secs")
         timeout = float(timeout) if isinstance(timeout, (int, float)) else None
         if timeout is not None:
-            timeout = min(max(timeout, 1.0), DEFAULT_TIMEOUT)
+            timeout = min(
+                max(timeout, 1.0),
+                getattr(self._runner, "execution_timeout", DEFAULT_TIMEOUT),
+            )
         location = self._location_argument(decoded)
 
         head = "\n".join(code.splitlines()[:6])[:400]
         # the alias is sliced before the f-string: a `:` inside an
         # f-string expression is a format spec on 3.11, and the host
         # name would silently become its seventh character
-        alias = location[len("remote:"):] if location != "local" else ""
+        alias = location[len("remote:") :] if location != "local" else ""
         where = f" on the remote kernel at {alias}" if alias else ""
         await require_approval(
             self.name,
             arguments,
             policy=self.policy,
-            reason=f"run a Python cell{where} on this session's kernel:\n{head}",
+            reason=f"run a {'Python' if self.language == 'python' else 'R'} cell{where} on this session's kernel:\n{head}",
         )
 
         if self._runner is None:
             raise RuntimeError(
-                "python has no kernel runner bound; the surface assembling "
+                f"{self.name} has no kernel runner bound; the surface assembling "
                 "the persistent kernels must provide one"
             )
         session_id = str(context_value("session_id", "") or "") or "default"
-        gate = _StreamGate(asyncio.get_running_loop())
+        gate = _StreamGate(asyncio.get_running_loop(), self.name)
         try:
-            return await self._runner.run_python(
+            return await getattr(self._runner, "run_" + self.language)(
                 code,
                 description=description,
                 session_id=session_id,

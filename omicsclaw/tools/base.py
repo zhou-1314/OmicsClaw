@@ -1,35 +1,6 @@
-"""``omicsclaw/tools`` — what a tool *is*, and what may be said about one.
+"""Define tool interfaces and metadata.
 
-Plan 0028 §2. Steps 1–3 gave the system a vocabulary
-(:mod:`omicsclaw.schema`), an interpreter that speaks it
-(:mod:`omicsclaw.provider`) and a loop that moves it
-(:mod:`omicsclaw.engine`). This module answers the question that layer
-deliberately left open: what does the loop's :class:`ToolExecutor` seam
-actually dispatch *to*?
-
-**A tool is one object.** Its name, the schema the model is shown, and
-the code that runs are three faces of a single thing, so they live
-together. The arrangement being replaced splits them across a metadata
-record, a separate ``dict[str, Callable]``, and a string key matched at
-start-up — under which "what does this tool do" has no single place that
-answers it, and a parameter change has to be made twice with nothing
-checking that both were made.
-
-**Two vocabularies, deliberately not one.**
-:class:`~omicsclaw.schema.ToolDefinition` is what a *model* is told;
-:class:`ToolPolicy` is what this *machine* is allowed to do. They are
-separate types because they have separate destinations: the first is
-serialized into a prompt, the second must never be. Keeping policy off
-:class:`Tool` entirely means there is nowhere for it to leak from — the
-same argument :class:`~omicsclaw.engine.executor.ToolExecutor` makes for
-its own two-method surface.
-
-**Leaf-adjacent.** ``omicsclaw.schema`` and the standard library. Nothing
-else in the ``omicsclaw`` namespace — not ``provider``, not ``engine``,
-and above all not ``omicsclaw.runtime.tools``, the legacy layer this one
-is built to replace. ``tests/tools/test_tools_is_a_leaf_layer.py`` is the
-only thing enforcing that, so it is enforced by test rather than implied
-by a package name.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -180,14 +180,6 @@ def build_bwrap_argv(
     # Workspace is writable by default
     cmd.extend(["--bind", str(ws), str(ws)])
 
-    # Mask sensitive credential paths in the user's home directory and workspace (.env)
-    cred_candidates = effective_profile.masked_read_paths
-    for cred_path in cred_candidates:
-        if cred_path.is_dir() and not cred_path.is_symlink():
-            cmd.extend(["--tmpfs", str(cred_path)])
-        elif cred_path.exists() or cred_path.is_symlink():
-            cmd.extend(["--ro-bind", "/dev/null", str(cred_path)])
-
     # Additional read-only paths
     prof_ro = effective_profile.ro_mounts
     seen_ro: set[str] = set()
@@ -203,11 +195,6 @@ def build_bwrap_argv(
     for protected in protected_paths:
         if protected.exists():
             cmd.extend(["--ro-bind", str(protected), str(protected)])
-
-    # Re-mask workspace credential files (.env, etc.) after workspace/protected binds
-    for ws_masked in effective_profile.masked_paths:
-        if ws_masked.exists() or ws_masked.is_symlink():
-            cmd.extend(["--ro-bind", "/dev/null", str(ws_masked)])
 
     # Additional writable paths (applied after deny_write_globs so kernel/pkg/cache dirs inside .omicsclaw work)
     prof_rw = (
@@ -233,6 +220,16 @@ def build_bwrap_argv(
     ):
         sock_dir = str(unix_socket_path.parent.resolve())
         cmd.extend(["--bind", sock_dir, sock_dir])
+
+    # Credential masks must follow all mounts, including an interpreter under HOME.
+    for cred_path in effective_profile.masked_read_paths:
+        if cred_path.is_dir() and not cred_path.is_symlink():
+            cmd.extend(["--tmpfs", str(cred_path)])
+        elif cred_path.exists() or cred_path.is_symlink():
+            cmd.extend(["--ro-bind", "/dev/null", str(cred_path)])
+    for ws_masked in effective_profile.masked_paths:
+        if ws_masked.exists() or ws_masked.is_symlink():
+            cmd.extend(["--ro-bind", "/dev/null", str(ws_masked)])
 
     cmd.extend(["--chdir", str(work_cwd), "--"])
 

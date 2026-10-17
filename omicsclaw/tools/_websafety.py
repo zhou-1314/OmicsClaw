@@ -1,64 +1,10 @@
-"""The network boundary, and the only way through it.
+"""Validate outbound HTTP destinations and bind requests to checked addresses.
 
-What ``_workspace.py`` is to the filesystem, this is to the network: a
-gate every tool that opens a socket passes through, plus the transport
-that is the only thing allowed to open one. Modelled on harness9's
-``internal/tools/web_safety.go``.
+Validation covers URL syntax, credentials, resolved addresses and redirects.
+It rejects internal destinations. Permission to transmit the URL and its data
+belongs to the calling tool's policy and approval mechanism.
 
-**The class of bug it prevents is SSRF.** On any cloud instance
-``http://169.254.169.254/latest/meta-data/iam/`` returns credentials to
-whoever asks, and a model told to "check what this endpoint returns" will
-ask. A URL prefix check does not prevent it; this repository's existing
-``runtime/tools/builders/engineering.py`` ``web_fetch`` has only that, so
-the metadata endpoint is reachable from it today.
-
-**What this does NOT protect.** :data:`~omicsclaw.entry.assembly.SAFETY_RULES` rule 1
-is that genetic data never leaves this machine, and nothing here enforces it. A
-blocklist of destinations cannot: ``https://example.com/?q=`` plus a
-patient identifier is a perfectly public address. Data egress is governed
-by the ``ASK`` policy on the tools themselves.
-
-**Four checks, in order:** the scheme must be ``http`` or ``https``;
-userinfo (``user:pass@host``) is refused because parsers disagree about
-which host ``https://expected.com@evil.com/`` names; the host is
-resolved, fail-closed on failure; and **every** resolved address is
-checked against :data:`BLOCKED_NETWORKS`, not just the first — a name
-with one public ``A`` record and one ``127.0.0.1`` is a rebinding attack
-with no timing requirement.
-
-**Then it pins, which the reference does not.** harness9 validates the
-resolved addresses and hands the *hostname* to ``http.Client``, which
-resolves it again, so one record with a short TTL makes the check
-describe a different connection from the one that happens.
-:class:`PinnedTransport` connects to the address it validated, carrying
-the hostname only in the ``Host`` header and the TLS SNI, so certificate
-verification is unaffected. Redirects are re-checked on every hop.
-
-**The seams, and which of them is load-bearing.**
-:class:`PinnedTransport` takes a ``resolver`` and an ``opener``.
-``resolver`` **cannot weaken a check**: whatever address it returns is
-itself judged, so a test can point a name at ``127.0.0.1`` and watch it
-refused but cannot make ``127.0.0.1`` acceptable. ``opener`` is a
-different matter and should not be described as if it were the same —
-it is the thing that opens the socket, so an implementation that ignores
-the :class:`SafeTarget` handed to it reaches wherever it likes. Like
-``bash``'s ``BashEnvironment`` and like a tool's own ``transport``
-argument, it sits **inside** the trust boundary: whoever assembles a
-registry chooses where the syscalls land and owns that choice.
-
-**A budget for the whole call, not per hop.** ``timeout`` on
-:meth:`PinnedTransport.request` covers every redirect and every byte,
-because a per-hop budget multiplies by six behind a number the caller
-derived from the engine's per-tool deadline — and because a socket
-timeout on its own bounds one read rather than their sum, so a server
-dripping bytes just inside it holds the request open indefinitely.
-
-**Network failure is not refusal.** A reset, a TLS error or the deadline
-raises :exc:`TransportFailed`, which tools report as ordinary output;
-only :exc:`UrlRefused` means "send different arguments".
-
-**Leaf-adjacent.** The standard library only — no ``omicsclaw`` import at
-all, not even ``schema``.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

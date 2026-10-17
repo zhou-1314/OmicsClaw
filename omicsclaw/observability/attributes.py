@@ -1,32 +1,6 @@
-"""Every name this layer writes: spans, attribute keys, instruments.
+"""Define telemetry span, attribute and instrument names.
 
-One module of constants, for the reason the reference harness gives its
-own (``observability/attributes.go``): these strings are a **wire
-contract** with whatever reads them — a Langfuse project, a Grafana
-dashboard, a Jaeger query — so renaming one silently breaks a dashboard
-nobody in this repository can see. Collecting them here means a rename is
-a diff in one file rather than a grep, and means the parity table in
-``docs/plans/0043-observability-layer.md`` can be checked against code
-instead of against memory.
-
-Four groups, and the split matters:
-
-1. **Span names** — the shape of the trace tree.
-2. **This layer's own attribute and metric names** — internal analysis
-   dimensions, prefixed ``omicsclaw.`` where they are instruments and
-   left unprefixed where they are attributes, exactly as the reference
-   does. They are ours and no external specification constrains them.
-3. **GenAI semantic-convention keys** — OpenTelemetry's, not ours. A
-   backend recognises an LLM call by these, and getting one wrong costs
-   token accounting and cost estimation rather than a missing label.
-4. **Langfuse ingestion keys** — one vendor's, and the reason they are
-   segregated into their own block: they are the group most likely to
-   change under us, and a reader deciding whether an upgrade affects this
-   repository should be able to answer it by reading one screen.
-
-**Stdlib only, and no code.** Importing this module must stay free enough
-that :mod:`omicsclaw.observability.config` can read it before deciding
-whether observability is switched on at all.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING, Sequence
 from omicsclaw.context import MemoryNudge, VolatileBlock, is_summary_message
 from omicsclaw.engine import TurnAugmentor
 from omicsclaw.memory import SCRATCH_KIND_TRIED_SOLUTIONS, SessionScratch
-from .memory import MEMORY_TRUST_NOTICE
 from omicsclaw.schema import Message, Role, ToolDefinition
+from omicsclaw.schema.request import ModelRequestContext, PreparedModelRequest
 from omicsclaw.skills import SkillDiscovery
 
-from .memory import MEMORY_WRITE_TOOL_NAME
+from .memory import MEMORY_TRUST_NOTICE, MEMORY_WRITE_TOOL_NAME
 from .planning import build_injector
 from .shadow_review import ShadowReviewNudge
 
@@ -38,6 +38,22 @@ class AugmentorChain:
 
     def __init__(self, members: Sequence[TurnAugmentor]) -> None:
         self._members = tuple(members)
+
+    async def prepare_request(self, history, tools, request_id):
+        messages, state = [], []
+        for member in self._members:
+            prepare = getattr(member, "prepare_request", None)
+            if prepare is None:
+                messages.extend(await member.augment(history, tools))
+            else:
+                prepared = await prepare(history, tools, request_id)
+                if prepared.context.request_id != request_id:
+                    raise ValueError("request preparation changed the request identity")
+                messages.extend(prepared.messages)
+                state.extend(prepared.context.state)
+        if len({key for key, _ in state}) != len(state):
+            raise ValueError("request preparation repeated a state namespace")
+        return PreparedModelRequest(tuple(messages), ModelRequestContext(request_id, tuple(state)))
 
     async def augment(
         self,
@@ -277,8 +293,10 @@ def _notebook_context(app, session_id):
     kernels = getattr(app, "kernels", None)
     if kernels is None or not session_id:
         return None
-    analysis = kernels.notebooks
-    # Binding changes are refused while a chat turn is active.
-    if analysis.binding(session_id=session_id) is None:
+    factory = getattr(kernels, "notebook_augmentor", None)
+    if factory is not None:
+        return factory(session_id)
+    analysis = getattr(kernels, "notebooks", None)
+    if analysis is None or analysis.binding(session_id=session_id) is None:
         return None
     return NotebookContext(analysis, session_id)

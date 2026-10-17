@@ -1,35 +1,6 @@
-"""The local knowledge: probed hosts and job handles, in SQLite.
+"""Persist remote host observations and job handles in SQLite.
 
-The persistence half of C1/C2. Two tables live in
-:mod:`omicsclaw.memory.database`'s schema (created by every
-:class:`~omicsclaw.memory.database.Database`, which is this codebase's
-migration mechanism — ``CREATE TABLE IF NOT EXISTS`` on open):
-
-* ``remote_hosts`` — one row per alias: the probe's JSON, when it ran,
-  and a JSON list of notes (the answers ``ask_about_host`` collected).
-  This is the "host knowledge base" the plan names: the resource card a
-  probe produces plus the facts only the user knows (partition, account,
-  module activation), kept together so the next session starts from
-  both.
-* ``remote_jobs`` — one row per submitted job: the durable handle
-  (:class:`~omicsclaw.remote.jobs.RemoteJobHandle` flattened), the
-  last-observed status, and ``local_job_id`` linking a job the P1 plane
-  started to its handle row. This is what survives a backend restart:
-  the reconciler walks the in-flight rows and re-estimates them, so
-  "close the laptop, the job keeps running" needs no daemon on either
-  side.
-
-**Rows are never deleted on doubt.** A host that cannot be reached
-moves its jobs to ``unknown``; a job that left no trace stays
-``unknown``; only an explicit terminal answer moves a row to ``done`` /
-``failed`` / ``canceled``. The plan is explicit that an unreachable host
-must not cost the handle, and the cheap way to guarantee that is to
-have no code path that drops rows on error at all.
-
-Both stores are synchronous like their neighbours in
-``entry/desktop``: they are reached from one event loop via SQLite's
-own busy handling, and the callers that can block off-loop use
-``asyncio.to_thread`` themselves.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

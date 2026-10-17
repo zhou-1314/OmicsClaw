@@ -1,43 +1,6 @@
-"""``omicsclaw/context`` — deciding what to drop, and writing it down.
+"""Choose conversation content to retain during compaction.
 
-One compaction, as a function: :func:`compact` grades the conversation,
-offloads, cuts head from tail, summarizes and reports, taking the
-previous :class:`CompactionState` as a parameter and returning the next
-one. It keeps no state and decides nothing about what happens to its
-result.
-
-Carrying that state from one model call to the next, and deciding
-whether a result replaces the history, is
-:class:`~omicsclaw.context.progressive.ProgressiveCompactor`'s — one
-instance per run, so concurrent conversations never share it. Keeping
-the state between exchanges, persisting records and writing offloaded
-text are the caller's.
-
-**Three tiers do three different things**, which is the seam worth
-watching: an implementation that routed every pressure level to the same
-treatment would pass any test that only checked which
-:class:`~omicsclaw.context.budget.Pressure` came back.
-
-=============  =============================================================
-``NONE``       nothing, byte for byte
-``WARN``       offload oversized tool results; without an offloader, nothing
-``SOFT``       summarize the older half of the head, keep the rest verbatim
-``FULL``       summarize the whole head, keep ``min_tail`` behind it
-``EMERGENCY``  truncate greedily, **never** call the summarizer
-=============  =============================================================
-
-When an :class:`~omicsclaw.context.offload.Offloader` is supplied,
-:func:`compact` first moves oversized tool results out of the compactible
-head at every tier above ``NONE``, then grades the conversation again and
-applies the tier it is now in — offloading alone may be enough.
-
-**Only one pass.** The replaced layer compacted to a target ratio and
-iterated up to three times to converge, so that one compaction cost one
-cache re-warm. Its premise does not hold here — that design assumed the
-system prompt and the summary moved together, and in this package
-assembly and compaction are two separate functions. One pass, as the
-harness does; the total may still sit above target afterwards and the
-next turn compacts again.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

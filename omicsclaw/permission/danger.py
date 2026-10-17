@@ -1,25 +1,6 @@
-"""Shell-command patterns that should be read by a person before they run.
+"""Identify shell commands that require explicit review.
 
-Scans a shell command for syntax that destroys data, escalates privilege, or
-sends local files somewhere else, and reports the match so a caller can put
-the call to a human.
-
-What this module guarantees, and what it does not:
-
-- A match escalates to *ask*, **never** to *deny*. A pattern match is a
-  suspicion, and only a person can tell ``rm -rf ./tmp_run7`` from
-  ``rm -rf /``.
-- Matching is **case-insensitive**, so ``chmod -R`` and ``chmod -r`` are the
-  same command.
-- Patterns are anchored so a command name is not matched inside a longer word
-  or as part of a flag: ``sudo`` does not match ``--sudo-mode`` or
-  ``pseudobulk``, ``sh`` does not match ``shuf``. They are **not** shell
-  parsing: a command name appearing as an argument to something else
-  (``grep sudo notes.txt``) still matches, and a command quoted inside a
-  string still matches. The cost of both is one prompt.
-- This looks at one command string. Deciding *which* tool arguments are
-  command strings is the caller's job; :data:`COMMAND_ARGUMENT` is the
-  convention it can use.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

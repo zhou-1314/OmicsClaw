@@ -1,42 +1,6 @@
-"""``GET /files/tree`` and ``GET /files/serve``: read-only views of the workspace.
+"""Expose read-only workspace file routes.
 
-Both routes take a ``path`` that is absolute or relative to the workspace
-and answer only for what lies inside it. ``~`` is not expanded, and
-``..`` is collapsed on the spelling before any symlink is followed.
-
-* A path outside the workspace, as written or once its symlinks are
-  followed, is refused with 403 ``path_outside_workspace``.
-* A path with a segment below the workspace that starts with ``.``, as
-  written or once its symlinks are followed, is refused with 403
-  ``hidden_path``. The directories above the workspace do not count.
-* A missing path is 404 ``file_not_found`` or ``directory_not_found``; a
-  path through a directory the backend may not search, or a file it may
-  not read, is 403 ``permission_denied``; a path with a NUL or one that
-  cannot be resolved is 422 ``invalid_path``.
-
-The tree payload::
-
-    {"root": "/ws/data", "truncated": false,
-     "tree": [{"name": "fig", "path": "/ws/data/fig", "type": "directory",
-               "children": []},
-              {"name": "a.csv", "path": "/ws/data/a.csv", "type": "file",
-               "size": 12, "extension": "csv"}]}
-
-``root`` and every ``path`` are the requested directory joined with the
-entry names as written, so the entries under a symlinked directory keep
-the link's name. Directories come first, then names in case-insensitive
-order. ``extension`` has no dot and is absent when the name has none. A
-directory at the depth limit, or whose listing cannot be read, has
-``children: []``. Hidden entries, entries whose real path is outside the
-workspace or hidden, broken links, and the directories in
-:data:`IGNORED_DIRECTORIES` are left out, and so is a directory link back
-to one of its own ancestors. The walk is breadth-first and stops after
-:data:`FILES_TREE_MAX_NODES` nodes with ``truncated: true``.
-
-A served file is sent whole when it is at most
-:data:`FILES_SERVE_MAX_BYTES`; a larger one needs a ``Range`` request.
-See :func:`byte_span` for the ``Range`` rules and :func:`served_media_type`
-for the ``Content-Type``.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

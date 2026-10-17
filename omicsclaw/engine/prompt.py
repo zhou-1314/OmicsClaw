@@ -1,26 +1,6 @@
-"""The seam through which the loop asks for the prompt it opens with.
+"""Resolve the prompt for an execution loop.
 
-Plan 0027 §12.4.1. The loop has never assembled a system prompt and
-still does not: what changes is the direction of the arrow. Until now a
-caller rendered one, spliced it in front of a conversation and handed the
-result to :meth:`~omicsclaw.engine.loop.AgentEngine.run`; an engine given
-a :class:`PromptSource` asks for the render itself, once per exchange,
-and so owns the one ordering rule that matters — the system message is
-message zero and there is exactly one of it.
-
-**Two Protocols rather than one method returning ``str``.** The narrower
-spelling — ``system_prompt() -> str`` — would force every renderer worth
-using through an adapter, and the adapter would drop everything the
-render carries besides the text: section statistics, token estimates, the
-answer to "which block is eating the window". Those belong to whoever
-rendered them, and a layer that cannot read them should also not be able
-to destroy them. Returning the renderer's own object passes them through
-untouched, and lets a structural implementation satisfy this seam with no
-adapter at all.
-
-This module imports :mod:`typing` and nothing else — not even
-:mod:`omicsclaw.schema`. A prompt is text until the engine makes it a
-message, and that conversion is the engine's business.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

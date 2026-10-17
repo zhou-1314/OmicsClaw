@@ -1,26 +1,6 @@
-"""``omicsclaw/provider`` — the adapter for everything that speaks OpenAI.
+"""Adapt OpenAI-compatible model APIs.
 
-Plan 0026 §8, task B. One file covers OpenAI itself, DeepSeek, Ollama and
-every gateway that resells other vendors behind the Chat Completions
-dialect (OpenRouter, SiliconFlow, DashScope, Volcengine, Moonshot, Zhipu,
-NVIDIA). They disagree about field names and about what has to be
-injected into the request body; they do not disagree about the shape. One
-adapter plus a few named gates therefore serves twelve of the thirteen
-presets in :mod:`omicsclaw.provider.config`.
-
-Everything vendor-shaped stops here. The conversion is written as
-module-level pure functions over plain dicts rather than as private
-methods, because that is what makes both halves of the interpreter —
-:func:`encode_messages` and :func:`decode_message` — assertable against
-literal payloads with no client, no socket, and no SDK.
-
-**The SDK is imported lazily**, inside :meth:`OpenAIProvider._create_client`.
-``openai`` is an optional extra in this repo, and the conversion half of
-this module has to stay importable and testable on an installation that
-lacks it. A missing SDK then surfaces as a :class:`ProviderError` at call
-time, which is the same failure mode this layer already promises for
-every other backend problem, instead of as an ``ImportError`` raised
-somewhere far from the call that caused it.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

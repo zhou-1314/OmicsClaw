@@ -1,27 +1,6 @@
-"""Turning a conversation into an attribute value, safely and briefly.
+"""Serialize bounded conversation attributes.
 
-Three functions, the analogue of ``observability/helpers.go``. Nothing
-here is called unless
-:attr:`~omicsclaw.observability.config.ObservabilityConfig.capture_content`
-is on — that check belongs to the callers, so that a deployment which
-captures nothing never pays for a serialization it will discard.
-
-**The hazard this module exists to contain** is that a span attribute is
-a protobuf ``string`` field going over a network to somebody else's
-service. Three properties have to hold and none of them hold for the
-input:
-
-1. It must be valid UTF-8. A tool's output can contain a lone surrogate,
-   because reading a binary file through ``errors="surrogateescape"`` is
-   how the standard library hands bytes back as ``str``.
-2. It must be bounded. A ``read_file`` on a count matrix is megabytes,
-   and an exporter that refuses an oversized payload drops the whole
-   batch — so one large tool result loses the traces either side of it.
-3. It must not silently become a different string. Truncation that cuts
-   a multi-byte character in half produces exactly the corruption a
-   reader will blame on their own pipeline.
-
-Stdlib only.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

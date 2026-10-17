@@ -51,6 +51,10 @@ REBUILT_PACKAGES = (
 """The packages plan 0031 and plan 0037 rebuilt, and therefore own the rule."""
 
 ENVIRONMENT_READERS = {
+    "skillenv/checkpoint_io.py": (
+        "The fixed R serialization pipe worker reads only the owner's explicit "
+        "byte limit and output path; it does not resolve deployment settings."
+    ),
     "launch/__init__.py": (
         "The process shell. It resolves the default for main(env=None) and "
         "overlays .env onto the process environment, which is the one place "
@@ -100,6 +104,27 @@ ENVIRONMENT_READERS = {
         "interpreter, where bash runs. The agent environment that pip and the "
         "overlay's interpreters start from is handed to skillenv by the entry "
         "layer (plan 0061 §4.10)."
+    ),
+    "skillenv/registered_probe.py": (
+        "A standalone scientific child process reads only its supplied JSON "
+        "argument. The controller launches this source file with the selected "
+        "Python in isolated mode; it never imports this worker. It reads no "
+        "deployment environment and has no framework imports."
+    ),
+    "skillenv/process_supervisor.py": (
+        "A standalone Linux subreaper reads the host supplied launch JSON. "
+        "It launches one child and exclusively reaps all children before "
+        "writing closure evidence; it never reads deployment settings."
+    ),
+    "skillenv/contained_exec.py": (
+        "A fixed standalone child reads its supplied launch gate and argv. "
+        "The host records native containment before releasing the gate; "
+        "it inherits an already scrubbed environment without reading it."
+    ),
+    "skillenv/maintenance_probe.py": (
+        "The fixed offline maintenance probe runs by source path in the selected "
+        "isolated scientific Python. It reads only its structured JSON argument, "
+        "imports no framework modules and never resolves deployment settings."
     ),
     "tools/builtin/bash.py": (
         "The local shell is started with a copy of the process environment "

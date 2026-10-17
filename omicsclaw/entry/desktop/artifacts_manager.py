@@ -1,54 +1,10 @@
-"""Capture channel ② of the artifacts plane: the output-contract scanner.
+"""Parse output-contract paths and register matching workspace artifacts.
 
-The curated skills already declare what they write in
-``references/output_contract.md`` — free-form prose a person reads, built
-from backticked relative paths (``\u200b`tables/program_usage.csv`\u200b``) and,
-in the auto-generated contracts, a fenced ``output_directory/`` tree.
-That file is the raw material the plan named: after a ``skill_run`` job
-reaches a good end, this module parses the contract of the skill that
-ran, walks the workspace for files it declares, and registers what it
-finds as artifacts — **zero LLM cost**, which is why it is the first
-capture channel.
+The scanner recognizes path-shaped declarations in supplied contract text.
+Its parser and filesystem checks define what can be registered; historical
+skill contracts are not the current SKILL.md runtime contract.
 
-The parser is deliberately a tokenizer, not a markdown parser. Three
-shapes carry the declarations this repository's 88 contracts use:
-
-* backtick spans anywhere in the text — ``\u200b`figures/mean_program_usage.png`\u200b``;
-* fenced code blocks holding a directory tree, whose ``├──`` /
-  ``└──`` lines name one file each;
-* bare path-shaped words — list items (``- tables/Summary.csv: counts``)
-  and prose mentions (``writes processed.h5ad, report.md, result.json``).
-  The curated contracts are not uniform: a bare ``-`` list with no
-  backticks is a real style, and the auto-generated ones name their root
-  outputs in plain sentences.
-
-A token survives only when it *looks like a file path*: no spaces or
-brackets, a short alphanumeric suffix, relative, not a directory, no
-``..``. Everything else — ``run_info``, ``obsm["X_gene_programs"]``,
-``--r-enhanced``, ``figures/r_enhanced/`` — is prose about the outputs,
-not a declaration, and is dropped. A declared path still registers only
-when the file exists in the workspace and passes the attribution rules
-below, so a prose mention of a file the run never wrote is inert.
-
-**The fallback.** A contract that is missing, unparseable (no token
-survived) or that matched nothing in the workspace turns the scan over
-to the safety net: the conventional output directories the skills'
-``write_output`` SDK actually creates — ``figures/``, ``tables/``,
-``figure_data/``, ``results/`` — anywhere in the workspace, filtered by
-extension. Artifacts registered that way carry
-``meta["capture"] = "fallback"`` so a review can tell a declared output
-from an inferred one. (A contract that parsed but matched nothing is
-treated the same way: from the scanner's seat, "declared and absent" and
-"undeclared" are both "the declaration told me nothing", and the
-convention scan is what answers.)
-
-**Idempotent by construction.** Registration goes through
-:meth:`~omicsclaw.memory.artifacts.ArtifactStore.insert_artifact`, whose
-``(job_id, path)`` uniqueness check makes a second scan of the same job
-register nothing — the scanner itself also keeps per-scan bookkeeping so
-one declaration matching two files (``figures/a.png`` declared, run wrote
-``run1/figures/a.png`` and ``run2/figures/a.png``) registers each once,
-in a stable order.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

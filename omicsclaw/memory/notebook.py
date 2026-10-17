@@ -30,6 +30,7 @@ class NotebookCell:
     client_command_id: str = ""
     execution_id: str = ""
     updated_at: float = 0.0
+    language: str = "python"
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ def _cell(row: Any) -> NotebookCell:
         client_command_id=row["client_command_id"],
         execution_id=row["execution_id"],
         updated_at=row["updated_at"],
+        language=row["language"],
     )
 
 
@@ -171,7 +173,7 @@ class NotebookStore:
             cursor = connection.execute(
                 "UPDATE notebook_cells SET source=?, revision=?, status=?, "
                 "output_json=?, provenance_json=?, trust_label=?, "
-                "client_command_id=?, execution_id=?, updated_at=? "
+                "client_command_id=?, execution_id=?, updated_at=?, language=? "
                 "WHERE notebook_id=? AND cell_id=? AND session_epoch=? "
                 "AND revision=?",
                 (
@@ -184,6 +186,7 @@ class NotebookStore:
                     cell.client_command_id,
                     cell.execution_id,
                     time.time(),
+                    cell.language,
                     *key,
                     base_revision,
                 ),
@@ -203,8 +206,8 @@ class NotebookStore:
                     "INSERT INTO notebook_cells "
                     "(notebook_id, cell_id, session_epoch, source, revision, status, "
                     "output_json, provenance_json, trust_label, client_command_id, "
-                    "execution_id, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "execution_id, updated_at, language) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         cell.notebook_id,
                         cell.cell_id,
@@ -218,6 +221,7 @@ class NotebookStore:
                         cell.client_command_id,
                         cell.execution_id,
                         time.time(),
+                        cell.language,
                     ),
                 )
             except sqlite3.IntegrityError as exc:

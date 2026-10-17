@@ -162,6 +162,7 @@ class KernelSpawnAdapter:
     """Structural ``SpawnWrapper`` adapter consumed by ``omicsclaw.kernel``."""
 
     manager: SandboxManager
+    host_pid_lifecycle: bool = False
 
     @property
     def kernel_transport(self) -> str:
@@ -182,6 +183,7 @@ class KernelSpawnAdapter:
             env=env,
             extra_read_paths=extra_read_paths,
             extra_write_paths=extra_write_paths,
+            host_pid_lifecycle=self.host_pid_lifecycle,
         )
 
 
@@ -262,9 +264,14 @@ class SandboxManager:
     def analysis_profile(self) -> AnalysisProfile | None:
         return self._profile
 
-    def spawn_wrapper(self) -> KernelSpawnAdapter:
-        """Return a :class:`KernelSpawnAdapter` wrapping subprocesses in this sandbox."""
-        return KernelSpawnAdapter(self)
+    def spawn_wrapper(self, *, host_pid_lifecycle: bool = False) -> KernelSpawnAdapter:
+        """Maintenance can provide its own host-PID descendant supervisor.
+
+        Only the netns PID wrapper changes in that explicit mode; network and
+        filesystem policy remain selected by this manager. Kernel defaults do
+        not use this mode.
+        """
+        return KernelSpawnAdapter(self, host_pid_lifecycle)
 
     def status(self) -> SandboxStatus:
         """Return a structured :class:`SandboxStatus` snapshot."""
@@ -446,13 +453,16 @@ class SandboxManager:
         env: Mapping[str, str],
         extra_read_paths: Sequence[Path] = (),
         extra_write_paths: Sequence[Path] = (),
+        host_pid_lifecycle: bool = False,
     ) -> tuple[list[str], dict[str, str]]:
         """Wrap a persistent kernel's *argv* and *env* to run inside the sandbox."""
         base_env = dict(self._env_provider())
+        # Credential masks belong to the host user, even when a child uses
+        # a private HOME for package configuration and caches.
+        home_str = base_env.get("HOME", "").strip()
+        home_path = Path(home_str) if home_str else None
         base_env.update(env)
         child_env = self._build_child_env(base_env)
-        home_str = child_env.get("HOME", "").strip()
-        home_path = Path(home_str) if home_str else None
         prof_reads = self._profile.ro_mounts if self._profile is not None else ()
         prof_writes = (self._profile.scratch_root,) if self._profile is not None else ()
 
@@ -469,6 +479,11 @@ class SandboxManager:
                 allow_localhost_outbound=(self.kernel_transport == "tcp"),
             )
         else:
+            lifecycle = (
+                {"pid_namespace": False}
+                if host_pid_lifecycle and isinstance(self._backend, NetnsBackend)
+                else {}
+            )
             wrapped = self._backend.wrap_argv(
                 argv,
                 workspace=self._workspace,
@@ -478,6 +493,7 @@ class SandboxManager:
                 extra_read_paths=(*prof_reads, *extra_read_paths),
                 extra_write_paths=(*prof_writes, *extra_write_paths),
                 home=home_path,
+                **lifecycle,
             )
         return wrapped, child_env
 

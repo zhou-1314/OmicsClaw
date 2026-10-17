@@ -1,24 +1,6 @@
-"""The ``artifacts`` table over one :class:`~omicsclaw.memory.database.Database`.
+"""Persist artifact records in the workspace database.
 
-P2 of the front-back plan. An *artifact* is one file a run produced that
-is worth showing a person as a result — a figure, a table, the processed
-``.h5ad`` — registered with a stable id, a kind, a checksum and the job
-or session that produced it. The schema lives in
-:mod:`omicsclaw.memory.database` (created on open, like ``jobs``), this
-module owns the reads and writes, and both halves of the desktop entry
-layer — the jobs-plane scanner and the ``save_artifact`` tool — reach the
-same table through it. It deliberately sits in the memory layer rather
-than in ``entry.desktop`` because the tools layer may not import the
-entry layer, and ``save_artifact`` needs a store.
-
-Kinds are a closed starter vocabulary, the one the plan fixed:
-``figure | table | h5ad | rds | report | pdf | other``. The words and
-the extension tables live in :mod:`omicsclaw.schema.artifacts` — the
-shared vocabulary package — because the tools layer's ``save_artifact``
-offers the same enum to the model and may not import this module. The
-mapping from a filename is by extension, and every unrecognized
-extension lands on ``other`` rather than being refused — a file the
-scanner found is a fact about the run, not an argument to validate.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -1,62 +1,10 @@
-"""``web_fetch`` — read one URL, after asking, and never an internal one.
+"""Fetch a validated public URL with approval and bounded response handling.
 
-Modelled on harness9's ``internal/tools/web_fetch.go``. An HTTP GET whose
-destination has been proved not to be internal infrastructure, whose
-response is reduced to Markdown, and which asks a human first because the
-request itself is the risk.
+Approval covers the outbound request, including its path and query. Network
+destination checks do not inspect that data. HTTP and transport failures are
+returned as observations; malformed tool arguments are tool errors.
 
-**The approval is about the request, not the response**, which is what
-makes ``ASK`` right for a tool that only reads.
-:data:`~omicsclaw.entry.assembly.SAFETY_RULES` rule 1 is that genetic data
-never leaves this machine, and a URL is an outbound
-channel: everything in the path and query string is transmitted, and a
-model asked to "look this identifier up" will put the identifier in the
-URL. The gate in ``omicsclaw/tools/_websafety.py`` cannot see that — to
-it, ``https://example.com/?q=<patient-id>`` is a public address like any
-other. So what stands between a payload and the wire is a person reading
-:meth:`WebFetchTool._reason`, which shows the whole URL and says plainly
-that it will be sent. By the "can this cause something irreversible"
-criterion the answer is yes: bytes that have left cannot be recalled.
-
-**World failure is not tool failure.** A 404, a 500, an unsupported
-content type and a transport error are facts about the world, are returned
-as ordinary text, and leave ``is_error`` false — a model told its *tool*
-failed will try to fix the tool. A refused URL is the other case: the
-model fixes that by sending a different one, so
-:exc:`~omicsclaw.tools._websafety.UrlRefused` propagates.
-
-**Nothing here has spoken to a real HTTP endpoint.** This environment has
-no network, so every test drives an injected
-:class:`~omicsclaw.tools._websafety.Transport` or a fake ``opener`` under
-the real gate. It is the same debt ``docs/FRAMEWORK-REBUILD.md`` records
-against the provider adapters, and the reason every borrowed literal here
-carries a re-verification note.
-
-The existing ``runtime/tools/builders/engineering.py`` ``web_fetch`` is
-untouched and still checks only whether the URL starts with ``http://``.
-Three things it does better, recorded rather than discovered later:
-
-* its ``max_chars`` ceiling is **100,000**, against
-  :data:`~omicsclaw.tools._html.HARD_MAX_CHARS`' 32,000. ``read_file``
-  kept the same legacy ceiling for its own byte limit; this tool did not,
-  and the reference's 32,000 won by default rather than by argument.
-* it converts HTML with ``markdownify``, a real converter with tables,
-  emphasis and nesting, where :mod:`omicsclaw.tools._html` is a fixed tag
-  list. When this was written the library was a dependency of this
-  repository (through extras deleted since), so the honest statement of
-  the gap was not only "the standard library has no readability" but
-  "this layer may not import what the old one uses".
-* it sends a browser ``User-Agent``. ``OmicsClaw/1.0`` is the honest one
-  and is what ships, but documentation sites behind a WAF answer 403 to
-  non-browser agents, so some pages the old tool reads this one will not.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools._html``,
-``omicsclaw.tools._websafety``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, ``omicsclaw.tools.function_tool``, and the
-standard library. Notably **not** ``builtin/bash.py``: the engine-margin
-arithmetic discussed under :data:`FETCH_TIMEOUT` is asserted in
-``tests/tools/test_web_fetch.py``, and importing a constant only to
-mention it in prose would leave an unused name here.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

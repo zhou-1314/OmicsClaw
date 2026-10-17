@@ -83,7 +83,8 @@ def test_sessions_are_isolated_from_each_other(workspace):
 # ---- 2. the interrupt ladder leaves the kernel alive --------------------------
 
 
-def test_interrupt_cancels_the_cell_and_the_kernel_survives(workspace):
+@pytest.mark.parametrize("cached_main_loop", [False, True])
+def test_interrupt_cancels_the_cell_and_the_kernel_survives(workspace, cached_main_loop):
     async def scenario() -> None:
         manager = make_manager(workspace)
         try:
@@ -95,6 +96,10 @@ def test_interrupt_cancels_the_cell_and_the_kernel_survives(workspace):
                 )
             )
             await asyncio.sleep(3.0)
+            if cached_main_loop:
+                from jupyter_core.utils import ensure_event_loop
+
+                assert ensure_event_loop() is asyncio.get_running_loop()
             tier = await manager.cancel("s1")
             result = await task
             assert tier in ("interrupted", "reset"), tier

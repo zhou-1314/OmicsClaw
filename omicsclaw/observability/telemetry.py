@@ -1,26 +1,6 @@
-"""The one object a composition root holds, and the one function that builds it.
+"""Build and expose runtime telemetry.
 
-:class:`Telemetry` is this layer's ``Providers`` (``setup.go:33-43``) with
-the three seams folded in, so that ``entry/assembly.py`` asks for
-telemetry once and then never branches on whether it got any. That is the
-design constraint this module exists to satisfy:
-
-**a deployment that does not observe must not be a different deployment.**
-``Telemetry()`` — the default instance — is a real, usable object whose
-tracer is the no-op, whose :meth:`trace_provider` hands the provider
-straight back, and whose :meth:`tool_hooks` returns ``()``. So the
-composition root has no ``if telemetry is not None`` anywhere, and the
-object graph of an unobserved run is byte-for-byte what it was before this
-package existed — the property :func:`~omicsclaw.hooks.hook_tools`
-established for hooks, restated here because it is what makes "could
-telemetry be implicated in this bug?" answerable by looking.
-
-**Blocking work is moved off the event loop.** ``force_flush`` and
-``shutdown`` are synchronous in every OTEL SDK — the first waits on an
-HTTP round trip, the second joins a background thread — and the reference
-simply blocks its caller. Here they are awaited through
-:func:`asyncio.to_thread`, because the caller is a turn that has just
-finished and the next thing it wants to do is answer somebody.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -1,34 +1,6 @@
-"""``omicsclaw/provider`` — where a model backend is configured.
+"""Resolve model provider configuration.
 
-Plan 0026 §4. The endpoint table in ``omicsclaw/providers/registry.py``
-is the highest-value asset of the package this layer eventually replaces:
-thirteen presets, their base URLs, their API-key environment variables,
-and the order in which a key is auto-detected. That knowledge is copied
-forward here, shed of the LangChain factory it was entangled with. The
-old module stays live and untouched until the closing migration task.
-
-Two shapes:
-
-``ProviderPreset``
-    Static per-vendor facts — endpoint, default model, key variable,
-    curated model list. Data, never resolved.
-
-``ProviderConfig``
-    One *resolved* call configuration, frozen. It holds precisely what
-    :class:`~omicsclaw.provider.base.LLMProvider`'s two hot-path methods
-    deliberately refuse to take as parameters: model, temperature,
-    ``max_tokens``, thinking budget, timeouts. An adapter is built from
-    one and never mutates it; ``bind()`` is :meth:`ProviderConfig.with_overrides`
-    plus a fresh adapter instance.
-
-**Stdlib only.** ``providers/timeout.py``'s policy is ported as plain
-numbers rather than as an ``httpx.Timeout``: this layer may not import a
-transport library, so each adapter builds its own SDK timeout object out
-of :attr:`ProviderConfig.timeout_seconds` and
-:attr:`ProviderConfig.connect_timeout_seconds`. For the same reason an
-unparseable environment value is silently replaced by its default here
-rather than logged, as ``timeout.py`` does — a configuration module that
-depends on logging setup is a module that cannot be imported early.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -1,32 +1,6 @@
-"""``omicsclaw/entry`` — the follow-up suggestion block an answer may end with.
+"""Parse suggested follow-up questions from answers.
 
-P6 item 2 of the front-back plan. A model instructed by
-:data:`~omicsclaw.entry.assembly.FOLLOW_UP_RULES` may close its answer
-with a sentinel line followed by up to three one-line follow-up
-questions. Two halves live here:
-
-:func:`split_suggestions` / :class:`SuggestionSplitter`
-    The **streaming** half. Answer text reaches surfaces as
-    ``TEXT_DELTA`` frames, so by the time a whole answer exists the
-    block would already have been shown. The splitter is fed each delta
-    as it is published, holds back only the bytes that could still turn
-    out to be the start of the sentinel, and returns the visible text;
-    once the sentinel has been matched everything after it is captured
-    instead of shown. The turn kernel
-    (:meth:`~omicsclaw.entry.turn.TurnKernel._sequence`) drives it.
-
-:func:`strip_suggestions`
-    The **after-the-fact** half, for text that is read whole rather than
-    streamed — the exchange's ``reply``, which a Channel posts verbatim.
-    RunResult history is deliberately *not* stripped: those bytes are
-    the model's own record, matched byte-for-byte by prompt-prefix
-    caches and replay evidence.
-
-The block is optional by design (plan: "chips are OPTIONAL for the
-model to produce, absent = no chips"). A model that never writes the
-sentinel costs nothing: the splitter passes every delta through
-untouched apart from the held-back-tail scan, and no ``SUGGESTIONS``
-event is published.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

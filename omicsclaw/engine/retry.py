@@ -1,35 +1,6 @@
-"""``omicsclaw/engine`` — the model call that survives a bad minute.
+"""Apply retry policy to model calls.
 
-Plan 0027 §3, and trap 12. A vendor SDK retries what fails before the
-first byte; everything after it — a proxy that drops a half-streamed
-response, a 5xx that arrives once the headers are already out — escapes
-to this layer, which is where the legacy loop killed the run and threw
-the trajectory away. One transient hiccup should not cost an agent its
-work.
-
-**Two budgets, and neither ever borrows from the other.** Transport
-failures (TLS, DNS, connection establishment) are far more intermittent
-than a 5xx, and the reference harness found that one budget could not
-absorb both: three benchmark tasks hit the same x509 error on turn 1 and
-abandoned the turn once ~3s of backoff was spent. So a transport failure
-draws on ``network_retries`` and anything else on ``generate_retries``,
-and exhausting one leaves the other untouched. (That failure reaches
-*this* runtime spelled differently — see :data:`_TRANSPORT_MARKERS`,
-where believing otherwise is what once made the wider budget
-unreachable.)
-
-**Classification is structural here, and textual in the harness it comes
-from.** That harness matches substrings of the error message because
-Go's SDK wrappers lose the concrete type. We have
-:attr:`~omicsclaw.provider.ProviderError.status_code` instead: 429 and
-5xx are worth another attempt, while any other 4xx is a request the model
-must *fix* rather than one worth repeating. The substring check survives
-only as the fallback for ``status_code is None`` — which is exactly the
-"never reached the wire" case step 2 designed that ``None`` to mean, and
-the strings it looks for have to be the ones our own adapters produce
-rather than the ones that harness was reading.
-
-**Leaf-adjacent.** ``omicsclaw.provider`` and the standard library.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

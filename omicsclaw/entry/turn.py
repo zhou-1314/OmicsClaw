@@ -1,37 +1,6 @@
-"""One exchange: assemble its collaborators, run the loop, keep the result.
+"""Assemble, execute and persist one exchange.
 
-``AgentEngine.exchange`` renders a prompt, puts a history in front of it
-and hands the finished trajectory back. This module is where all three of
-those come from. Each turn hands the engine:
-
-1. the app's prompt assembler, so an edited ``OMICSCLAW.md`` and
-   today's date are both picked up — the engine renders
-   it once, at the start of the exchange;
-2. a :class:`_Carried`, this exchange's history and the place the engine
-   leaves the conversation to carry forward;
-3. a :class:`~omicsclaw.context.ProgressiveCompactor` that measures and,
-   from the configured tier up, compacts the conversation before every
-   model call of the run — and a
-   :class:`~omicsclaw.planning.PlanInjector` that puts the session's
-   outstanding plan back at the end of it afterwards, so that what
-   compaction summarized away cannot take the plan with it.
-
-:func:`_assemble` builds all of that in one place for all three paths
-below (plan 0027 §12.4). The deadline stays out here: how long a
-deployment is willing to wait is its own policy, not the loop's.
-
-Each of the three paths below also wraps its exchange in
-:meth:`~omicsclaw.observability.Telemetry.run` and feeds it the engine's
-events. That is the whole of this layer's telemetry wiring: the scope
-opens the interaction span, the events give it the turn boundaries, and
-an unobserved deployment gets a scope whose spans are the shared no-op.
-:mod:`omicsclaw.observability` explains why the engine was not given an
-observer seam instead.
-
-The history belongs to the caller. Nothing here is stored between calls
-except a named session's durable Run projection and what a caller chooses
-to carry: :class:`TurnOutcome` gives back
-the conversation to keep and the compaction state to pass in next time.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

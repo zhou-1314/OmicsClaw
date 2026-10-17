@@ -1,37 +1,6 @@
-"""``GET /skills``, ``GET /skills/{domain}/{name}`` and ``GET /mcp/servers``.
+"""Expose skill and MCP catalogue routes.
 
-Read-only views of what the running :class:`~omicsclaw.entry.AgentApp`
-loaded at start-up: the skill index and the MCP configuration with each
-server's connection state. Nothing is rescanned; a change on disk shows
-after a restart.
-
-The catalog payload::
-
-    {"domains": [{"domain": "spatial", "domain_name": "spatial",
-                  "primary_data_types": [],
-                  "skills": [{"name": "spatial-de", "description": "...",
-                              "domain": "spatial", "collection": "curated",
-                              "status": "ready"}]}],
-     "total": 94}
-
-A skill with no domain directory is listed under :data:`GENERAL_DOMAIN`.
-
-One skill::
-
-    {"name": "spatial-de", "domain": "spatial", "description": "...",
-     "aliases": [], "script_path": null, "tags": ["..."],
-     "skill_md": "<SKILL.md without its frontmatter, or null>",
-     "resources": [{"path": "scripts/run.py", "kind": "script"}]}
-
-``resources`` holds paths relative to the skill's directory only.
-
-The MCP payload is ``{"servers": [...]}``, configured servers in file
-order and then rejected entries. ``env`` and ``headers`` carry their keys
-with every value replaced by :data:`MASK`; ``command``, ``args`` and
-``url`` are the text written in ``.mcp.json`` before ``${VAR}``
-expansion, and are left out when that file can no longer be read. An
-``error`` has the values of the start-up environment replaced by
-:data:`MASK` and is cut to :data:`MAX_ERROR_CHARS`.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

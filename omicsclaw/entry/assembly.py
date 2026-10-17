@@ -1,73 +1,6 @@
-"""The composition root: five layers, wired once, by one function.
+"""Compose the runtime services and agent application.
 
-Plan 0031 task A. Every layer below this one names a hole in its own
-docstring — ``engine/loop.py:34-38`` "the conversation arrives
-assembled", ``context/__init__.py`` "``OMICSCLAW.md``, the model table and the
-summarizing model are all the composition root's",
-``tools/builtin/__init__.py`` "mounting a foundation tool is always a
-decision about *which* workspace, and that decision belongs to whoever is
-assembling the registry". They are five descriptions of this module.
-
-:func:`build_app` is the only place that knows how the pieces fit. That
-is the property worth defending: a second site that builds its own
-registry or its own budget is a second deployment nobody configured.
-
-**Three seams the assembly owns, each of which is silent when broken.**
-
-*The two reserves have no defaults.*
-:class:`~omicsclaw.context.ContextBudget` requires
-``reserve_output_tokens`` and ``reserve_tool_tokens`` as positional
-fields, and it requires them because nothing below can compute either:
-the first comes from the model table in ``omicsclaw.provider``, the
-second from the registry that was just built. See :func:`build_budget`.
-
-*One workspace, six tools.* :func:`foundation_tools` constructs the
-:class:`~omicsclaw.tools._workspace.Workspace` once and hands the same
-object to every tool that takes one. Two workspaces would not raise —
-they would give ``write_file`` and ``read_file`` two different sandbox
-roots, and the agent would write a file it then cannot find.
-
-*The registry goes to the engine unwrapped.*
-:class:`~omicsclaw.tools.ToolRegistry` satisfies
-:class:`~omicsclaw.engine.DeadlineAwareExecutor` and
-:class:`~omicsclaw.engine.ConcurrencyAwareExecutor`, both
-``runtime_checkable``, and the engine decides by :func:`isinstance`
-whether to hand down a
-:class:`~omicsclaw.tools.TimeoutPause`. Wrapping the registry for logging
-or filtering without forwarding ``use_timeout_pause`` puts defect R3 back
-in: a human's thinking time starts counting against the tool timeout
-again, on the first layer that ever binds an approval channel. See
-:func:`build_registry`.
-
-**This layer is allowed to log, and is the first one that is.** The
-logger is ``omicsclaw.entry``; nothing here configures it, so an
-unconfigured process gets the root logger's default and warnings and
-above are what reach a terminal. Two rules that are not style:
-**no tool argument and no tool output is ever logged** — a ``bash``
-command line, a ``write_file`` body and a ``web_fetch`` query string can
-each carry a subject identifier, and :data:`SAFETY_RULES` rule 1 is
-a rule a log statement can break — and no third-party logging library is
-introduced.
-
-**How the session registry gets here.** :func:`build_app` still returns
-an app whose :attr:`AgentApp.sessions` is ``None``, and it always will:
-the registry needs a finished app and the app names the registry, so
-:func:`~omicsclaw.entry.session.attach_sessions` ties that knot in one
-line with :func:`dataclasses.replace` rather than either object being
-built twice. A deployment is therefore
-``attach_sessions(await open_app(...))``, and an app that skipped that
-call has no queues — :meth:`AgentApp.aclose` has nothing to drain and
-``/chat/stream`` raises.
-
-**Skills.** This module imports :mod:`omicsclaw.skills`:
-:func:`foundation_tools` appends :func:`~omicsclaw.skills.use_skill_tool`
-and :func:`~omicsclaw.skills.search_skill_tool`, and
-:func:`default_sections` adds a skill catalogue section.
-``AppConfig.skills_index`` is the switch, and ``off`` drops all three. The
-prompt is the contract, safety rules and tool guidance, then the
-optional planning, execution sandbox and skills sections, the
-environment, and the optional long-term memory block;
-:func:`default_sections` documents when each optional one appears.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations
@@ -154,6 +87,7 @@ from omicsclaw.sandbox import EgressMode
 from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.artifacts import kind_and_mime_for
 from omicsclaw.skills import (
+    Skill,
     SkillIndex,
     load_skills,
     search_skill_tool,
@@ -177,7 +111,9 @@ from omicsclaw.tools.base import ApprovalMode, RiskLevel, ToolPolicy
 from omicsclaw.tools.builtin.bash import BashEnvironment, without_control_credentials
 from omicsclaw.tools.builtin.live_app import LiveAppTool
 from omicsclaw.tools.builtin.manage_env import ManageEnvironmentsTool
+from omicsclaw.tools.builtin.notebook_analysis import NotebookAnalysisTool
 from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
+from omicsclaw.tools.builtin.r_kernel import RKernelTool
 from omicsclaw.tools.builtin.remote import RemotePlane, remote_tools
 from omicsclaw.tools.builtin.save_artifact import SaveArtifactTool
 
@@ -626,6 +562,12 @@ class RemoteKernelStarter(Protocol):
     ) -> SessionKernel: ...
 
 
+class KernelBindingLifecycle(Protocol):
+    """Application shutdown may release local kernels or detach an owner proxy."""
+
+    async def aclose(self) -> None: ...
+
+
 class WorkspaceKernelBinding:
     """The ``python`` tool's kernel seam and the figure registrar over one
     workspace.
@@ -665,8 +607,14 @@ class WorkspaceKernelBinding:
             if isinstance(workspace, Workspace)
             else Path(workspace)
         )
+        environment_guard = None
+        if sys.platform.startswith("linux"):
+            from .environment_runtime import LocalKernelEnvironmentGuard
+
+            environment_guard = LocalKernelEnvironmentGuard(root)
         self.manager = PersistentKernelManager(
             root,
+            environment_guard=environment_guard,
             on_figure=self._register_figure,
             on_kernel_ready=self._inject_pending_sidecars,
             remote_runtime=remote_runtime,
@@ -1702,16 +1650,12 @@ class AgentApp:
     Closed by :meth:`aclose`, after everything that might still be
     producing spans."""
 
-    kernels: WorkspaceKernelBinding | None = None
-    """P4's persistent-kernel binding, or ``None`` in an app constructed
-    directly. Holds the one
-    :class:`~omicsclaw.kernel.PersistentKernelManager` per deployment —
-    the same object the ``python`` tool runs cells through — so the
-    desktop jobs plane's ``code_run`` and the chat tool share session
-    kernels instead of each paying for its own. Its kernels are started
-    lazily and all killed by :meth:`aclose`, after the sessions drained
-    (a cell still finishing inside the grace keeps its kernel until it
-    finishes)."""
+    kernels: WorkspaceKernelBinding | KernelBindingLifecycle | None = None
+    """Local kernel binding or an injected independent-owner proxy.
+
+    Local bindings share kernels between tools and Desktop Jobs. Closing an
+    SSH proxy only detaches; the independent owner retains admitted work.
+    """
 
     env_supply: EnvSupplyBinding | None = None
     """P5's local environment supply, or ``None`` when the deployment
@@ -1990,6 +1934,7 @@ def build_app(
     capabilities: DeploymentCapabilities | None = None,
     provider_for_role: Callable[[str], LLMProvider] | None = None,
     review_call=None,
+    kernel_binding: KernelBindingLifecycle | None = None,
 ) -> AgentApp:
     """Wire one deployment. The only function that knows the order.
 
@@ -2067,6 +2012,8 @@ def build_app(
     """
     if capabilities is None:
         capabilities = DeploymentCapabilities()
+    if kernel_binding is not None and capabilities.notebook and not callable(getattr(kernel_binding, "run_python", None)):
+        raise ValueError("external kernel binding requires an explicit Python runner")
     binding = unstarted_sandbox(config) if sandbox is None else sandbox
     # Telemetry is resolved before the provider, because the provider is
     # the first thing it wraps. ``build_telemetry`` reads the OTEL_*
@@ -2128,7 +2075,7 @@ def build_app(
         # :attr:`AgentApp.kernels` (the desktop jobs plane's code_run runner
         # reads it back). Lazy kernels keep this cheap for deployments that
         # never run a cell.
-        kernels = (
+        kernels = kernel_binding if kernel_binding is not None and capabilities.notebook else (
             WorkspaceKernelBinding(
                 config.workspace,
                 python=capabilities.science_python,
@@ -2178,8 +2125,11 @@ def build_app(
                         runner=kernels,
                         allow_remote=remote_kernels is not None,
                     ),
-                    LiveAppTool(NotebookAppBridge(kernels)),
                 )
+                if kernel_binding is not None:
+                    mounted = (*mounted, RKernelTool(runner=kernels), NotebookAnalysisTool(kernels))
+                if kernel_binding is None:
+                    mounted = (*mounted, LiveAppTool(NotebookAppBridge(kernels)))
             if env_supply is not None:
                 # Appended in the one slot the wiring tests allow: after
                 # the foundation set and P4's python, before nothing —
@@ -2229,6 +2179,7 @@ def build_app(
         gate = build_permission_gate(config)
         mounted = gate_tools(mounted, gate)
         registry = build_registry(config, mounted)
+        registry.before_execute = getattr(kernels, "before_tool", None)
         if tools is None:
             _apply_bash_policy(registry, mounted, binding, config)
         # ``task`` is mounted after everything else, including MCP, and
@@ -2248,6 +2199,7 @@ def build_app(
                 config=config,
                 sandbox=binding,
                 skills=skills,
+                notebook_augmentor=getattr(kernels, "notebook_augmentor", None),
             )
             registry.register(
                 gate_tools(hook_tools((TaskTool(subagents, runner),), chain), gate)[0]
@@ -2330,7 +2282,7 @@ def build_app(
         skill_env=checking,
         remote=remote_plane,
         telemetry=observing,
-        kernels=kernels,
+        kernels=kernel_binding if kernel_binding is not None else kernels,
         env_supply=env_supply,
         provider_for_role=provider_for_role,
         resolved_model=resolved_model,

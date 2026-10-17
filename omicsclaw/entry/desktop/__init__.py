@@ -1,29 +1,6 @@
-"""``omicsclaw.entry.desktop`` — the Desktop Surface's HTTP routes.
+"""Expose Desktop HTTP routes.
 
-The client on the other side is a **separate project**, ``OmicsClaw-App``
-(Electron + Next.js), whose server-side proxy forwards to this backend.
-The backend defines the wire contract and versions it
-(:mod:`~omicsclaw.entry.desktop.wire_contract`); the client implements the
-version ``GET /health`` publishes.
-
-Routes: ``POST /chat/stream``, ``POST /chat/permission``,
-``POST /chat/abort``, ``POST /chat/session-permission-profile``,
-``GET``/``PUT /workspace``, ``GET /env/doctor``, ``GET``/``HEAD
-/health``, and the management routes ``GET /skills``,
-``GET /skills/{domain}/{name}``, ``GET /mcp/servers``,
-``GET``/``PUT /providers``, ``POST /providers/test`` and
-``POST /chat/title``, and the read-only file routes ``GET /files/tree`` and
-``GET /files/serve``
-(:data:`~omicsclaw.entry.desktop.wire_contract.SERVED_PATHS`).
-
-:class:`~omicsclaw.entry.desktop.providers.DotenvSettings` is the
-deployment's ``.env`` as ``create_desktop_app(settings=...)`` takes it;
-the process shell builds it.
-
-**Importing this package never imports a web framework.** ``fastapi`` is
-imported inside :func:`~omicsclaw.entry.desktop.server.create_desktop_app`,
-so the wire contract, the request bounds and the frame projection are all
-readable and testable where no server is installed.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

@@ -123,16 +123,16 @@ def build_netns_argv(
     unix_socket_path: Path | None = None,
     proxy_port: int | None = None,
     python_executable: str | None = None,
+    pid_namespace: bool = True,
 ) -> list[str]:
     """Build the ``unshare`` command line wrapping *child_argv*."""
     cmd: list[str] = [
         unshare_bin,
         "--user",
         "--map-root-user",
-        "--pid",
-        "--fork",
-        "--kill-child=SIGKILL",
     ]
+    if pid_namespace:
+        cmd.extend(["--pid", "--fork", "--kill-child=SIGKILL"])
     if config.egress in (EgressMode.PROXY, EgressMode.DENY):
         cmd.append("--net")
     cmd.append("--")
@@ -182,7 +182,9 @@ class NetnsBackend:
     level = IsolationLevel.PARTIAL
     kernel_transport = "ipc"
 
-    def __init__(self, config: SandboxConfig, *, unshare_bin: str | None = None) -> None:
+    def __init__(
+        self, config: SandboxConfig, *, unshare_bin: str | None = None
+    ) -> None:
         self._config = config
         self._unshare_bin = unshare_bin or shutil.which("unshare") or "unshare"
 
@@ -197,6 +199,7 @@ class NetnsBackend:
         extra_read_paths: Sequence[Path] = (),
         extra_write_paths: Sequence[Path] = (),
         home: Path | None = None,
+        pid_namespace: bool = True,
     ) -> list[str]:
         del workspace, cwd, extra_read_paths, extra_write_paths, home
         return build_netns_argv(
@@ -205,4 +208,5 @@ class NetnsBackend:
             unshare_bin=self._unshare_bin,
             unix_socket_path=unix_socket_path,
             proxy_port=proxy_port,
+            pid_namespace=pid_namespace,
         )

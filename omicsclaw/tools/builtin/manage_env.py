@@ -1,36 +1,6 @@
-"""``manage_environments`` — inspect and provision local environments.
+"""Inspect and provision local environments.
 
-P5's "环境即工具" half: the chat face of the supply plane. The model can
-ask what environments exist, whether one can host the kernel, and
-install (or finish installing) one — so "帮我装 squidpy" is a first-class
-conversation instead of a README the person has to go run. The jobs
-face of the same mechanism is ``POST /jobs {kind: "env_install"}``;
-both bind the same entry-layer seam.
-
-**Leaf-layer rule, like ``python``'s and ``save_artifact``'s**: this
-module imports ``omicsclaw.schema`` and the tool layer's own modules,
-nothing heavier. The supply itself is an :class:`EnvironmentSupply`
-Protocol the composition root binds
-(:func:`omicsclaw.entry.env_supply.build_env_supply` over the
-``envsupply`` package); a tool constructed without one refuses at
-execution time, because no argument a model can send could supply a
-process.
-
-**Approval follows the ``install_skill_deps`` category**: installing
-packages is ``HIGH`` risk, ``ASK`` mode, and only the ``install``
-action asks — ``list`` and ``probe`` read state and never trigger a
-card. The reason names the environment, the packages, and the mirror
-*domain* the configured URL will serve, without pasting the URL itself
-onto the card (the mirror is configuration, not something the model
-chose — see the whitelist note below).
-
-**The mirror whitelist is structural.** The model names *packages*,
-never URLs: ``packages`` entries must be bare distribution names
-(letters, digits, dots, underscores, dashes — no specifiers, no
-``pip install`` URL forms, no shell metacharacters), and the seam
-receives only those names. Which index serves them is decided entirely
-by the composition root's configuration; there is no argument path
-from the model to a URL.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

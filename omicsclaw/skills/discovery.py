@@ -1,43 +1,10 @@
-"""Skill discovery: which skills this turn's request is probably about.
+"""Rank indexed skills with lexical retrieval for the current request.
 
-The catalogue in the system prompt is the *map* — every name, under
-``compact`` nothing else — and this module is the crossing service: a
-lexical retrieval over the same
-:class:`~omicsclaw.skills.index.SkillIndex`, run once per model call
-against the request that call is about, whose top few hits are appended
-to what the model reads. It exists because a flat list the model must
-scan itself taxes every turn in proportion to the catalogue's size,
-while a query costs the same at 88 skills as at 200.
+Weighted BM25 and substring rankings are combined with reciprocal-rank
+fusion. Retrieval does not resolve arbitrary synonyms or call another model.
+Low-confidence guidance can direct the agent to search_skills.
 
-**Why lexical, and why that is admitted rather than hidden.** BM25 over
-(name ×3, domain ×2, tags ×2, triggers ×2, description ×1) with
-reciprocal-rank fusion against a substring ranking is blind to
-synonyms — "cell typing" will not find a skill that says "annotation"
-and nothing else. A reranking model would close that gap and is
-deliberately not here: it would add a second model call to every turn
-of a product whose cost this module exists to lower. The blind spot is
-handled the honest way instead — a low-confidence block that says so
-and points at ``search_skills``, where the model can spend its own
-understanding of the domain — by tags and triggers, which are the
-cheap human patch for exactly this failure, and by the weak-term gate
-(``_WEAK_TERMS``), which keeps session-and-deliverable vocabulary from
-dressing a non-domain request up as one.
-
-**Why the engine is never imported.** :class:`SkillDiscovery` satisfies
-the engine's ``TurnAugmentor`` protocol structurally, the way
-:class:`~omicsclaw.context.MemoryNudge` does, and imports nothing from
-``omicsclaw.engine`` — or from ``omicsclaw.observability``, which is
-why the tracer also arrives structurally: the recorder's
-``start_span(name, *, parent, attributes)`` shape is taken as a local
-protocol and the default is a no-op defined here, so the leaf-layer
-import rule keeps holding and a deployment that never configured
-telemetry runs the whole chain without a branch.
-
-**State is re-derived, never held.** The set of skills already loaded
-is re-read from the conversation's ``use_skill`` calls on every call,
-so a compaction that summarizes those calls away shrinks the set and
-the skill becomes discoverable again — which is the correct behaviour,
-not a leak: the instructions are no longer in the context either.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations

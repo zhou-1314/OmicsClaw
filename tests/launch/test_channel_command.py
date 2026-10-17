@@ -26,7 +26,9 @@ a registered name exercises that check instead of bypassing it.
 
 from __future__ import annotations
 
+import os
 import pathlib
+import selectors
 import signal
 import subprocess
 import sys
@@ -37,6 +39,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 _STARTED = "PROBE-STARTED"
+_MANAGER_READY = "ChannelManager started (1/1 channels active)"
 _STOPPED = "PROBE-STOPPED"
 _DRAINED = "PROBE-SESSIONS-DRAINED"
 _RUNTIME_CLOSED = "PROBE-RUNTIME-CLOSED"
@@ -126,14 +129,41 @@ sys.exit(
 '''
 
 _START_TIMEOUT_S = 90.0
-"""Long enough for a cold import of the whole stack on a loaded machine.
-
-A bound and not a wait: there is no ``pytest-timeout`` here, so a test that
-blocks blocks the suite. The loop below reads a line at a time and gives up
-with the output it has, which is a failure message rather than a hang.
-"""
+"""Bound cold startup without blocking on a silent stdout pipe."""
 
 _STOP_TIMEOUT_S = 60.0
+
+
+def _wait_for_manager(process, timeout: float) -> str:
+    """Read bounded output until both adapter and manager have started."""
+    assert process.stdout is not None
+    fd = process.stdout.fileno()
+    deadline = time.monotonic() + timeout
+    chunks = bytearray()
+    os.set_blocking(fd, False)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise TimeoutError(
+                        f"manager startup timed out:\n{chunks.decode(errors='replace')}"
+                    )
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    raise RuntimeError(
+                        "child exited before manager startup:\n"
+                        + chunks.decode(errors="replace")
+                    )
+                chunks.extend(chunk)
+                if len(chunks) > 1024 * 1024:
+                    raise RuntimeError("manager startup output exceeded 1 MiB")
+                text = chunks.decode(errors="replace")
+                if _STARTED in text and _MANAGER_READY in text:
+                    return text
+    finally:
+        os.set_blocking(fd, True)
 
 
 def _start_probe(
@@ -154,29 +184,26 @@ def _start_probe(
         text=True,
         bufsize=1,
     )
-    assert process.stdout is not None
-    deadline = time.monotonic() + _START_TIMEOUT_S
-    seen: list[str] = []
-    while time.monotonic() < deadline:
-        line = process.stdout.readline()
-        if line:
-            seen.append(line)
-            if _STARTED in line:
-                return process, "".join(seen)
-            continue
-        if process.poll() is not None:
-            break
-    process.kill()
-    rest, _ = process.communicate(timeout=_STOP_TIMEOUT_S)
-    pytest.fail(f"the channel never started:\n{''.join(seen)}{rest}")
+    try:
+        return process, _wait_for_manager(process, _START_TIMEOUT_S)
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=_STOP_TIMEOUT_S)
+        raise
 
 
 def _signal_and_wait(
     process: "subprocess.Popen[str]", number: int, prefix: str = ""
 ) -> tuple[int, str]:
-    process.send_signal(number)
-    output, _ = process.communicate(timeout=_STOP_TIMEOUT_S)
-    return process.returncode, prefix + output
+    try:
+        process.send_signal(number)
+        output, _ = process.communicate(timeout=_STOP_TIMEOUT_S)
+        return process.returncode, prefix + output
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=_STOP_TIMEOUT_S)
 
 
 @pytest.mark.parametrize(
@@ -239,8 +266,93 @@ def test_the_channel_command_really_assembles_an_agent_before_it_serves(tmp_path
     finally:
         if process.poll() is None:  # pragma: no cover - only on a failure
             process.kill()
+        process.wait(timeout=_STOP_TIMEOUT_S)
 
     assert code == 143, output
     assert "assembled: provider=" in output, output
     assert "channel runtime started for telegram" in output, output
     assert "ChannelManager started (1/1 channels active)" in output, output
+
+
+def test_adapter_marker_does_not_cross_the_manager_startup_barrier(
+    tmp_path, monkeypatch
+):
+    """Hold the actual adapter after its marker; release it before signalling."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    from threading import Event
+
+    marker = f"        print({_STARTED!r}, flush=True)"
+    held = _CHANNEL_PROCESS.replace(
+        marker,
+        marker
+        + "\n        import asyncio\n        await asyncio.to_thread(sys.stdin.readline)",
+    )
+    assert held != _CHANNEL_PROCESS
+    process = subprocess.Popen(
+        [sys.executable, "-c", held, str(tmp_path)], cwd=str(_REPO_ROOT),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    )
+    marker_read = Event()
+    original_read = os.read
+
+    def observe_read(fd, count):
+        result = original_read(fd, count)
+        if fd == process.stdout.fileno() and _STARTED.encode() in result:
+            marker_read.set()
+        return result
+
+    monkeypatch.setattr(os, "read", observe_read)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            ready = executor.submit(_wait_for_manager, process, _START_TIMEOUT_S)
+            try:
+                assert marker_read.wait(_START_TIMEOUT_S), (
+                    "adapter never reached its held marker"
+                )
+                with pytest.raises(FutureTimeout):
+                    ready.result(timeout=0.1)
+                process.stdin.write("release\n")
+                process.stdin.flush()
+                prefix = ready.result(timeout=_START_TIMEOUT_S)
+                assert _MANAGER_READY in prefix
+            finally:
+                if not ready.done():
+                    process.kill()
+                    process.wait(timeout=_STOP_TIMEOUT_S)
+        code, output = _signal_and_wait(process, signal.SIGTERM, prefix)
+        assert code == 143, output
+        for marker in (_STOPPED, _RUNTIME_CLOSED, _DRAINED, "ChannelManager stopped"):
+            assert marker in output, output
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=_STOP_TIMEOUT_S)
+        if process.stdin:
+            process.stdin.close()
+        if process.stdout:
+            process.stdout.close()
+
+
+def test_silent_startup_has_a_bounded_wait_and_reaps_its_child(tmp_path, monkeypatch):
+    """A child with no newline cannot hold the test in readline()."""
+    children = []
+    real_popen = subprocess.Popen
+
+    def capture(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", capture)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_CHANNEL_PROCESS",
+        "import os,signal; os.write(1,b'partial-output'); signal.pause()",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_START_TIMEOUT_S", 0.2)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="manager startup timed out"):
+        _start_probe(tmp_path)
+    assert time.monotonic() - started < 5
+    assert len(children) == 1 and children[0].returncode is not None
+    assert children[0].stdout.closed

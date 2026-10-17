@@ -1,25 +1,6 @@
-"""Whether to observe, where to send it, and whether payloads may leave.
+"""Configure telemetry collection and payload handling.
 
-One frozen record read from the environment, mirroring
-``observability/config.go``. Four of its five fields are the reference's;
-the fifth — :attr:`ObservabilityConfig.capture_content` — is this
-repository's, and it is the one to read before anything else in this
-package.
-
-**Why the environment, when :class:`~omicsclaw.engine.EngineConfig`
-argues against it.** That argument is specific and does not reach here:
-a turn ceiling read from the ambient shell makes two runs of the same
-benchmark incomparable and the resulting stall looks like a model
-regression. Telemetry changes no decision the agent makes — switching it
-on cannot alter a trajectory — so the failure mode that ruling exists to
-prevent does not exist for these fields. What does apply is the reason
-:mod:`omicsclaw.provider` reads its own credentials: an OTLP bearer token
-has nowhere else to live, and threading five more fields through
-:class:`~omicsclaw.entry.config.AppConfig` would put a secret in the
-record a surface prints when it reports its configuration.
-
-Stdlib only. Reading this module must not require the OpenTelemetry SDK
-to be installed, because deciding *not* to observe is the common case.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

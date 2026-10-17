@@ -1,39 +1,6 @@
-"""Job scripts, handles and the state vocabulary — the pure half of C1.
+"""Define remote job scripts, handles and states.
 
-A remote job is two small files and a number. The files are ``cmd.sh``
-(the model's command, verbatim) and ``job.sh`` (a wrapper that records
-how the command ended); the number is a SLURM job id or a process-group
-id, and it is the whole handle — Claude Science's ruling, which this
-package adopts: the remote side runs what the host already knows how to
-run (``sbatch``, ``setsid nohup``), and the local side needs no daemon,
-no agent and no version matrix to stay in touch with it, only the
-commands built here.
-
-**Everything in this module is pure.** Script generation, submission
-command construction, and the parsing of what comes back are functions
-over strings, so the whole submission state machine is tested without a
-network; the process half (:mod:`omicsclaw.remote.plane`) only stitches
-them together. The remote-side contract is deliberately readable: a
-person who ``ssh``es into the work directory finds ``job.log``,
-``_omicsclaw_exit_code`` and, for a nohup job, ``_omicsclaw_pgid`` —
-plain files, no magic, so the rare manual intervention needs no
-documentation from us.
-
-**The ``#SBATCH`` promotion rule.** ``scheduler="auto"`` submits with
-``sbatch --parsable`` exactly when the command itself carries ``#SBATCH``
-directive lines — the form a user's existing cluster script already has
-— and otherwise runs it under ``setsid nohup``. The user's directives,
-not a re-implementation of them: this package never parses resource
-requests out of the command to synthesize its own ``sbatch`` flags,
-which is how a wrapper silently disagrees with the script it wraps.
-
-**nohup jobs report their own death.** The wrapper writes
-``_omicsclaw_exit_code`` on every exit path (no ``set -e``, so a failing
-command still gets its code recorded), and the launcher writes its own
-process id — which, under ``setsid``, is the session id and therefore
-the process-group id — to ``_omicsclaw_pgid`` before ``exec``-ing the
-wrapper. Status is then two facts the host already knows: does the group
-still exist (``kill -0``), and if not, what code did it leave behind.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

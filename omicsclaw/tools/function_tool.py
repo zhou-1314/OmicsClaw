@@ -1,38 +1,6 @@
-"""``FunctionTool`` — a plain callable, wearing the :class:`Tool` shape.
+"""Adapt a callable to the Tool interface.
 
-Plan 0028 §4 Q1. Most tools are a function: some arguments in, some text
-out. Making each of them a hand-written class with three members would be
-ceremony, and the fifty tools waiting to be migrated are all plain
-functions today, so the adapter is what they arrive through.
-
-What the adapter adds is the part a plain function has no way to do for
-itself: **turning the model's mistakes into something the model can fix.**
-Two of them, and they are different mistakes:
-
-*The payload was unreadable.* :meth:`ToolCall.parsed_arguments
-<omicsclaw.schema.ToolCall.parsed_arguments>` answers ``{}`` for a
-truncated or malformed payload, by design — it exists so a bad argument
-string cannot crash a run. But ``{}`` is also what a genuinely
-argument-free call looks like, so a tool that used it would run with no
-arguments and report success for a call that was never fully transmitted.
-This adapter never calls it. A payload that does not decode is reported as
-undecodable, with the decoder's own complaint and a bounded excerpt of
-what actually arrived, and the function is not invoked. Plan 0028 trap 8.
-
-*The arguments were readable but wrong.* Checked against the tool's own
-declared schema, and every problem is listed at once so one retry can fix
-all of them. Plan 0028 trap 9.
-
-**Both are reported by raising** :exc:`ToolArgumentError`, which is how
-this seam spells failure: ``execute`` returns ``str``, so there is no
-in-band way to say "this is an error", and
-:meth:`~omicsclaw.tools.registry.ToolRegistry.execute` is what turns an
-exception into an ``is_error`` Observation. What trap 9 forbids is a
-validation failure that ends the run; one raised inside ``execute`` never
-leaves the registry.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools.base``, and the
-standard library.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

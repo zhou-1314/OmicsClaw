@@ -1,34 +1,6 @@
-"""``GET /env/doctor``: what this running backend was assembled with.
+"""Report the running backend configuration.
 
-:func:`doctor_report` reads facts off the live
-:class:`~omicsclaw.entry.AgentApp` — the provider and the model it calls,
-the skill index, the MCP servers, the sandbox, memory, the permission
-mode and the workspace — and answers them as a checklist. Nothing is
-probed from scratch: every fact is what start-up already produced.
-
-The payload::
-
-    {
-      "generated_at": "2026-09-28T08:00:00Z",
-      "workspace_dir": "/path/to/project",
-      "omicsclaw_dir": "/path/to/project",
-      "overall_status": "ok" | "warn" | "fail",
-      "failure_count": 0,
-      "warning_count": 0,
-      "checks": [
-        {"name": "provider", "status": "ok" | "warn" | "fail" | "info",
-         "summary": "...", "details": ["..."]},
-        ...
-      ]
-    }
-
-``omicsclaw_dir`` is the same value ``/health`` reports. A check is
-``warn`` or ``fail`` only for something a person should act on; a
-deliberate configuration that is merely off (no sandbox, no memory) is
-``info``.
-
-:func:`effective_model` is the model the provider calls, which is also what
-``/health`` and the ``result`` frame report.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

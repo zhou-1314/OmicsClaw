@@ -1,41 +1,6 @@
-"""Checkpoint-triggered shadow review (P6 item 4).
+"""Run shadow review when a checkpoint requests it.
 
-A small automatic reviewer that watches the P2 artifact plane and, at a
-checkpoint, makes one bounded model call whose verdict — ``pass``,
-``warn`` or ``fail`` — is injected back into the main loop. The two
-triggers:
-
-* **count** — :data:`SHADOW_REVIEW_ARTIFACT_THRESHOLD` (3) or more new
-  artifact records since the last checkpoint, and
-* **structured block** — one new artifact of a structured kind
-  (:data:`STRUCTURED_ARTIFACT_KINDS` — ``report`` and ``table``, the two
-  kinds the results tray renders as a structured block rather than a
-  media card) arrives.
-
-The detector is a *checker*, not a listener: at each turn submission the
-desktop surface asks the shared :class:`~omicsclaw.memory.artifacts.
-ArtifactStore` for the newest records of the session and feeds them to a
-per-session :class:`ShadowReviewCheckpoint` watermark, so no insert path
-is touched and every writer (the ``save_artifact`` sink and the job
-scanner) is covered by one query.
-
-The review itself is fire-and-forget: it is scheduled as a background
-task, and a failure or timeout is logged and skipped — it **never blocks
-the main loop**. A ``warn``/``fail`` verdict lands in two additive
-places:
-
-* a one-shot context note attached to the **next** turn's request
-  (:class:`ShadowReviewNudge`, mounted by
-  :func:`~omicsclaw.entry.nudges.build_augmentor`), and
-* a ``shadow_review`` frame published into the running exchange's stream
-  when one is live (the desktop surface's publisher), following the
-  additive frame precedent of the R1 ``suggestions`` frame.
-
-``pass`` is quiet in both places.
-
-The whole mechanism is off unless :attr:`~omicsclaw.entry.config.
-AppConfig.shadow_review` is set: a deployment that has not asked for it
-keeps byte-identical turns.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

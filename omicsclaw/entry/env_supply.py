@@ -1,24 +1,6 @@
-"""The composition root's binding over the environment-supply mechanism.
+"""Connect runtime composition to environment supply.
 
-The ``WorkspaceKernelBinding`` pattern, applied to P5: the
-``manage_environments`` tool speaks the
-:class:`~omicsclaw.tools.builtin.manage_env.EnvironmentSupply` Protocol
-and this binding answers it on the ``envsupply`` package — probe one
-interpreter, build and run the idempotent install script, list what
-exists under the env root. One binding per deployment, shared by the
-tool (chat face) and the ``env_install`` jobs runner, so both faces
-provision the same directories with the same mirrors.
-
-The blocking halves run under :func:`asyncio.to_thread` — a probe is a
-subprocess and an install is minutes of one — and install output lines
-reach the caller's ``on_output`` from that worker thread, which is the
-contract the jobs runner's event emitters already accept.
-
-Policy stays out: the mirrors, env root and timeouts arrive as
-configuration (:func:`build_env_supply` reads them from
-:class:`~omicsclaw.entry.config.AppConfig`), the approval happens in
-the tool's gate, and a job is pre-consented by the person who posted
-it. Nothing here asks anyone anything.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

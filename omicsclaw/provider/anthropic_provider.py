@@ -1,34 +1,6 @@
-"""``omicsclaw/provider`` — the Anthropic Messages adapter.
+"""Adapt the Anthropic Messages API.
 
-Plan 0026 §8, task C. This is where the "simultaneous interpreter" claim
-is tested, because Anthropic disagrees with :mod:`omicsclaw.schema` about
-almost every structural choice:
-
-===============  ==============================  ==========================
-Concern          schema                          Anthropic
-===============  ==============================  ==========================
-System prompt    a ``Role.SYSTEM`` message       a top-level ``system``
-                                                 parameter, lifted out of
-                                                 the message list
-Tool call        ``Message.tool_calls``          a ``tool_use`` block
-Tool result      a ``Role.TOOL`` message         a ``tool_result`` block
-                                                 inside a **user** turn
-Arguments        raw JSON text                   a decoded object
-Reasoning        ``Message.reasoning_content``   a ``thinking`` block
-Stop signal      —                               ``stop_reason``
-===============  ==============================  ==========================
-
-Every one of those translations lives in this file and nowhere else. The
-conversions are module-level functions over plain data rather than
-methods, so the whole outbound and inbound mapping is testable without a
-client, a key, or a socket.
-
-**The SDK is loaded lazily, through one seam.** ``anthropic`` is an
-optional extra and is *not* installed in this repo's environment. Binding
-it at import time would make the module unimportable here and would drag
-a vendor package into every test that only wants to check a conversion.
-:func:`_build_async_client` is therefore the single function that needs
-it; everything else in this module runs on the standard library.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

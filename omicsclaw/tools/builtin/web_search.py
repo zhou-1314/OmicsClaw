@@ -1,42 +1,6 @@
-"""``web_search`` — one query to one search backend, no API key.
+"""Send search queries to the configured search backend.
 
-Modelled on harness9's ``internal/tools/web_search.go``, whose smallest
-decision is the one worth keeping: it posts to DuckDuckGo's HTML endpoint
-and parses the page. No key, no account, no vendor SDK, nothing to
-configure wrong. For a layer that may import nothing outside the standard
-library it is also the only shape available.
-
-**What that costs is a dependency on somebody else's markup.**
-``div.result``, ``a.result__a`` and ``a.result__snippet`` are class names
-on a page DuckDuckGo may restyle any week, and the failure mode when they
-change is **zero results rather than an error**: the request succeeds, the
-parse finds nothing. :func:`parse_results` cannot tell "nothing matched"
-from "the page is no longer shaped like this", so :func:`_report` names
-both possibilities — the reference says only "no results found", which is
-indistinguishable from a restyled page.
-
-**The query is egress**, which is what the ``ASK`` policy is for: a search
-query is text sent to a third party, and a model asked "is this variant
-known" may put the variant in it. The whole query is in the approval
-prompt, verbatim.
-
-**World failure is not tool failure.** No results, a non-200 from the
-backend and an unparseable page are returned as text with ``is_error``
-false. A malformed query raises, because the model fixes that by sending
-different arguments.
-
-**Against the legacy ``web_search``**, which is untouched: it takes a
-``topic`` enum (``general``/``news``/``finance``) that has no equivalent
-here, and it returns **whole pages as markdown** by fetching every hit,
-so one old call becomes one search plus N ``web_fetch`` calls, each with
-its own approval. The split is the better design — a model should choose
-what to read — but it is a workflow change, not a like-for-like
-replacement. What is gained: no Tavily API key and no ``research`` extra.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools._html``,
-``omicsclaw.tools._websafety``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, ``omicsclaw.tools.function_tool``, and the
-standard library.
+Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 """
 
 from __future__ import annotations

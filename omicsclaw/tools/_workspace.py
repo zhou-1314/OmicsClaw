@@ -1,140 +1,17 @@
-"""The sandbox boundary ``read``, ``write``, ``edit`` and ``bash`` share.
+"""Resolve file-tool paths against one workspace and reject credential paths.
 
-Plan 0029 §3 and §4 Q1/Q8/Q10. One question is answered here, once: **a
-model sent a path — which real file, if any, is that?** Every tool that
-touches the filesystem asks it, and a tool that answers it for itself is
-a tool that answers it slightly differently, which is how one of four
-tools ends up being the one that can be talked out of the workspace.
+Workspace.resolve joins relative paths to the workspace, follows symlinks,
+checks sensitive components, then checks containment by path component.
+Missing leaves are allowed for writers; callers decide whether a file must
+exist. A credential path remains forbidden inside the workspace. Refusals
+are typed so callers can distinguish sensitivity from containment failures.
 
-The attack this exists to stop is one line long::
+Credential matching is independent of HOME. The resolver does not search
+alternate roots or redirect an escaped destination to a default directory.
+Its checks concern file-tool paths; shell isolation belongs to the deployment.
 
-    workspace = /home/alice/run-7
-    the model sends "../../../etc/passwd"
-
-and the defence is that :meth:`Workspace.resolve` is the only way in. It
-applies three rules to every path, in this order:
-
-1. **Resolve it** — ``..`` normalised *and symlinks followed*, so what is
-   judged is the file that will actually be opened rather than the name
-   the model chose for it.
-2. **Refuse credentials outright** — :func:`is_sensitive`, applied to the
-   resolved path, and applied whether or not the path is inside the
-   workspace. A workspace containing an SSH key does not make the key
-   readable.
-3. **Require containment** — the resolved path must be the workspace root
-   or live under it.
-
-Rules 2 and 3 are in that order on purpose, and it is the one ordering
-difference from the reference implementation. ``<workspace>/creds`` that
-turns out to be a symlink into ``~/.ssh`` fails both rules; reporting it
-as "outside the workspace" would file a credential-access attempt under
-the same heading as a model that mistyped a relative path. The operator
-reading the log needs those to look different, so the sharper rule
-answers first.
-
-**What came from harness9, and in what form.**
-``internal/tools/safe_path.go`` is the reference. Its *structure* is kept
-whole — one shared resolver, a hard credential list that the workspace
-whitelist cannot override, and a containment check that cannot be fooled
-by a shared name prefix. Two of its *literals* are deliberately not
-translated, because both are artefacts of Go's standard library rather
-than of the problem:
-
-*The separate branch for absolute input* (``safe_path.go:72-87``) exists
-because ``filepath.Join(workDir, "/abs")`` yields ``/workDir/abs`` — Go's
-``Join`` does not treat a rooted second argument as rooted, so an
-absolute path that was already inside the workspace came back doubled,
-passed the prefix check, and named a file that does not exist. Python's
-``/`` operator has the opposite convention: ``Path("/ws") / "/etc/passwd"``
-is ``/etc/passwd``, not ``/ws/etc/passwd``. So the branch would be a
-branch whose two arms compute the same value, and translating it would
-add an untestable line while the behaviour it protects — an absolute path
-is never concatenated onto the root — is already free. The behaviour is
-what is pinned, by
-``test_an_absolute_path_inside_the_workspace_is_returned_undoubled``.
-
-*The ``strings.HasPrefix(abs, workDir + os.PathSeparator)`` comparison*
-(``safe_path.go:90-92``) is the same rule as :meth:`Path.is_relative_to`,
-which compares path components and therefore cannot be tricked by
-``/project-evil`` beginning with ``/project``. Keeping the string form in
-Python would mean re-deriving the separator handling that pathlib already
-gets right. The trap is kept as a test — swap :func:`_is_within` for a
-``str.startswith`` and
-``test_a_sibling_sharing_the_workspaces_name_is_not_inside_it``
-goes red.
-
-**Three ways this is stricter than harness9.**
-
-*Symlinks are resolved* (plan 0029 §4 Q10). ``safePath`` uses
-``filepath.Abs``, which normalises ``..`` lexically and follows nothing,
-so a symlink planted inside the workspace and pointing anywhere at all
-passes its check. :meth:`Path.resolve` follows links, so it does not.
-**This is a net improvement and not an alignment defect** — written down
-here because the obvious way to "match the reference" later is to swap in
-``os.path.abspath``, which would silently reopen the hole.
-``strict=False`` is the default and is wanted: ``write`` names files that
-do not exist yet, and a non-existent *leaf* is fine, while a symlinked
-*parent* is resolved and caught before anything is created.
-
-*The credential list is not anchored to a home directory.* harness9 builds
-``~/.ssh``, ``~/.aws`` and the rest from ``os.UserHomeDir`` and returns an
-**empty list** when that fails (``safe_path.go:27-29``), on the grounds
-that bash's DangerHook is the backstop. This project has no DangerHook,
-so an empty list would be a silent total loss of the rule. Rather than
-handling the failure, the dependency is removed: a path is credential-ish
-because of the components in it, not because of where the current user's
-home happens to be. That is strictly broader than the anchored form — it
-also catches a second user's home, a copied ``.aws`` inside the workspace
-and a container image with no ``HOME`` set — and it makes the "cannot find
-home" branch unreachable rather than dangerous.
-
-*The list is re-derived for this project.* ``~/.kube`` stays because it
-costs nothing, and ``.env`` is added because it is where **this**
-repository keeps ``LLM_API_KEY``, ``TELEGRAM_BOT_TOKEN`` and
-``FEISHU_APP_SECRET`` (see ``.env.example``). An omics agent
-that can read one ``.env`` can impersonate the bot it is running as.
-
-**Compared against** ``omicsclaw/services/path_validation.py``, which does
-this job for the layer being replaced and which this layer may not import
-(plan 0028 §9-4 — ``tests/tools/test_tools_is_a_leaf_layer.py`` enforces
-it, whitelist, AST, dynamic-import and behaviour probes). Its
-``validate_path(filepath, allowed_root)`` is the overlapping half, and on
-the overlap the two **agree exactly**: both resolve each side before
-comparing, both compare by component so a shared name prefix is not
-containment, both accept the root itself, both accept a path that does
-not exist yet, and both refuse a path containing a NUL byte — the legacy
-one because :meth:`Path.resolve` raises :exc:`ValueError` and it catches
-``ValueError`` to mean "no". ``tests/tools/test_workspace.py`` runs both
-over a shared corpus and asserts zero disagreements, loading the legacy
-module by file path so that assertion does not become an import.
-
-Four differences remain, all deliberate:
-
-* *Where a relative path is joined.* ``validate_path`` takes an
-  already-joined path, so a relative one resolves against the **process
-  CWD**; ``resolve`` joins to the workspace root and never consults the
-  CWD. A boundary that moves when something calls :func:`os.chdir` is not
-  a boundary.
-* *Credentials.* ``validate_path`` has no notion of them: an SSH key
-  inside a trusted root is allowed. Rule 2 above has no equivalent there.
-* *What a refusal is.* ``validate_path`` returns ``False`` and
-  ``validate_input_path`` returns ``None``; both lose which rule fired.
-  Here a refusal is a typed exception carrying a sentence the model can
-  act on — and the two subclasses are distinguishable for an operator,
-  for the reason given above.
-* *One root, not a search path.* ``validate_input_path`` tries the
-  Desktop workspace, then the project root, then every trusted data dir,
-  and additionally requires the file to exist. That is a *discovery*
-  policy, and it belongs to whatever binds :data:`WORKSPACE_KEY` rather
-  than to the boundary. ``resolve_dest`` goes further still and **falls
-  back to a default directory** when a path escapes, which is the one
-  behaviour deliberately not carried over: silently writing somewhere
-  else is how a model learns that its escape attempt "worked".
-
-**Leaf.** The standard library, and nothing else — not even the rest of
-``omicsclaw.tools``. Whether a refused path is reported to the model as a
-correctable argument error is the calling tool's decision, so this module
-declines to make it.
+Historical migration notes and reference comparisons are preserved in
+docs/engineering/runtime-tool-design-notes.md, under this module's path.
 """
 
 from __future__ import annotations

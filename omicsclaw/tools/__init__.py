@@ -1,75 +1,10 @@
-"""``omicsclaw.tools`` — the hands the loop acts through.
+"""Expose tool interfaces, dispatch and per-call execution context.
 
-Plan 0028, step 4 of the staged rebuild. Steps 1–3 delivered the
-vocabulary (:mod:`omicsclaw.schema`), the interpreter that speaks it
-(:mod:`omicsclaw.provider`) and the loop that moves it
-(:mod:`omicsclaw.engine`). This package is what the loop dispatches to::
+ToolRegistry supplies model definitions and executes calls as observations.
+It satisfies the engine's executor protocol without importing that layer.
+Composition supplies tools, policy wrappers and deployment services.
 
-    from omicsclaw.tools import ToolRegistry
-
-    registry = ToolRegistry()
-    registry.register(InspectDataTool(workspace))
-    defs = registry.available_tools()          # → provider
-    result = await registry.execute(call)      # → Observation
-
-:class:`~omicsclaw.tools.registry.ToolRegistry` satisfies
-:class:`omicsclaw.engine.executor.ToolExecutor` **structurally**, without
-importing :mod:`omicsclaw.engine`: the engine declared the smallest
-Protocol that lets it act, and this package matches its shape. Nothing
-here is wired into production — the existing tool layer under
-``omicsclaw.runtime.tools`` still serves every surface, untouched, and
-migrating its tools onto this one is a later step.
-
-Two adapters mean most tools need no class of their own:
-:class:`~omicsclaw.tools.function_tool.FunctionTool` wraps a plain
-callable and turns a model's bad arguments into something it can correct,
-and :class:`~omicsclaw.tools.mcp_tool.MCPTool` makes a tool that lives in
-another process indistinguishable from one that lives here.
-
-:mod:`omicsclaw.tools.context` is the third piece and the least obvious:
-``execute(arguments)`` takes one argument on purpose, so a tool that has
-to ask a human for permission, or say how far along it is, reaches its
-caller through :mod:`contextvars` rather than through a widened seam. The
-conventions — who binds, who reads, and what an unbound channel means —
-are written down there because the mechanism works by a property of the
-engine that nobody would otherwise know to preserve.
-
-:mod:`omicsclaw.tools.builtin` holds the **foundation** tools:
-``read_tool``, :class:`~omicsclaw.tools.builtin.write.WriteTool`,
-:class:`~omicsclaw.tools.builtin.edit.EditTool` and
-:class:`~omicsclaw.tools.builtin.bash.BashTool` (plan 0029 and its §12
-follow-ups), plus
-:class:`~omicsclaw.tools.builtin.web_fetch.WebFetchTool` and
-:class:`~omicsclaw.tools.builtin.web_search.WebSearchTool` — the hands
-the agent works with, not a starter set. The fifty tools under
-``omicsclaw.runtime.tools`` are migrated later, one at a time.
-:class:`~omicsclaw.tools.builtin.ask_user.AskUserTool` is there too: it
-asks the person one question through the context's question channel.
-
-The three file tools stand on this package's private helpers —
-``_workspace.py``, the sandbox boundary every filesystem tool shares, and
-``_pathlock.py``, the per-path lock that stops two writes from losing
-each other wherever the engine's own barrier does not reach — overlapping
-turns above all. The two web tools stand on ``_websafety.py``,
-which is the same idea applied to a different boundary: an SSRF gate
-every request passes, plus the pinned transport that is the only thing
-allowed to open a socket. ``bash`` stands on none of them, because it has
-no path to check and no destination to resolve; what bounds it is the
-approval gate its policy declares. None of the six is wired into
-production.
-
-Plan 0028's three reference tools used to sit beside them, as evidence
-that the pieces above hold up for a tool that really does something.
-They were removed once the foundation tools carried every property they
-were built to prove — see :mod:`omicsclaw.tools.builtin` for which
-property moved where.
-
-**A leaf layer.** Inside the ``omicsclaw`` namespace this package imports
-``omicsclaw.schema`` and nothing else — not ``provider``, not ``engine``,
-and not ``omicsclaw.runtime.tools``, which is the tempting one precisely
-because it is also called ``tools``. Nothing about the package layout
-prevents that import; ``tests/tools/test_tools_is_a_leaf_layer.py``
-does, by walking the AST of every module here.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from ._workspace import Workspace

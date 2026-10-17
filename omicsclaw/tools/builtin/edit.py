@@ -1,67 +1,10 @@
-"""``edit_file`` — replace one passage of a file, not the whole file.
+"""Replace a unique passage in a workspace file after approval.
 
-Modelled on harness9's ``internal/tools/edit_file.go``. Where
-``write_file`` replaces a file entirely, this takes an anchor
-(``source_text``) and what to put in its place, and refuses unless the
-anchor names exactly one place.
+Matching proceeds through exact, line-ending, whitespace and indentation
+levels, retaining the uniqueness check. The tool shows the proposed diff,
+then rechecks the file before writing. Fuzzy matches require a result reread.
 
-**Four match levels, each looser than the last, each keeping the
-uniqueness guard:** L1 exact, L2 ignoring line endings, L3 ignoring
-whitespace around the anchor, L4 ignoring indentation. A model writing an
-anchor from memory lands *near* the bytes on disk rather than on them;
-refusing a near miss costs a turn, and matching loosely writes bytes
-nobody approved, so the cascade trades one for the other a step at a time.
-
-**L1 is reported as exact and L2–L4 as fuzzy.** After an exact match the
-diff in the result is authoritative. After a fuzzy one the written bytes
-may differ from what the model pictured — in Python, where indentation is
-syntax, that is the difference between a fix and an ``IndentationError``
-— so the result asks for a re-read instead.
-
-**Order of operations: read, match, ask, re-read, write.** The match runs
-before the approval so a human is shown the diff rather than the
-arguments. The file is then read again inside the write lock; if it
-changed while the prompt was open the edit is refused, because the thing
-approved was a diff against particular bytes. The lock is not held across
-the approval — a human's thinking time is unbounded, and holding it would
-stall every other tool touching the path.
-
-**Two guards the reference lacks.** An empty or all-whitespace anchor is
-refused by name (see :func:`_reject_empty`), and a no-op edit succeeds
-rather than erroring, so re-sending an edit already applied is harmless.
-
-**Failures are the model's to correct.** A missing anchor, an ambiguous
-one, a path outside the workspace or a file that is not UTF-8 all raise
-and become ``is_error=True``. A no-op edit does not: the world is already
-in the requested state.
-
-``environment=None`` means the local filesystem; anything else has both
-its ``read_file`` and ``write_file`` awaited. See
-:class:`FileEditEnvironment`.
-
-**What the legacy ``file_edit`` could do and this cannot.** Its schema
-carries ``replace_all``, and on an ambiguous anchor it tells the model to
-set it. There is no equivalent here, so N identical lines that must all
-change have no anchor that disambiguates them and the edit is simply
-refused — the model has to fall back to ``write_file`` with the whole
-file. The reference has no such flag either, which is why porting it was
-never considered, but it is a real capability loss and belongs on the
-migration's list rather than in nobody's.
-
-**A known imprecision in the error classification.** ``except OSError``
-in :meth:`EditTool._get` and :meth:`EditTool._put` also catches
-:exc:`TimeoutError`, which is an ``OSError`` subclass and is what
-:func:`asyncio.wait_for` raises — so an ``Environment`` that bounds its
-own container round-trip reports a transient infrastructure failure as
-"send a different path". :exc:`asyncio.CancelledError` is unaffected.
-The same pattern is in ``read.py``, ``write.py`` and ``bash.py``, so it
-is a layer-wide convention to fix in one place rather than here.
-
-**Leaf-adjacent.** ``omicsclaw.schema``, ``omicsclaw.tools._pathlock``,
-``omicsclaw.tools._workspace``, ``omicsclaw.tools.base``,
-``omicsclaw.tools.context``, ``omicsclaw.tools.function_tool``,
-``omicsclaw.tools.builtin.read``, ``omicsclaw.tools.builtin.write``, and
-the standard library.
+Historical design notes: docs/engineering/runtime-framework-design-notes.md.
 """
 
 from __future__ import annotations
