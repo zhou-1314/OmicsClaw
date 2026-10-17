@@ -37,7 +37,8 @@ class BoundedLog(logging.Handler):
         self.fd = private_file(path)
 
     def emit(self, record):
-        data = (record.levelname + " " + record.name + "\n").encode()[:1024]
+        msg = record.getMessage().replace("\n", " ")[:512]
+        data = (record.levelname + " " + record.name + ": " + msg + "\n").encode()[:1024]
         if os.fstat(self.fd).st_size + len(data) > 1024 * 1024:
             os.ftruncate(self.fd, 0)
         os.lseek(self.fd, 0, os.SEEK_END)
@@ -53,6 +54,8 @@ async def serve(workspace):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return
+        # Bound diagnostics without imposing a file limit on scientific outputs.
+        logging.getLogger().addHandler(BoundedLog(directory / "owner.log"))
         startup = read_private(directory / "startup.json")
         if startup["protocol"] != OWNER_PROTOCOL or startup["workspace"] != str(
             workspace
@@ -76,8 +79,6 @@ async def serve(workspace):
         }
         if trusted != startup["identity"]:
             raise ValueError("notebook_store_mismatch")
-        # Bound diagnostics without imposing a file limit on scientific outputs.
-        logging.getLogger().addHandler(BoundedLog(directory / "owner.log"))
         runtime = OwnerRuntime(
             workspace,
             trusted,
@@ -114,6 +115,11 @@ async def serve(workspace):
                 await stopped.wait()
         finally:
             await runtime.close()
+    except Exception as exc:
+        logging.getLogger("omicsclaw.notebook_owner").error(
+            "%s: %s", type(exc).__name__, getattr(exc, "code", str(exc))
+        )
+        raise
     finally:
         os.close(fd)
 

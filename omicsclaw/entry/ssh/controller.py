@@ -421,11 +421,26 @@ class Controller:
         )
         sandbox = await open_sandbox(config)
         try:
+            raw_sandbox_cfg = config.sandbox_config()
+            code_mounts = set(config.code_mounts())
+            owner_sandbox_cfg = (
+                dataclasses.replace(
+                    raw_sandbox_cfg,
+                    extra_read_paths=tuple(
+                        p for p in raw_sandbox_cfg.extra_read_paths if p not in code_mounts
+                    ),
+                    read_only_mounts=tuple(
+                        p for p in raw_sandbox_cfg.read_only_mounts if p not in code_mounts
+                    ),
+                )
+                if raw_sandbox_cfg is not None and code_mounts
+                else raw_sandbox_cfg
+            )
             self.notebook_client = NotebookOwnerClient(
                 self.workspace,
                 {"authorityId": self.identity.authority_id, "workspaceId": self.identity.workspace_id},
                 self.instance_id, self.epoch,
-                sandbox_config=config.sandbox_config(),
+                sandbox_config=owner_sandbox_cfg,
             )
             self.notebook_binding = SSHNotebookBinding(self.notebook_client)
             assembled = build_app(

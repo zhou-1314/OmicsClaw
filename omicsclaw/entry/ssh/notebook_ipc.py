@@ -314,6 +314,42 @@ class NotebookOwnerClient:
         health, _ = await self._attach_session()
         return health
 
+    def _owner_is_idle(self) -> bool:
+        import sqlite3
+
+        db_path = self.workspace / ".omicsclaw/notebooks.db"
+        if not db_path.is_file():
+            return True
+        try:
+            with sqlite3.connect(
+                f"file:{db_path}?mode=ro", uri=True, timeout=2.0
+            ) as conn:
+                active_kernel = conn.execute(
+                    "SELECT 1 FROM notebook_runtime_kernels WHERE state NOT IN ('released','lost') LIMIT 1"
+                ).fetchone()
+                if active_kernel is not None:
+                    return False
+                active_exec = conn.execute(
+                    "SELECT 1 FROM notebook_executions WHERE status IN ('queued','running') LIMIT 1"
+                ).fetchone()
+                return active_exec is None
+        except sqlite3.Error:
+            return False
+
+    async def _spawn_and_wait(self, state_path: Path, previous_owner_id: str | None = None):
+        await asyncio.to_thread(self._launch)
+        for _ in range(200):
+            try:
+                state = read_private(state_path)
+                if same_process(state.get("process")) and (
+                    previous_owner_id is None or state.get("ownerId") != previous_owner_id
+                ):
+                    return state
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+            await asyncio.sleep(0.05)
+        raise NotebookError("notebook_owner_unavailable", 503)
+
     async def _attach_session(self):
         if self.closed:
             raise NotebookError("notebook_owner_unavailable", 503)
@@ -324,17 +360,7 @@ class NotebookOwnerClient:
             except FileNotFoundError:
                 state = None
             if state is None or not same_process(state.get("process")):
-                await asyncio.to_thread(self._launch)
-                for _ in range(200):
-                    try:
-                        state = read_private(state_path)
-                        if same_process(state.get("process")):
-                            break
-                    except (FileNotFoundError, json.JSONDecodeError):
-                        pass
-                    await asyncio.sleep(0.05)
-                else:
-                    raise NotebookError("notebook_owner_unavailable", 503)
+                state = await self._spawn_and_wait(state_path)
             if (
                 state.get("protocol") != OWNER_PROTOCOL
                 or state.get("identity") != self.identity
@@ -348,13 +374,46 @@ class NotebookOwnerClient:
             ):
                 raise NotebookError("notebook_unsafe_state", 409)
             self.address = "\0" + address
-            result = await self._request(
-                "attach",
-                {"identity": self.identity, "policyDigest": self.policy_digest},
-                address=self.address,
-                token=None,
-                owner=None,
-            )
+            try:
+                result = await self._request(
+                    "attach",
+                    {"identity": self.identity, "policyDigest": self.policy_digest},
+                    address=self.address,
+                    token=None,
+                    owner=None,
+                )
+            except NotebookError as error:
+                if error.code != "notebook_policy_changed" or not self._owner_is_idle():
+                    raise
+                proc = state.get("process")
+                old_owner_id = state.get("ownerId")
+                if same_process(proc):
+                    import signal
+
+                    try:
+                        os.kill(proc["pid"], signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    for _ in range(40):
+                        if not same_process(proc):
+                            break
+                        await asyncio.sleep(0.05)
+                state = await self._spawn_and_wait(state_path, previous_owner_id=old_owner_id)
+                address = state.get("address")
+                if (
+                    not isinstance(address, str)
+                    or not address.startswith("omicsclaw-notebook-")
+                    or len(address) > 100
+                ):
+                    raise NotebookError("notebook_unsafe_state", 409)
+                self.address = "\0" + address
+                result = await self._request(
+                    "attach",
+                    {"identity": self.identity, "policyDigest": self.policy_digest},
+                    address=self.address,
+                    token=None,
+                    owner=None,
+                )
             self.token = result.pop("leaseToken")
             self.health = result
             return result, {

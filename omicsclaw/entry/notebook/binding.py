@@ -43,6 +43,8 @@ class SSHNotebookBinding:
         sid = str(context_value("session_id", ""))
         if state["sessionId"] != sid:
             raise NotebookError("notebook_request_invalid", 409)
+        if state.get("error"):
+            raise NotebookError(state["error"], 503)
         return invocation, state
 
     async def before_tool(self, call):
@@ -365,6 +367,29 @@ class SSHNotebookContext:
                     )
                     waiting = True
                 await asyncio.sleep(0.25)
+        except (NotebookError, OSError, TimeoutError) as error:
+            code = getattr(error, "code", "notebook_owner_unavailable")
+            if isinstance(error, NotebookError) and code not in {
+                "notebook_owner_unavailable",
+                "notebook_policy_changed",
+                "notebook_unsafe_state",
+                "notebook_store_mismatch",
+            }:
+                raise
+            private = {"sessionId": self.session_id, "error": code}
+            text = (
+                "<notebook_context>\n"
+                + NOTICE
+                + "\n"
+                + encoded({"status": "unavailable", "error": code}).decode()
+                + "\n</notebook_context>"
+            )
+            return PreparedModelRequest(
+                (Message(role=Role.USER, content=text),),
+                ModelRequestContext(
+                    request_id, (("notebook", encoded(private).decode()),)
+                ),
+            )
         finally:
             if waiting:
                 count = self.binding.waiters.get(self.session_id, 1) - 1

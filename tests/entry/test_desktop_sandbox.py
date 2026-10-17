@@ -493,3 +493,71 @@ def test_notebook_owner_runtime_syncs_persisted_and_live_sandbox_domain_grants(
             await binding.aclose()
 
     asyncio.run(scenario())
+
+
+
+def test_owner_runtime_remediates_legacy_0644_db_permissions_and_degrades_chat_on_owner_unavailable(
+    workspace: Path,
+):
+    import os
+    from omicsclaw.entry.notebook.binding import SSHNotebookBinding
+    from omicsclaw.entry.notebook.runtime import OwnerRuntime
+    from omicsclaw.entry.notebook.service import NotebookError
+    from omicsclaw.memory.database import Database
+    from omicsclaw.permission import PermissionGate, gate_tools
+    from omicsclaw.schema import ToolCall
+    from omicsclaw.tools.builtin.python_kernel import PythonKernelTool
+    from omicsclaw.tools.context import use_tool_context
+    from omicsclaw.tools.registry import ToolRegistry
+
+    # Simulate legacy workspace with 0755 .omicsclaw and 0644 memory.db
+    state_dir = workspace / ".omicsclaw"
+    state_dir.mkdir(exist_ok=True)
+    os.chmod(state_dir, 0o755)
+    db = Database(state_dir / "memory.db")
+    db.close()
+    os.chmod(state_dir / "memory.db", 0o644)
+
+    async def scenario():
+        owner = OwnerRuntime(
+            workspace,
+            {"authorityId": "a" * 32, "workspaceId": "b" * 32},
+            source_digest="fixture",
+            env={},
+            config=None,
+        )
+        await owner.start()
+        try:
+            assert (os.stat(state_dir / "memory.db").st_mode & 0o077) == 0
+        finally:
+            await owner.close()
+
+        # Verify SSHNotebookContext.prepare_request does not crash non-notebook turns when owner is unavailable
+        class _UnavailableClient:
+            async def attach(self):
+                raise NotebookError("notebook_owner_unavailable", 503)
+
+            async def call(self, *args, **kwargs):
+                raise NotebookError("notebook_owner_unavailable", 503)
+
+        binding = SSHNotebookBinding(_UnavailableClient())
+        prepared = await binding.notebook_augmentor("chat-1").prepare_request(
+            (), (), "req-1"
+        )
+        assert len(prepared.messages) == 1
+        assert "notebook_owner_unavailable" in prepared.messages[0].content
+
+        tools = ToolRegistry(
+            gate_tools((PythonKernelTool(runner=binding),), PermissionGate()),
+            before_execute=binding.before_tool,
+        )
+        call = ToolCall(id="c1", name="python", arguments='{"code": "1+1"}')
+        with use_tool_context(
+            approval=lambda _req: True, values={"session_id": "chat-1"}
+        ):
+            with tools.use_request_context(prepared.context, 0, call):
+                result = await tools.execute(call)
+        assert result.is_error
+        assert "notebook_owner_unavailable" in result.output
+
+    asyncio.run(scenario())

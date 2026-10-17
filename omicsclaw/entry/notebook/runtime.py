@@ -335,17 +335,27 @@ class OwnerRuntime:
             persisted = load_persisted_egress_grants(
                 self.workspace / ".omicsclaw" / EGRESS_GRANTS_FILENAME
             )
-            sandbox_cfg = (
-                dataclasses.replace(
-                    self.config,
-                    egress_allow=tuple(
-                        dict.fromkeys((*self.config.egress_allow, *persisted))
-                    ),
-                    extra_allowed_domains=self.config.extra_allowed_domains
-                    | frozenset(persisted),
-                )
-                if persisted
-                else self.config
+            owner_root = Path(__file__).resolve().parents[3]
+            owner_code_mounts = tuple(
+                path
+                for path in (owner_root / "omicsclaw", owner_root / "skills")
+                if path.is_dir()
+                and self.workspace != owner_root
+                and self.workspace not in owner_root.parents
+            )
+            sandbox_cfg = dataclasses.replace(
+                self.config,
+                egress_allow=tuple(
+                    dict.fromkeys((*self.config.egress_allow, *persisted))
+                ),
+                extra_allowed_domains=self.config.extra_allowed_domains
+                | frozenset(persisted),
+                extra_read_paths=tuple(
+                    dict.fromkeys((*self.config.extra_read_paths, *owner_code_mounts))
+                ),
+                read_only_mounts=tuple(
+                    dict.fromkeys((*self.config.read_only_mounts, *owner_code_mounts))
+                ),
             )
             self.sandbox = SandboxManager(
                 self.workspace, config=sandbox_cfg, env_provider=lambda: self.env

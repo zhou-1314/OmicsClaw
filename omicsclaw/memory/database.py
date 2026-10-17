@@ -415,11 +415,11 @@ class Database:
             self._conn.executescript(SCHEMA)
             self._conn.commit()
             _migrate(self._conn)
-        if created:
-            for suffix in ("-wal", "-shm"):
+        if self.path != ":memory:":
+            for suffix in ("", "-wal", "-shm"):
                 try:
                     os.chmod(self.path + suffix, PRIVATE_FILE_MODE)
-                except FileNotFoundError:
+                except OSError:
                     pass
 
     def run(self, work: Callable[[sqlite3.Connection], T]) -> T:

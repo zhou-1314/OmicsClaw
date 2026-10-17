@@ -18,8 +18,17 @@ def private_directory(path: Path) -> Path:
             raise ValueError("notebook_unsafe_state")
         candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = candidate.stat()
-        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        if info.st_uid != os.getuid():
             raise ValueError("notebook_unsafe_state")
+        if info.st_mode & 0o022:
+            if candidate == path or candidate.name == ".omicsclaw":
+                try:
+                    os.chmod(candidate, 0o700)
+                    info = candidate.stat()
+                except OSError:
+                    pass
+            if info.st_mode & 0o022:
+                raise ValueError("notebook_unsafe_state")
     return path
 
 
@@ -30,10 +39,18 @@ def private_file(path: Path) -> int:
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.getuid()
         or info.st_nlink != 1
-        or info.st_mode & 0o077
     ):
         os.close(fd)
         raise ValueError("notebook_unsafe_state")
+    if info.st_mode & 0o077:
+        try:
+            os.fchmod(fd, 0o600)
+            info = os.fstat(fd)
+        except OSError:
+            pass
+        if info.st_mode & 0o077:
+            os.close(fd)
+            raise ValueError("notebook_unsafe_state")
     return fd
 
 
@@ -45,10 +62,17 @@ def read_private(path: Path, limit: int = 16384):
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
             or info.st_nlink != 1
-            or info.st_mode & 0o077
             or info.st_size > limit
         ):
             raise ValueError("notebook_unsafe_state")
+        if info.st_mode & 0o077:
+            try:
+                os.fchmod(fd, 0o600)
+                info = os.fstat(fd)
+            except OSError:
+                pass
+            if info.st_mode & 0o077:
+                raise ValueError("notebook_unsafe_state")
         return json.loads(os.read(fd, limit + 1))
     finally:
         os.close(fd)
