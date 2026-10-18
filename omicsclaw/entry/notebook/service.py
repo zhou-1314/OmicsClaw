@@ -164,6 +164,8 @@ class NotebookAnalysis:
         on_output=None,
         timeout_s=None,
         location="local",
+        language="python",
+        description="",
     ):
         binding = self.binding(session_id=session_id)
         if binding is None:
@@ -382,6 +384,8 @@ class NotebookAnalysis:
         on_output=None,
         timeout_s=1800,
         semantic=None,
+        language=None,
+        description="",
     ):
         identifier(command)
         if source is not None and (
@@ -427,13 +431,14 @@ class NotebookAnalysis:
             ):
                 raise NotebookError("kernel_owner_elsewhere", 409)
             cell = self.store._get_cell(c, nid, cid)
+            desc = (semantic.get("description") if isinstance(semantic, dict) else "") or description
             if cell is None and source is not None:
                 cell = NotebookCell(
                     nid,
                     cid,
                     source=source,
-                    provenance={"source": "agent_run"},
-                    language=semantic["language"] if semantic else "python",
+                    provenance={"source": "agent_run", **({"description": desc} if desc else {})},
+                    language=semantic["language"] if semantic else (language or "python"),
                     trust_label="agent_code",
                 )
             if cell is None:
@@ -450,10 +455,11 @@ class NotebookAnalysis:
                 "source": "agent_run" if origin == "agent" else "user_run",
                 "origin": origin,
                 "timeout_s": timeout_s,
-                "language": semantic["language"] if semantic else cell.language,
+                "language": semantic["language"] if semantic else (language or cell.language),
                 "source_revision": expected,
                 "code": cell.source,
                 "session_id": kernel_session,
+                **({"description": desc} if desc else {}),
             }
             if self.coordination is not None:
                 from .contracts import public_semantic
@@ -584,6 +590,8 @@ class NotebookAnalysis:
         )
         try:
             record = await self.store.get_execution(eid)
+            if self.coordination is None:
+                language = record.provenance.get("language", "python")
             stream = (
                 self.coordination.stream(kernel_session, eid, self.events)
                 if self.coordination is not None
@@ -644,6 +652,7 @@ class NotebookAnalysis:
                 "stderr": result.stderr,
                 "error": result.error,
                 "figures": [asdict(f) for f in result.figures],
+                "files_written": getattr(result, "files_written", []),
                 "execution_count": result.execution_count,
                 "usage": result.usage,
             }

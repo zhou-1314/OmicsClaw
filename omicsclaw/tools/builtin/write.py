@@ -118,6 +118,13 @@ WRITE_SCHEMA: dict[str, Any] = {
                 "empty string to write an empty file."
             ),
         },
+        "description": {
+            "type": "string",
+            "description": (
+                "Concise 3-8 word gerund phrase describing this step "
+                "(e.g., 'Listing OmicsClaw data directory')."
+            ),
+        },
     },
     "required": ["path", "content"],
     "additionalProperties": False,

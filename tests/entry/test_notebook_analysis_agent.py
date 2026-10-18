@@ -254,7 +254,7 @@ def test_metadata_request_is_checked_before_and_after_permission(tmp_path, takeo
                 )
             assert len(approvals) == (0 if takeover_at == "inference" else 1)
             assert any(
-                message.is_error and "notebook_user_control" in message.content
+                message.is_error and "notebook_request_stale" in message.content
                 for message in result.messages
             )
             assert not owner.manager.codes

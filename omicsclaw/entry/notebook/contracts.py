@@ -10,7 +10,7 @@ from .service import NotebookError, identifier, revision
 OWNER_PROTOCOL = 1
 MAX_RESPONSE_BYTES = 256 * 1024
 MAX_SOURCE_BYTES = 64 * 1024
-MAX_PAGE = 40
+MAX_PAGE = 200
 MAX_KERNELS = 8
 MAX_PENDING = 16
 MAX_OUTPUT_BYTES = 1024 * 1024
@@ -54,7 +54,11 @@ def command(document):
         "timeoutSeconds",
         "preconditions",
     }
-    if not isinstance(document, dict) or set(document) != fields:
+    if not isinstance(document, dict) or (set(document) - {"description"}) != fields:
+        raise NotebookError("invalid_notebook_command")
+    if "description" in document and (
+        not isinstance(document["description"], str) or len(document["description"]) > 512
+    ):
         raise NotebookError("invalid_notebook_command")
     for key in (
         "notebookId",

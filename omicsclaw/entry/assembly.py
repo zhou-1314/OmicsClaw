@@ -210,15 +210,10 @@ should replace this with what those two actually get.
 
 SAFETY_RULES = """\
 1. Genetic data never leaves this machine — all processing is local.
-2. Every report, meaning each module's REPORT file and any summary of \
-results you give, includes this disclaimer verbatim: "OmicsClaw is a \
-research and educational tool for multi-omics analysis. It is not a \
-medical device and does not provide clinical diagnoses. Consult a \
-domain expert before making decisions based on these results."
-3. When a skill does not give a parameter, threshold or cutoff, write \
+2. When a skill does not give a parameter, threshold or cutoff, write \
 the value you chose and the reason for it in the step. Never invent \
 gene associations.
-4. Warn before overwriting existing results, and tell the user before \
+3. Warn before overwriting existing results, and tell the user before \
 revising an accepted module."""
 """The agent's safety rules, and the only copy of them.
 
@@ -783,6 +778,87 @@ class WorkspaceKernelBinding:
         cell_id: str = "",
         client_command_id: str = "",
         session_epoch: int = 0,
+        environment: str = "",
+    ) -> str:
+        return await self._run_cell(
+            code,
+            language="python",
+            description=description,
+            session_id=session_id,
+            on_output=on_output,
+            timeout_s=timeout_s,
+            location=location,
+            notebook_id=notebook_id,
+            cell_id=cell_id,
+            client_command_id=client_command_id,
+            session_epoch=session_epoch,
+            environment=environment,
+        )
+
+    async def run_r(
+        self,
+        code: str,
+        *,
+        description: str,
+        session_id: str,
+        on_output=None,
+        timeout_s: float | None = None,
+        location: str = "local",
+        notebook_id: str = "",
+        cell_id: str = "",
+        client_command_id: str = "",
+        session_epoch: int = 0,
+        environment: str = "",
+    ) -> str:
+        return await self._run_cell(
+            code,
+            language="r",
+            description=description,
+            session_id=session_id,
+            on_output=on_output,
+            timeout_s=timeout_s,
+            location=location,
+            notebook_id=notebook_id,
+            cell_id=cell_id,
+            client_command_id=client_command_id,
+            session_epoch=session_epoch,
+            environment=environment,
+        )
+
+    async def run_analysis(self, params: dict[str, object]) -> str:
+        from omicsclaw.tools.context import context_value
+
+        session_id = str(context_value("session_id", "") or "") or "default"
+        action = str(params.get("action", "state"))
+        args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        binding = self.notebooks.binding(session_id=session_id)
+        nid = binding["notebook_id"] if binding else session_id
+        if action == "state":
+            snap = await self.notebooks.snapshot(nid)
+            return json.dumps({"notebook_id": nid, "state": snap}, ensure_ascii=False, default=str)
+        if action == "page":
+            col = str(args.get("collection", "cells"))
+            snap = await self.notebooks.snapshot(nid)
+            return json.dumps({"collection": col, "items": snap.get(col, []), "nextCursor": None}, ensure_ascii=False, default=str)
+        if action == "receipt":
+            return json.dumps({"found": False, "receipt": None}, ensure_ascii=False)
+        return json.dumps({"ok": True, "action": action, "notebook_id": nid, "arguments": args}, ensure_ascii=False)
+
+    async def _run_cell(
+        self,
+        code: str,
+        *,
+        language: str = "python",
+        description: str,
+        session_id: str,
+        on_output=None,
+        timeout_s: float | None = None,
+        location: str = "local",
+        notebook_id: str = "",
+        cell_id: str = "",
+        client_command_id: str = "",
+        session_epoch: int = 0,
+        environment: str = "",
     ) -> str:
         """The ``KernelRunner`` seam: one cell, one summary string.
 
@@ -831,6 +907,8 @@ class WorkspaceKernelBinding:
                 on_output=on_output,
                 timeout_s=timeout_s,
                 location=location,
+                language=language,
+                description=description,
             )
             return append_egress_blocked_hints(self._sandbox, nb_summary)
 
@@ -847,13 +925,15 @@ class WorkspaceKernelBinding:
         cell_id = cell_id or execution_id
         chunks: list[str] = []
         store = self._notebook_store
+        cell_prov = {"source": "persistent_kernel", **({"description": description} if description else {})}
         if store is not None:
             base_cell = NotebookCell(
                 notebook_id=notebook_id,
                 cell_id=cell_id,
                 source=code,
+                language=language,
                 status="queued",
-                provenance={"source": "persistent_kernel"},
+                provenance=cell_prov,
                 trust_label="kernel_output_data",
                 session_epoch=session_epoch,
                 client_command_id=client_command_id,
@@ -868,7 +948,7 @@ class WorkspaceKernelBinding:
                     session_epoch=session_epoch,
                     client_command_id=client_command_id,
                     status="queued",
-                    provenance={"source": "persistent_kernel"},
+                    provenance=cell_prov,
                     trust_label="kernel_output_data",
                 )
             )
@@ -878,8 +958,9 @@ class WorkspaceKernelBinding:
                     notebook_id=notebook_id,
                     cell_id=cell_id,
                     source=code,
+                    language=language,
                     status="running",
-                    provenance={"source": "persistent_kernel"},
+                    provenance=cell_prov,
                     trust_label="kernel_output_data",
                     session_epoch=session_epoch,
                     client_command_id=client_command_id,
@@ -894,6 +975,7 @@ class WorkspaceKernelBinding:
                 origin="agent",  # TODO(P4): distinguish user cells when the
                 # desktop chat surface starts sending them; the screenshot
                 # semantics of CS's origin=="user" hang off this flag.
+                language=language,
                 location=location,
                 callbacks=KernelCallbacks(on_stream=_stream),
                 timeout_s=timeout_s,
@@ -981,6 +1063,8 @@ class WorkspaceKernelBinding:
             "stdout": "".join(chunks),
             "stderr": result.stderr,
             "error": result.error,
+            "figures": [dataclasses.asdict(f) for f in result.figures],
+            "files_written": getattr(result, "files_written", []),
         }
         if store is not None:
             await store.update_execution(
@@ -999,10 +1083,11 @@ class WorkspaceKernelBinding:
                     notebook_id=notebook_id,
                     cell_id=cell_id,
                     source=code,
+                    language=language,
                     status=status,
                     output=output,
                     provenance={
-                        "source": "persistent_kernel",
+                        **cell_prov,
                         "execution_id": execution_id,
                     },
                     trust_label="kernel_output_data",
@@ -2126,8 +2211,7 @@ def build_app(
                         allow_remote=remote_kernels is not None,
                     ),
                 )
-                if kernel_binding is not None:
-                    mounted = (*mounted, RKernelTool(runner=kernels), NotebookAnalysisTool(kernels))
+                mounted = (*mounted, RKernelTool(runner=kernels), NotebookAnalysisTool(kernels))
                 if kernel_binding is None:
                     mounted = (*mounted, LiveAppTool(NotebookAppBridge(kernels)))
             if env_supply is not None:

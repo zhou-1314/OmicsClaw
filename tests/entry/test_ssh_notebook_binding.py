@@ -161,7 +161,7 @@ def test_user_takeover_during_approval_refuses_late_allow(tmp_path, monkeypatch)
                 await runtime.admit({"command": user_command})
                 released.set()
                 result = await pending
-            assert result.is_error and "notebook_user_control" in result.output
+            assert result.is_error and "notebook_request_stale" in result.output
             assert "must_not_run = 1" not in manager.codes
         finally:
             await runtime.close()

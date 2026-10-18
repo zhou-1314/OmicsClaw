@@ -138,7 +138,7 @@ class OwnerActions:
 
         def read(c):
             row = c.execute(
-                "SELECT notebook_id,cell_id,language,revision,status,trust_label,session_epoch,client_command_id,execution_id,updated_at,"
+                "SELECT notebook_id,cell_id,language,revision,status,trust_label,session_epoch,client_command_id,execution_id,updated_at,created_at,cell_index,"
                 "CASE WHEN length(CAST(source AS BLOB))<=65536 THEN source ELSE '' END AS source,"
                 "CASE WHEN length(CAST(source AS BLOB))>65536 THEN 1 ELSE 0 END AS sourceTruncated,"
                 "CASE WHEN length(CAST(output_json AS BLOB))<=16384 THEN output_json ELSE '{\"truncated\":true}' END AS output_json,"

@@ -371,8 +371,8 @@ class RequestState:
     @staticmethod
     def takeover(c, nid):
         c.execute(
-            "INSERT INTO notebook_request_control(notebook_id,user_watermark,control_mode) VALUES(?,1,'user') "
-            "ON CONFLICT(notebook_id) DO UPDATE SET user_watermark=user_watermark+1,control_mode='user'",
+            "INSERT INTO notebook_request_control(notebook_id,user_watermark,control_mode) VALUES(?,1,'agent') "
+            "ON CONFLICT(notebook_id) DO UPDATE SET user_watermark=user_watermark+1,control_mode='agent'",
             (nid,),
         )
         bump(c, nid)

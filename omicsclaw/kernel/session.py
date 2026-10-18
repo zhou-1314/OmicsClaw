@@ -140,6 +140,7 @@ class CellResult:
     usage: dict[str, Any] = field(default_factory=dict)
     notice: str = ""
     outputs: list[dict[str, Any]] = field(default_factory=list)
+    files_written: list[dict[str, Any]] = field(default_factory=list)
     """A kernel-restart handover notice, prepended to stderr by the manager."""
 
 
@@ -215,6 +216,58 @@ def _session_slug(session_id: str) -> str:
     """The session id made filename-safe (shared by the basename and the
     seeding scan, so the two can never disagree)."""
     return re.sub(r"[^0-9A-Za-z_.-]", "-", session_id)[:32].strip("-") or "s"
+
+
+
+_TRACKED_FILE_EXTS: Final = frozenset(
+    {
+        ".png", ".jpg", ".jpeg", ".svg", ".pdf",
+        ".csv", ".tsv", ".h5ad", ".rds", ".html",
+        ".parquet", ".txt", ".json", ".xlsx",
+    }
+)
+_IMAGE_MIMES: Final = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+}
+
+
+def _scan_workspace_files(
+    workspace: Path, *, max_entries: int = 2000
+) -> dict[str, tuple[int, int]]:
+    out: dict[str, tuple[int, int]] = {}
+    if not workspace.is_dir():
+        return out
+    seen = 0
+    stack: list[tuple[Path, int]] = [(workspace, 0)]
+    while stack and seen < max_entries:
+        cur, depth = stack.pop()
+        try:
+            entries = list(os.scandir(cur))
+        except OSError:
+            continue
+        for entry in entries:
+            if seen >= max_entries:
+                break
+            name = entry.name
+            if name.startswith(".") or name in {"node_modules", "__pycache__", "venv"}:
+                continue
+            seen += 1
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if depth < 3:
+                        stack.append((Path(entry.path), depth + 1))
+                elif entry.is_file(follow_symlinks=False):
+                    ext = Path(name).suffix.lower()
+                    if ext in _TRACKED_FILE_EXTS:
+                        st = entry.stat(follow_symlinks=False)
+                        rel = Path(entry.path).relative_to(workspace).as_posix()
+                        out[rel] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                continue
+    return out
 
 
 def figure_basename(session_id: str, number: int) -> str:
@@ -849,6 +902,7 @@ class SessionKernel:
             return forward
 
         self._interrupted = False
+        before_files = _scan_workspace_files(self.workspace) if store_history else {}
         msg_id = self._kc.execute(code, store_history=store_history)
         deadline = began + max(0.0, float(timeout_s))
         interrupted_at: float | None = None
@@ -1019,6 +1073,39 @@ class SessionKernel:
                 result.status = "interrupted"
             else:
                 result.status = "error"
+        if store_history:
+            after_files = _scan_workspace_files(self.workspace)
+            captured_paths = {str(Path(f.path).resolve()) for f in figures}
+            auto_prefix = f"figures/kernel_{_session_slug(self.session_id)}_"
+            written: list[dict[str, Any]] = []
+            for rel in sorted(after_files):
+                if rel.startswith(auto_prefix):
+                    continue
+                mtime_ns, size = after_files[rel]
+                if before_files.get(rel) == (mtime_ns, size):
+                    continue
+                written.append({"path": rel, "size_bytes": size})
+                full_path = self.workspace / rel
+                ext = full_path.suffix.lower()
+                if ext in _IMAGE_MIMES and str(full_path.resolve()) not in captured_paths:
+                    mime = _IMAGE_MIMES[ext]
+                    artifact_id = ""
+                    if self._on_figure is not None:
+                        try:
+                            artifact_id, _kind = self._on_figure(full_path, mime)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    ref = FigureRef(path=str(full_path), mime=mime, artifact_id=artifact_id)
+                    figures.append(ref)
+                    captured_paths.add(str(full_path.resolve()))
+                    if callbacks.on_display is not None:
+                        try:
+                            callbacks.on_display(ref)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if artifact_id:
+                        ordered.add({"type": "image", "artifactId": artifact_id, "mime": mime})
+            result.files_written = written
         result.stdout = tallies["stdout"].text()
         result.stderr = tallies["stderr"].text()
         result.figures = figures

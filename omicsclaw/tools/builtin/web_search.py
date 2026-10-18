@@ -143,6 +143,13 @@ SEARCH_SCHEMA: dict[str, Any] = {
                 f"clamped to {MAX_RESULTS}."
             ),
         },
+        "description": {
+            "type": "string",
+            "description": (
+                "Concise 3-8 word gerund phrase describing this step "
+                "(e.g., 'Listing OmicsClaw data directory')."
+            ),
+        },
     },
     "required": ["query"],
     "additionalProperties": False,

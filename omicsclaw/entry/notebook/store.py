@@ -142,12 +142,12 @@ class OwnerViews:
             raise NotebookError("invalid_notebook_page")
         return cursor["after"]
 
-    def _page(self, rows, convert, key, scope, limit):
+    def _page(self, rows, convert, key, scope, limit, *, max_bytes=MAX_RESPONSE_BYTES - 8192):
         items, size = [], 2048
         for row in rows[:limit]:
             item = convert(row)
             cost = len(encoded(item))
-            if cost + size > MAX_RESPONSE_BYTES - 8192:
+            if cost + size > max_bytes:
                 break
             items.append(item)
             size += cost
@@ -200,6 +200,17 @@ class OwnerViews:
         result = dict(row)
         for key in ("output_json", "provenance_json"):
             result[key[:-5]] = json.loads(result.pop(key) or "null")
+        if "cell_index" in result:
+            result["cellIndex"] = result["cell_index"]
+        if "created_at" in result or "updated_at" in result:
+            result["createdAt"] = (
+                result.get("created_at")
+                if result.get("created_at") is not None
+                else result.get("updated_at")
+            )
+        prov = result.get("provenance")
+        if isinstance(prov, dict) and prov.get("description") and "description" not in result:
+            result["description"] = prov["description"]
         return result
 
     @staticmethod
@@ -220,7 +231,7 @@ class OwnerViews:
     def _execution_select():
         return (
             "SELECT e.execution_id,e.notebook_id,e.cell_id,e.session_epoch,e.client_command_id,"
-            "e.status,e.revision,e.created_at,e.finished_at,e.trust_label,"
+            "e.status,e.revision,e.created_at,e.finished_at,e.trust_label,e.cell_index,"
             "CASE WHEN length(CAST(e.output_json AS BLOB))<=65536 THEN e.output_json "
             "ELSE '{\"truncated\":true}' END AS output_json,"
             "CASE WHEN length(CAST(e.provenance_json AS BLOB))<=73728 THEN e.provenance_json "
@@ -252,31 +263,74 @@ class OwnerViews:
         ea = self._after(execution_cursor, "executions:" + nid, "")
 
         def read(c):
-            cells = c.execute(
+            c_select = (
                 "SELECT notebook_id,cell_id,language,revision,status,trust_label,session_epoch,"
-                "client_command_id,execution_id,updated_at,"
+                "client_command_id,execution_id,updated_at,created_at,cell_index,"
                 "CASE WHEN length(CAST(source AS BLOB))<=65536 THEN source ELSE '' END AS source,"
                 "CASE WHEN length(CAST(source AS BLOB))>65536 THEN 1 ELSE 0 END AS sourceTruncated,"
                 "CASE WHEN length(CAST(output_json AS BLOB))<=16384 THEN output_json ELSE '{\"truncated\":true}' END AS output_json,"
-                "'{}' AS provenance_json FROM notebook_cells WHERE notebook_id=? AND cell_id>? "
-                "ORDER BY cell_id LIMIT ?",
-                (nid, ca, limit + 1),
-            ).fetchall()
-            executions = c.execute(
-                self._execution_select() + "WHERE e.notebook_id=? AND e.execution_id>? "
-                "ORDER BY e.execution_id LIMIT ?",
-                (nid, ea, limit + 1),
-            ).fetchall()
-            # Divide the response budget between the independent pages.
+                "'{}' AS provenance_json FROM notebook_cells "
+            )
+            c_order = "ORDER BY COALESCE(cell_index,999999) ASC,COALESCE(created_at,updated_at) ASC,cell_id ASC LIMIT ?"
+            c_anchor = (
+                c.execute(
+                    "SELECT COALESCE(cell_index,999999),COALESCE(created_at,updated_at) FROM notebook_cells WHERE notebook_id=? AND cell_id=?",
+                    (nid, ca),
+                ).fetchone()
+                if ca
+                else None
+            )
+            if c_anchor is not None:
+                cells = c.execute(
+                    c_select
+                    + "WHERE notebook_id=? AND (COALESCE(cell_index,999999),COALESCE(created_at,updated_at),cell_id)>(?,?,?) "
+                    + c_order,
+                    (nid, c_anchor[0], c_anchor[1], ca, limit + 1),
+                ).fetchall()
+            else:
+                cells = c.execute(
+                    c_select + "WHERE notebook_id=? AND cell_id>? " + c_order,
+                    (nid, ca, limit + 1),
+                ).fetchall()
+            e_order = "ORDER BY e.created_at ASC,e.execution_id ASC LIMIT ?"
+            e_anchor = (
+                c.execute(
+                    "SELECT created_at FROM notebook_executions WHERE notebook_id=? AND execution_id=?",
+                    (nid, ea),
+                ).fetchone()
+                if ea
+                else None
+            )
+            if e_anchor is not None:
+                executions = c.execute(
+                    self._execution_select()
+                    + "WHERE e.notebook_id=? AND (e.created_at,e.execution_id)>(?,?) "
+                    + e_order,
+                    (nid, e_anchor[0], ea, limit + 1),
+                ).fetchall()
+            else:
+                executions = c.execute(
+                    self._execution_select()
+                    + "WHERE e.notebook_id=? AND e.execution_id>? "
+                    + e_order,
+                    (nid, ea, limit + 1),
+                ).fetchall()
+            half_budget = (MAX_RESPONSE_BYTES - 32768) // 2
             cp = self._page(
-                cells, self._cell, lambda r: r["cell_id"], "cells:" + nid, min(limit, 1)
+                cells,
+                self._cell,
+                lambda r: r["cell_id"],
+                "cells:" + nid,
+                limit,
+                max_bytes=half_budget,
             )
             ep = self._page(
                 executions,
                 self._record,
                 lambda r: r["execution_id"],
                 "executions:" + nid,
-                min(limit, 1),
+                limit,
+                max_bytes=half_budget,
             )
             binding = c.execute(
                 "SELECT * FROM notebook_bindings WHERE notebook_id=?", (nid,)

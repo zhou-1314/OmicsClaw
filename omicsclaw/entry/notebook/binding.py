@@ -187,6 +187,7 @@ class SSHNotebookBinding:
         on_output=None,
         timeout_s=None,
         location="local",
+        environment="",
     ):
         invocation, state = self.invocation()
         original = json.loads(invocation.call.arguments)
@@ -226,6 +227,7 @@ class SSHNotebookBinding:
             "cellId": command_id,
             "commandId": command_id,
             "source": code,
+            **({"description": description[:512]} if description else {}),
             "expectedRevision": 0,
             "language": language,
             "origin": "agent",
@@ -278,6 +280,7 @@ class SSHNotebookBinding:
                 "notebook_id": nid,
                 "cell_id": command_id,
                 "execution_id": record["execution_id"],
+                **({"description": description} if description else {}),
                 "status": record["status"],
                 "durability": record["durability"],
                 "output": record.get("output"),

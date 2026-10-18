@@ -103,6 +103,13 @@ FETCH_SCHEMA: dict[str, Any] = {
                 f"{DEFAULT_MAX_CHARS}, clamped to {HARD_MAX_CHARS}."
             ),
         },
+        "description": {
+            "type": "string",
+            "description": (
+                "Concise 3-8 word gerund phrase describing this step "
+                "(e.g., 'Listing OmicsClaw data directory')."
+            ),
+        },
     },
     "required": ["url"],
     "additionalProperties": False,

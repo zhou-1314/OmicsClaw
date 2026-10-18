@@ -124,6 +124,9 @@ def human_tool_description(tool: str, arguments: str = "") -> str:
         decoded = {}
     if not isinstance(decoded, dict):
         decoded = {}
+    explicit = decoded.get("description")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()[:HUMAN_DESCRIPTION_CHARS]
     facts: list[str] = []
     command = decoded.get("command")
     if isinstance(command, str) and command.strip():
@@ -516,6 +519,11 @@ def _payload(event: TurnEvent) -> dict[str, Any]:
             # re-encode can reorder keys, and those bytes are what
             # prompt-prefix caching and replay evidence are matched on.
             "arguments": call.arguments if call is not None else "",
+            "description": (
+                human_tool_description(call.name, call.arguments)
+                if call is not None and call.name
+                else ""
+            ),
         }
     if kind is TurnEventType.TOOL_RESULT:
         return _tool_result_payload(event)
@@ -569,12 +577,20 @@ def _payload(event: TurnEvent) -> dict[str, Any]:
 def _tool_result_payload(event: TurnEvent) -> dict[str, Any]:
     engine = event.engine
     result = engine.tool_result if engine is not None else None
+    call = engine.tool_call if engine is not None else None
     elapsed = engine.duration_s if engine is not None else None
+    content = result.output if result is not None else ""
+    tname = result.name if result is not None else (call.name if call is not None else "")
+    targs = call.arguments if call is not None else ""
+    if not targs and isinstance(content, str) and content.startswith("{") and '"description"' in content:
+        targs = content
     return {
         "turn": engine.turn if engine is not None else 0,
         "tool_use_id": result.tool_call_id if result is not None else "",
-        "tool_name": result.name if result is not None else "",
-        "content": result.output if result is not None else "",
+        "tool_name": tname,
+        "description": human_tool_description(tname, targs) if tname else "",
+        "content": content,
+        "output_line_count": len(str(content).splitlines()) if content else 0,
         "is_error": bool(result.is_error) if result is not None else False,
         # Not ``duration_s``: the engine measures wall clock from the
         # scheduler's side, so this includes however long a human took to

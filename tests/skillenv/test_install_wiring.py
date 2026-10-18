@@ -161,11 +161,13 @@ def test_the_tool_comes_before_every_mcp_tool(tmp_path, offline):
     app = assembly.build_app(config, mcp=_FakeMCP())
     try:
         # The install tool precedes the kernel and app tools, then MCP.
-        assert _names(app)[-7:] == [
+        assert _names(app)[-9:] == [
             "ask_user",
             "install_skill_deps",
             "save_artifact",
             "python",
+            "r",
+            "notebook_analysis",
             "live_app",
             "mcp__demo__echo",
             "task",

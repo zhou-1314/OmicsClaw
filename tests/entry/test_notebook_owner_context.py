@@ -115,7 +115,7 @@ def test_snapshot_tokens_are_private_session_request_and_state_bound(
                     await r.check_request({**check, **changed})
             record = await r.admit({"command": command})
             await settled(r, record["execution_id"])
-            with pytest.raises(NotebookError, match="notebook_user_control"):
+            with pytest.raises(NotebookError, match="notebook_request_stale"):
                 await r.check_request(check)
             after = await r.context({"sessionId": "chat", "requestId": "next"})
             assert after["summary"]["state"]["stateSeq"] == 1
@@ -151,14 +151,14 @@ def test_takeover_in_the_final_transaction_refuses_an_earlier_request(
                 r.requests.takeover(c, "nb")
                 r.requests.verify(c, snap["token"], "chat", "request")
 
-            with pytest.raises(NotebookError, match="notebook_user_control"):
+            with pytest.raises(NotebookError, match="notebook_request_stale"):
                 r.service._transaction(admission)
             # Both writes are rolled back by the original transaction boundary.
             assert (await r.context({"sessionId": "chat", "requestId": "after"}))[
                 "summary"
             ]["state"]["userWatermark"] == 0
             r.service._transaction(lambda c: r.requests.takeover(c, "nb"))
-            with pytest.raises(NotebookError, match="notebook_user_control"):
+            with pytest.raises(NotebookError, match="notebook_request_stale"):
                 await r.check_request(
                     {
                         "sessionId": "chat",

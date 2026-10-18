@@ -187,6 +187,7 @@ class Controller:
                 "environments.preflight": self.environment_preflight,
                 "environments.accept": self.environment_accept,
                 "desktop.request": self.desktop_request,
+                "compute.status": self.compute_status,
                 "model.title": self.title,
                 "model.test": self.provider_test,
             }
@@ -1097,6 +1098,34 @@ class Controller:
                 return
             has_py = any(r.get("spec", {}).get("language") == "python" and r.get("status") == "ready" for r in rows)
             has_r = any(r.get("spec", {}).get("language") == "r" and r.get("status") == "ready" for r in rows)
+            conda_prefixes = []
+            home = Path.home()
+            env_txt = home / ".conda" / "environments.txt"
+            if env_txt.is_file():
+                try:
+                    for line in env_txt.read_text(encoding="utf-8", errors="ignore").splitlines():
+                        p_str = line.strip()
+                        if p_str.startswith("/"):
+                            cp = Path(p_str)
+                            if cp.is_dir() and cp not in conda_prefixes:
+                                conda_prefixes.append(cp)
+                except OSError:
+                    pass
+            for root_dir in (
+                home / ".claude-science" / "conda" / "envs",
+                Path("/opt/conda/envs"),
+                home / "miniconda3" / "envs",
+                home / "anaconda3" / "envs",
+                home / "miniforge3" / "envs",
+                home / "mambaforge" / "envs",
+            ):
+                if root_dir.is_dir():
+                    try:
+                        for sub in sorted(root_dir.iterdir()):
+                            if sub.is_dir() and sub not in conda_prefixes:
+                                conda_prefixes.append(sub)
+                    except OSError:
+                        pass
             if not has_py:
                 py_candidates = []
                 if self.science is not None and getattr(self.science, "python", None):
@@ -1108,8 +1137,13 @@ class Controller:
                 ])
                 if os.environ.get("CONDA_PREFIX"):
                     py_candidates.append(Path(os.environ["CONDA_PREFIX"]) / "bin/python")
+                for cp in conda_prefixes[:12]:
+                    py_bin = cp / "bin" / "python"
+                    if py_bin.is_file() and any((cp / "lib").glob("python*/site-packages/ipykernel")):
+                        py_candidates.append(py_bin)
                 py_candidates.extend([Path("/opt/conda/bin/python"), Path(sys.executable)])
-                seen_py = set()
+                seen_py = {r.get("spec", {}).get("executable") for r in rows}
+                ready_py = 0
                 for cand in py_candidates:
                     s = str(cand)
                     if not s.startswith("/") or s in seen_py or not cand.is_file():
@@ -1123,43 +1157,59 @@ class Controller:
                             "requiredPackages": [],
                         })
                         if reg.get("status") == "ready":
-                            break
+                            ready_py += 1
+                            if not self.production or ready_py >= 6:
+                                break
                     except Exception:
                         continue
             if not has_r:
                 r_candidates = []
                 if self.science is not None and getattr(self.science, "rscript", None):
-                    r_candidates.append(Path(self.science.rscript))
-                r_candidates.extend([
-                    Path("/opt/conda/envs/OmicsClaw/bin/R"),
-                    Path("/usr/local/bin/R"),
-                    Path("/usr/bin/R"),
-                    Path("/usr/bin/Rscript"),
-                ])
-                r_libs = []
+                    r_candidates.append((Path(self.science.rscript), []))
+                r_candidates.append((Path("/opt/conda/envs/OmicsClaw/bin/R"), ["/opt/conda/envs/OmicsClaw/lib/R/library"]))
+                for cp in conda_prefixes[:12]:
+                    r_bin = cp / "bin" / "R"
+                    r_lib = cp / "lib" / "R" / "library"
+                    if r_bin.is_file() and (r_lib / "IRkernel").is_dir():
+                        r_candidates.append((r_bin, [str(r_lib)]))
+                for sys_r in (Path("/usr/local/bin/R"), Path("/usr/bin/R"), Path("/usr/bin/Rscript")):
+                    r_candidates.append((sys_r, []))
+                base_r_libs = []
                 if self.science is not None and getattr(self.science, "r_library", None):
-                    r_libs.extend(str(p) for p in (self.science.r_library if isinstance(self.science.r_library, (list, tuple)) else [self.science.r_library]))
+                    base_r_libs.extend(str(p) for p in (self.science.r_library if isinstance(self.science.r_library, (list, tuple)) else [self.science.r_library]))
                 for std_lib in ("/usr/local/lib/R/site-library", "/usr/lib/R/site-library", "/usr/lib/R/library"):
-                    if Path(std_lib).is_dir() and std_lib not in r_libs:
-                        r_libs.append(std_lib)
-                if r_libs:
-                    seen_r = set()
-                    for cand in r_candidates:
-                        s = str(cand)
-                        if not s.startswith("/") or s in seen_r or not cand.is_file():
-                            continue
-                        seen_r.add(s)
-                        try:
-                            reg = await self.environments.register({
-                                "language": "r",
-                                "executable": s,
-                                "libraryPaths": r_libs[:16],
-                                "requiredPackages": [],
-                            })
-                            if reg.get("status") == "ready":
+                    if Path(std_lib).is_dir() and std_lib not in base_r_libs:
+                        base_r_libs.append(std_lib)
+                seen_r = {r.get("spec", {}).get("executable") for r in rows}
+                ready_r = 0
+                for cand, extra_libs in r_candidates:
+                    s = str(cand)
+                    if not s.startswith("/") or s in seen_r or not cand.is_file():
+                        continue
+                    libs = [p for p in (*extra_libs, *base_r_libs) if Path(p).is_dir()]
+                    if not libs:
+                        continue
+                    seen_r.add(s)
+                    try:
+                        reg = await self.environments.register({
+                            "language": "r",
+                            "executable": s,
+                            "libraryPaths": libs[:16],
+                            "requiredPackages": [],
+                        })
+                        if reg.get("status") == "ready":
+                            ready_r += 1
+                            if not self.production or ready_r >= 6:
                                 break
-                        except Exception:
-                            continue
+                    except Exception:
+                        continue
+
+    async def compute_status(self, params=None):
+        from ..desktop.service import compute_status_payload
+
+        self._app()
+        await self._ensure_default_environments()
+        return compute_status_payload(self.app, environments=self.environments)
 
     async def environment_list(self, params):
         registry = self._environment_registry(params)

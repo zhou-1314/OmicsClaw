@@ -56,6 +56,13 @@ PYTHON_SCHEMA: dict[str, Any] = {
                 "on the jobs plane (code_run)."
             ),
         },
+        "environment": {
+            "type": "string",
+            "description": (
+                "Optional Conda or runtime environment name or ID (e.g. "
+                "'scrnaseq', 'seurat'). Omit to use the session default."
+            ),
+        },
     },
     "required": ["code"],
     "additionalProperties": False,
@@ -271,6 +278,7 @@ class PythonKernelTool:
             )
         session_id = str(context_value("session_id", "") or "") or "default"
         gate = _StreamGate(asyncio.get_running_loop(), self.name)
+        env_arg = str(decoded.get("environment") or "").strip()
         try:
             return await getattr(self._runner, "run_" + self.language)(
                 code,
@@ -279,6 +287,7 @@ class PythonKernelTool:
                 on_output=gate,
                 timeout_s=timeout,
                 location=location,
+                **({"environment": env_arg} if env_arg else {}),
             )
         finally:
             gate.flush()

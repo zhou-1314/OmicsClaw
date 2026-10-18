@@ -580,6 +580,14 @@ def create_desktop_app(
         _note_runtime_header(request.headers.get("X-OmicsClaw-Runtime"))
         return health_payload(app)
 
+    @api.get("/compute/status", name="compute_status")
+    async def compute_status(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        from .service import compute_status_payload
+
+        return compute_status_payload(app)
+
     from omicsclaw.memory.database import Database
 
     from .notebooks import mount_notebook_routes

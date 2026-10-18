@@ -426,6 +426,8 @@ class DesktopService:
             }
         elif method == "GET" and path in {"/sandbox/status", "/api/sandbox/status"}:
             payload = _sandbox_snapshot(app)
+        elif method == "GET" and path in {"/compute/status", "/api/compute/status"}:
+            payload = compute_status_payload(app)
         elif method == "POST" and path in {
             "/sandbox/allow-domain",
             "/api/sandbox/allow-domain",
@@ -579,3 +581,79 @@ async def rewind_chat_session(app, document: dict) -> dict:
                 if inspect.isawaitable(res):
                     await res
     return {"rewound": True, "session_id": session_id}
+
+
+def compute_status_payload(app, *, environments=None) -> dict:
+    from pathlib import Path
+    import json
+
+    kernels = []
+    seen_pids = set()
+    mgr = getattr(getattr(app, "kernels", None), "manager", None)
+    if mgr is not None and hasattr(mgr, "snapshot"):
+        try:
+            for item in mgr.snapshot():
+                if not item.get("alive", True):
+                    continue
+                pid = item.get("pid")
+                if pid:
+                    seen_pids.add(int(pid))
+                rss_kb = item.get("peak_rss_kb") or 0
+                kernels.append({
+                    "session_id": item.get("session_id", ""),
+                    "language": item.get("language", "python"),
+                    "pid": pid,
+                    "rss_bytes": int(rss_kb) * 1024,
+                    "cells": item.get("cells", 0),
+                })
+        except Exception:
+            pass
+    ws = Path(app.config.workspace) if getattr(app, "config", None) else None
+    if ws is not None:
+        mem_db = ws / ".omicsclaw" / "memory.db"
+        if mem_db.is_file():
+            try:
+                import sqlite3
+                with sqlite3.connect(str(mem_db), timeout=1.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        "SELECT instance_id, notebook_id, language, state, process_json "
+                        "FROM notebook_runtime_kernels WHERE state IN ('reserved', 'ready', 'busy')"
+                    ).fetchall()
+                    for r in rows:
+                        proc = json.loads(r["process_json"] or "null") or {}
+                        pid = proc.get("pid")
+                        if pid and int(pid) in seen_pids:
+                            continue
+                        rss_bytes = 0
+                        if pid:
+                            seen_pids.add(int(pid))
+                            try:
+                                for line in Path(f"/proc/{int(pid)}/status").read_text().splitlines():
+                                    if line.startswith("VmRSS:"):
+                                        rss_bytes = int(line.split()[1]) * 1024
+                                        break
+                            except Exception:
+                                pass
+                        kernels.append({
+                            "session_id": r["notebook_id"],
+                            "kernel_instance_id": r["instance_id"],
+                            "language": r["language"],
+                            "state": r["state"],
+                            "pid": pid,
+                            "rss_bytes": rss_bytes,
+                        })
+            except Exception:
+                pass
+    env_count = 0
+    if environments is not None and hasattr(environments, "page"):
+        try:
+            env_count = len(environments.page(limit=50).get("environments", []))
+        except Exception:
+            pass
+    return {
+        "active_kernels_count": len(kernels),
+        "kernels_rss_bytes": sum(int(k.get("rss_bytes") or 0) for k in kernels),
+        "kernels": kernels,
+        "environments_count": env_count,
+    }

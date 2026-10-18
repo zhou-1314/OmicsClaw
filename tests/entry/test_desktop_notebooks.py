@@ -426,3 +426,39 @@ def test_pending_terminal_blocks_mutations_and_shutdown(tmp_path, action):
             db.close()
 
     asyncio.run(scenario())
+
+
+
+def test_cell_index_ordering_and_compute_status(tmp_path):
+    from omicsclaw.entry.desktop.service import compute_status_payload
+    from omicsclaw.entry.render import to_wire
+    from omicsclaw.entry.events import TurnEvent
+    from omicsclaw.schema import ToolCall, ToolResult
+
+    async def scenario():
+        db = Database(tmp_path / "order.db")
+        service = NotebookAnalysis(db, Kernel())
+        try:
+            c_z = await service.save("demo", "z-first", "x = 1", 0)
+            c_a = await service.save("demo", "a-second", "y = 2", 0)
+            assert c_z["cell_index"] == 1
+            assert c_a["cell_index"] == 2
+            snap = await service.snapshot("demo")
+            assert [c["cell_id"] for c in snap["cells"]] == ["z-first", "a-second"]
+        finally:
+            await service.close()
+            db.close()
+
+    asyncio.run(scenario())
+
+    from omicsclaw.engine import EngineEvent, EngineEventType
+
+    call = ToolCall(id="tc-1", name="bash", arguments='{"command": "ls", "description": "Listing directory contents"}')
+    start_wire = to_wire(TurnEvent.from_engine(EngineEvent.tool_start(call, turn=1), session_id="s1", turn_id="t1"))
+    assert start_wire["description"] == "Listing directory contents"
+    res = ToolResult(tool_call_id="tc-1", name="bash", output="a\nb\nc\n")
+    res_wire = to_wire(TurnEvent.from_engine(EngineEvent(type=EngineEventType.TOOL_RESULT, turn=1, tool_result=res, duration_s=0.5), session_id="s1", turn_id="t1"))
+    assert res_wire["output_line_count"] == 3
+    status = compute_status_payload(type("App", (), {"kernels": None, "config": type("Cfg", (), {"workspace": tmp_path})()})())
+    assert status["active_kernels_count"] == 0
+    assert status["kernels_rss_bytes"] == 0

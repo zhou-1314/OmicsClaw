@@ -31,6 +31,8 @@ class NotebookCell:
     execution_id: str = ""
     updated_at: float = 0.0
     language: str = "python"
+    created_at: float = 0.0
+    cell_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class ExecutionRecord:
     revision: int = 0
     created_at: float = 0.0
     finished_at: float | None = None
+    cell_index: int | None = None
 
 
 class RevisionConflict(ValueError):
@@ -76,6 +79,13 @@ def _load(value: str | None) -> Any:
 
 
 def _cell(row: Any) -> NotebookCell:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    created_at = (
+        row["created_at"]
+        if "created_at" in keys and row["created_at"] is not None
+        else row["updated_at"]
+    )
+    cell_index = row["cell_index"] if "cell_index" in keys else None
     return NotebookCell(
         notebook_id=row["notebook_id"],
         cell_id=row["cell_id"],
@@ -90,10 +100,14 @@ def _cell(row: Any) -> NotebookCell:
         execution_id=row["execution_id"],
         updated_at=row["updated_at"],
         language=row["language"],
+        created_at=created_at,
+        cell_index=cell_index,
     )
 
 
 def _execution(row: Any) -> ExecutionRecord:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    cell_index = row["cell_index"] if "cell_index" in keys else None
     return ExecutionRecord(
         execution_id=row["execution_id"],
         notebook_id=row["notebook_id"],
@@ -107,6 +121,7 @@ def _execution(row: Any) -> ExecutionRecord:
         revision=row["revision"],
         created_at=row["created_at"],
         finished_at=row["finished_at"],
+        cell_index=cell_index,
     )
 
 
@@ -156,10 +171,11 @@ class NotebookStore:
     ) -> NotebookCell:
         key = (cell.notebook_id, cell.cell_id, cell.session_epoch)
         old = connection.execute(
-            "SELECT revision FROM notebook_cells "
+            "SELECT revision, created_at, cell_index, updated_at FROM notebook_cells "
             "WHERE notebook_id=? AND cell_id=? AND session_epoch=?",
             key,
         ).fetchone()
+        now = time.time()
         if old is not None:
             current_revision = old["revision"]
             if expected_revision is not None and current_revision != expected_revision:
@@ -170,10 +186,28 @@ class NotebookStore:
                 current_revision if expected_revision is None else expected_revision
             )
             revision = base_revision + 1
+            created_at = (
+                old["created_at"]
+                if old["created_at"] is not None
+                else (cell.created_at or old["updated_at"] or now)
+            )
+            cell_index = (
+                old["cell_index"]
+                if old["cell_index"] is not None
+                else (
+                    cell.cell_index
+                    if cell.cell_index is not None
+                    else connection.execute(
+                        "SELECT COALESCE(MAX(cell_index), 0) + 1 FROM notebook_cells WHERE notebook_id=? AND session_epoch=?",
+                        (cell.notebook_id, cell.session_epoch),
+                    ).fetchone()[0]
+                )
+            )
             cursor = connection.execute(
                 "UPDATE notebook_cells SET source=?, revision=?, status=?, "
                 "output_json=?, provenance_json=?, trust_label=?, "
-                "client_command_id=?, execution_id=?, updated_at=?, language=? "
+                "client_command_id=?, execution_id=?, updated_at=?, language=?, "
+                "created_at=?, cell_index=? "
                 "WHERE notebook_id=? AND cell_id=? AND session_epoch=? "
                 "AND revision=?",
                 (
@@ -185,8 +219,10 @@ class NotebookStore:
                     cell.trust_label,
                     cell.client_command_id,
                     cell.execution_id,
-                    time.time(),
+                    now,
                     cell.language,
+                    created_at,
+                    cell_index,
                     *key,
                     base_revision,
                 ),
@@ -201,13 +237,22 @@ class NotebookStore:
                     f"cell does not exist; expected {expected_revision}"
                 )
             revision = cell.revision or 1
+            created_at = cell.created_at or now
+            cell_index = (
+                cell.cell_index
+                if cell.cell_index is not None
+                else connection.execute(
+                    "SELECT COALESCE(MAX(cell_index), 0) + 1 FROM notebook_cells WHERE notebook_id=? AND session_epoch=?",
+                    (cell.notebook_id, cell.session_epoch),
+                ).fetchone()[0]
+            )
             try:
                 connection.execute(
                     "INSERT INTO notebook_cells "
                     "(notebook_id, cell_id, session_epoch, source, revision, status, "
                     "output_json, provenance_json, trust_label, client_command_id, "
-                    "execution_id, updated_at, language) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "execution_id, updated_at, language, created_at, cell_index) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         cell.notebook_id,
                         cell.cell_id,
@@ -220,8 +265,10 @@ class NotebookStore:
                         cell.trust_label,
                         cell.client_command_id,
                         cell.execution_id,
-                        time.time(),
+                        now,
                         cell.language,
+                        created_at,
+                        cell_index,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -307,13 +354,26 @@ class NotebookStore:
             return stored
 
         created_at = record.created_at or time.time()
+        cell_index = record.cell_index
+        if cell_index is None:
+            c_row = connection.execute(
+                "SELECT cell_index FROM notebook_cells WHERE notebook_id=? AND cell_id=? AND session_epoch=?",
+                (record.notebook_id, record.cell_id, record.session_epoch),
+            ).fetchone()
+            if c_row is not None and c_row[0] is not None:
+                cell_index = c_row[0]
+            else:
+                cell_index = connection.execute(
+                    "SELECT COALESCE(MAX(cell_index), 0) + 1 FROM notebook_cells WHERE notebook_id=? AND session_epoch=?",
+                    (record.notebook_id, record.session_epoch),
+                ).fetchone()[0]
         try:
             connection.execute(
                 "INSERT INTO notebook_executions "
                 "(execution_id, notebook_id, cell_id, session_epoch, "
                 "client_command_id, status, output_json, provenance_json, "
-                "trust_label, revision, created_at, finished_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "trust_label, revision, created_at, finished_at, cell_index) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.execution_id,
                     record.notebook_id,
@@ -327,6 +387,7 @@ class NotebookStore:
                     record.revision,
                     created_at,
                     record.finished_at,
+                    cell_index,
                 ),
             )
         except sqlite3.IntegrityError:

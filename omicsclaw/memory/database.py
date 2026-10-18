@@ -308,6 +308,8 @@ CREATE TABLE IF NOT EXISTS notebook_cells (
     client_command_id TEXT NOT NULL DEFAULT '',
     execution_id TEXT NOT NULL DEFAULT '',
     updated_at REAL NOT NULL,
+    created_at REAL,
+    cell_index INTEGER,
     PRIMARY KEY (notebook_id, cell_id, session_epoch)
 );
 
@@ -326,7 +328,8 @@ CREATE TABLE IF NOT EXISTS notebook_executions (
     trust_label TEXT NOT NULL DEFAULT '',
     revision INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
-    finished_at REAL
+    finished_at REAL,
+    cell_index INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notebook_execution_command
@@ -484,7 +487,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if "duplicate column name" not in str(exc).lower():
                 raise
     for table, additions in {
-        "notebook_cells": {"language": "TEXT NOT NULL DEFAULT 'python'"},
+        "notebook_cells": {
+            "language": "TEXT NOT NULL DEFAULT 'python'",
+            "created_at": "REAL",
+            "cell_index": "INTEGER",
+        },
+        "notebook_executions": {
+            "cell_index": "INTEGER",
+        },
         "jobs": {
             "lifetime": "TEXT NOT NULL DEFAULT ''",
             "source_request_id": "TEXT NOT NULL DEFAULT ''",
@@ -516,6 +526,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
+    conn.execute(
+        "UPDATE notebook_cells SET created_at = updated_at WHERE created_at IS NULL"
+    )
     # Row backfills belong to migrate_remote_targets; dry-run reports
     # candidates without mutating user data.
     conn.execute(

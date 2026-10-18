@@ -24,6 +24,10 @@
     "limit": {
      "type": "integer",
      "description": "Byte-mode maximum, in BYTES. Default 8192, clamped to 100000. Inert when start_line is set."
+    },
+    "description": {
+     "type": "string",
+     "description": "Concise 3-8 word gerund phrase describing this step (e.g., 'Listing OmicsClaw data directory')."
     }
    },
    "required": [
@@ -45,6 +49,10 @@
     "content": {
      "type": "string",
      "description": "The complete contents of the file. Required; send an empty string to write an empty file."
+    },
+    "description": {
+     "type": "string",
+     "description": "Concise 3-8 word gerund phrase describing this step (e.g., 'Listing OmicsClaw data directory')."
     }
    },
    "required": [
@@ -71,6 +79,10 @@
     "target_text": {
      "type": "string",
      "description": "The replacement text. Required; send an empty string to delete the matched passage."
+    },
+    "description": {
+     "type": "string",
+     "description": "Concise 3-8 word gerund phrase describing this step (e.g., 'Listing OmicsClaw data directory')."
     }
    },
    "required": [
@@ -94,6 +106,10 @@
     "timeout_secs": {
      "type": "integer",
      "description": "Optional: seconds to allow this command, at most 585, and 585 if you omit it. It can only make the limit SHORTER — a larger value is capped — so use it when you want a probe to give up fast, not to buy more time for a slow suite."
+    },
+    "description": {
+     "type": "string",
+     "description": "Concise 3-8 word gerund phrase describing this step (e.g., 'Listing OmicsClaw data directory')."
     }
    },
    "required": [
@@ -115,6 +131,10 @@
     "max_chars": {
      "type": "integer",
      "description": "Maximum characters to return. Default 8000, clamped to 32000."
+    },
+    "description": {
+     "type": "string",
+     "description": "Concise 3-8 word gerund phrase describing this step (e.g., 'Listing OmicsClaw data directory')."
     }
    },
    "required": [
@@ -136,6 +156,10 @@
     "max_results": {
      "type": "integer",
      "description": "How many results to return. Default 5, clamped to 10."
+    },
+    "description": {
+     "type": "string",
+     "description": "Concise 3-8 word gerund phrase describing this step (e.g., 'Listing OmicsClaw data directory')."
     }
    },
    "required": [
@@ -429,10 +453,78 @@
      "type": "number",
      "minimum": 1,
      "description": "Cell budget in seconds; defaults to 45. A cell that needs longer than the engine's per-call budget belongs on the jobs plane (code_run)."
+    },
+    "environment": {
+     "type": "string",
+     "description": "Optional Conda or runtime environment name or ID (e.g. 'scrnaseq', 'seurat'). Omit to use the session default."
     }
    },
    "required": [
     "code"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "r",
+  "description": "Execute R source in the session's persistent R kernel. R objects survive between cells and are separate from Python variables. The selected R environment must already provide IRkernel; this tool installs nothing. Use this for DESeq2, edgeR, limma, Seurat and other R/Bioconductor analyses.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "code": {
+     "type": "string",
+     "description": "R source. May reference R objects created by earlier r calls."
+    },
+    "description": {
+     "type": "string",
+     "description": "One-line note shown while the cell runs."
+    },
+    "timeout_secs": {
+     "type": "number",
+     "minimum": 1,
+     "description": "Cell budget in seconds; defaults to 45. A cell that needs longer than the engine's per-call budget belongs on the jobs plane (code_run)."
+    },
+    "environment": {
+     "type": "string",
+     "description": "Optional Conda or runtime environment name or ID (e.g. 'scrnaseq', 'seurat'). Omit to use the session default."
+    }
+   },
+   "required": [
+    "code"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "notebook_analysis",
+  "description": "Read or explicitly register the current Notebook's scientific objects and selections. After creating/loading the main AnnData, table or R object, call object.register with its simple symbol and actual identity/assay/layer. After modifying an already registered object, call object.inspect with its current ObjectRef before the next calculation. Get refs and analysis state from state/page or the fresh Notebook context. Registration/inspection runs a fixed inspector, never arbitrary source or namespace scanning. Writes invalidate this model request: wait for the next request before calling python/r. Invalid selections need explicit remap or clear; never silently substitute IDs. receipt arguments: {commandId}; query an uncertain prior action without submitting it again. state arguments: optional subject={kind,id,revision?}; page: collection and optional parentId/viewRevision/cursor/limit. object.register arguments: kernel={language,kernelInstanceId,generation,environmentId,environmentRevision},symbol,adapter=anndata|python_table|r_rds,sourceRefs=[],declaredMetadata={organism,sampleColumn,conditionColumn,donorColumn},rowIdentity/columnIdentity={kind:index}|{kind:columns,names:[...]},tableAxis=row|column,declaredMatrix={assay,layer,semantics:raw_counts|lognorm|other|unknown}; unknown metadata is null. object.remove cancels only registration, keeping the variable/history; use it explicitly to correct an invalid registration, then fix the variable/spec and register again. Old selections still require clear/remap. object.inspect/object.remove: {object:{objectId,objectRevision}}. selection.create: {view:{viewId,viewRevision},members:{kind:ids,values:[[...]]}|{kind:idArtifact,artifact:{artifactId,sha256,bytes}}}; at most 100 inline IDs. selection.remap: {selection,targetView,expectedMemberCount,expectedMembersSha256}. selection.clear: {selection}. Large selections come from notebook_selection_ids(keys, rows) in the scientific kernel; use its owner-registered selectionInputs artifact after completion. In Python use keys as a list and rows as string lists; in R use keys as a character vector and rows as a list of character vectors. Report one completed key stage per cell with notebook_stage(stage, metadata): qc, normalization, integration, clustering, annotation or differential_expression. It saves the registered group at final successful cell state. checkpoint.save takes {kernel,objects,policyRevision:1}; checkpoint.retry takes {failure:{failureId,failureRevision}}; checkpoint.pin takes {checkpoint:{checkpointId,manifestRevision,manifestSha256},expectedPinRevision,pinned}. Read checkpointOverview/checkpointOperation/checkpointFailure subjects for exact state. Continue after failed saving requires a person, never infer consent. No matrices or full cell-ID sets are returned in model context.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "action": {
+     "type": "string",
+     "enum": [
+      "state",
+      "page",
+      "receipt",
+      "object.register",
+      "object.inspect",
+      "object.remove",
+      "checkpoint.save",
+      "checkpoint.retry",
+      "checkpoint.pin",
+      "selection.create",
+      "selection.remap",
+      "selection.clear"
+     ]
+    },
+    "arguments": {
+     "type": "object"
+    }
+   },
+   "required": [
+    "action",
+    "arguments"
    ],
    "additionalProperties": false
   }

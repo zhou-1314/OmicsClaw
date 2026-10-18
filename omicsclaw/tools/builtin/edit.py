@@ -141,6 +141,13 @@ EDIT_SCHEMA: dict[str, Any] = {
                 "delete the matched passage."
             ),
         },
+        "description": {
+            "type": "string",
+            "description": (
+                "Concise 3-8 word gerund phrase describing this step "
+                "(e.g., 'Listing OmicsClaw data directory')."
+            ),
+        },
     },
     "required": ["path", "source_text", "target_text"],
     "additionalProperties": False,

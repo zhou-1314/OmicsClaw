@@ -157,7 +157,7 @@ def test_the_engine_budget_arithmetic_bash_set():
 
 
 def test_the_schema_declares_only_the_three_arguments():
-    assert set(PYTHON_SCHEMA["properties"]) == {"code", "description", "timeout_secs"}
+    assert set(PYTHON_SCHEMA["properties"]) == {"code", "description", "timeout_secs", "environment"}
     assert PYTHON_SCHEMA["required"] == ["code"]
     assert PYTHON_SCHEMA["additionalProperties"] is False
 

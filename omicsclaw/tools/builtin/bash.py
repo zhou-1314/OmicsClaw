@@ -376,6 +376,13 @@ BASH_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "description": _timeout_description(DEFAULT_TIMEOUT),
         },
+        "description": {
+            "type": "string",
+            "description": (
+                "Concise 3-8 word gerund phrase describing this step "
+                "(e.g., 'Listing OmicsClaw data directory')."
+            ),
+        },
     },
     "required": ["command"],
     "additionalProperties": False,

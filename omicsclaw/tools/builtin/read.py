@@ -198,6 +198,13 @@ READ_SCHEMA: dict[str, Any] = {
                 "100000. Inert when start_line is set."
             ),
         },
+        "description": {
+            "type": "string",
+            "description": (
+                "Concise 3-8 word gerund phrase describing this step "
+                "(e.g., 'Listing OmicsClaw data directory')."
+            ),
+        },
     },
     "required": ["path"],
     "additionalProperties": False,
