@@ -1085,8 +1085,66 @@ class Controller:
                 "workspaceId": self.identity.workspace_id,
                 "controllerEpoch": self.epoch}
 
+    def _sync_default_notebook_environments(self):
+        if self.environments is None:
+            return
+        notebook_db_path = self.workspace / ".omicsclaw/notebooks.db"
+        if not notebook_db_path.is_file():
+            return
+        try:
+            rows = self.environments.page(limit=20).get("environments", [])
+        except Exception:
+            return
+        from ..notebook.request_state import RequestState
+
+        try:
+            db = Database(notebook_db_path)
+            try:
+                def update(c):
+                    has_table = c.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='notebook_language_defaults'"
+                    ).fetchone()
+                    if not has_table:
+                        return
+                    for lang in ("python", "r"):
+                        ready_rows = [
+                            r
+                            for r in rows
+                            if RequestState.eligible(r, lang)
+                        ]
+                        if not ready_rows:
+                            continue
+                        ready_rows.sort(
+                            key=lambda r: RequestState._candidate_sort_key(
+                                r, lang, self.workspace, os.environ
+                            )
+                        )
+                        best = ready_rows[0]
+                        cur = c.execute(
+                            "SELECT environment_id, environment_revision FROM notebook_language_defaults WHERE language=?",
+                            (lang,),
+                        ).fetchone()
+                        valid_current = cur is not None and any(
+                            r["environmentId"] == cur[0] and r["revision"] == cur[1]
+                            for r in ready_rows
+                        )
+                        if not valid_current:
+                            c.execute(
+                                "UPDATE notebook_language_defaults SET environment_id=?, environment_revision=? WHERE language=?",
+                                (best["environmentId"], best["revision"], lang),
+                            )
+
+                db.run(update)
+            finally:
+                db.close()
+        except Exception:
+            pass
+
     async def _ensure_default_environments(self, *, force: bool = False):
-        if self.environments is None or (not self.production and not force) or self._default_envs_checked:
+        if self.environments is None or (not self.production and not force):
+            return
+        if self._default_envs_checked:
+            self._sync_default_notebook_environments()
             return
         async with self._default_envs_lock:
             if self._default_envs_checked or self.environments is None:
@@ -1203,6 +1261,7 @@ class Controller:
                                 break
                     except Exception:
                         continue
+            self._sync_default_notebook_environments()
 
     async def compute_status(self, params=None):
         from ..desktop.service import compute_status_payload

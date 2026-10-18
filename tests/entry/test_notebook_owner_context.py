@@ -170,3 +170,83 @@ def test_takeover_in_the_final_transaction_refuses_an_earlier_request(
             await r.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.usefixtures("notebook_control_rss")
+def test_multi_conda_environments_auto_resolve_zero_click_and_export_display_names(
+    tmp_path,
+):
+    async def run():
+        r = await fresh_runtime(tmp_path)
+        try:
+            base_env = await register(r, "/opt/conda/bin/python")
+            scrna_env = await register(
+                r, "/root/.claude-science/conda/envs/scrnaseq/bin/python"
+            )
+            omics_env = await register(
+                r, "/opt/conda/envs/OmicsClaw/bin/python"
+            )
+            assert base_env["displayName"] == "base"
+            assert scrna_env["displayName"] == "scrnaseq"
+            assert omics_env["displayName"] == "OmicsClaw"
+
+            ctx = await r.context({"sessionId": "chat", "requestId": "req-multi-1"})
+            selection = ctx["summary"]["selection"]
+            assert selection["reason"] == ""
+            assert selection["environmentId"] == omics_env["environmentId"]
+            assert selection["displayName"] == "OmicsClaw"
+            assert [c["displayName"] for c in selection["candidates"]] == [
+                "OmicsClaw",
+                "scrnaseq",
+                "base",
+            ]
+
+            await r.check_request(
+                {
+                    "sessionId": "chat",
+                    "requestId": "req-multi-1",
+                    "token": ctx["token"],
+                }
+            )
+            import hashlib
+            nid = hashlib.sha256(b"notebook:chat").hexdigest()
+            kid = hashlib.sha256(b"kernel:chat:req-multi-1").hexdigest()[:32]
+            record = await r.admit_agent(
+                {
+                    "command": {
+                        "version": 4,
+                        "notebookId": nid,
+                        "cellId": "cell-multi-1",
+                        "commandId": "cmd-multi-1",
+                        "source": "x = 42",
+                        "expectedRevision": 0,
+                        "language": "python",
+                        "origin": "agent",
+                        "approvalScope": "permission_gate",
+                        "timeoutSeconds": 30,
+                        "kernelInstanceId": kid,
+                        "generation": 1,
+                        "environmentId": selection["environmentId"],
+                        "environmentRevision": selection["environmentRevision"],
+                        "preconditions": {
+                            "sessionId": "chat",
+                            "requestId": "req-multi-1",
+                            "token": ctx["token"],
+                            "toolPosition": 0,
+                            "analysis": ctx["summary"]["analysis"]["guards"]["python"],
+                        },
+                    }
+                }
+            )
+            for _ in range(100):
+                row = r.views.execution(nid, record["execution_id"])
+                if row["status"] == "completed" and row["durability"] == "committed":
+                    break
+                await asyncio.sleep(0.01)
+            snap = r.views.snapshot(nid)
+            assert snap["kernel"]["displayName"] == "OmicsClaw"
+            assert snap["kernels"]["python"]["displayName"] == "OmicsClaw"
+        finally:
+            await r.close()
+
+    asyncio.run(run())

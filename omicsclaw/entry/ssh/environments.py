@@ -20,6 +20,44 @@ MAX_ENVIRONMENTS = 64
 PAGE_BYTES = 384 * 1024
 
 
+def derive_environment_display_name(executable: str, language: str = "python") -> str:
+    if not isinstance(executable, str) or not executable:
+        return language
+    m = re.search(r"/envs/([^/]+)/bin/[^/]+$", executable)
+    if m:
+        return m.group(1)
+    m = re.search(r"/(\.venv[^/]*)/bin/[^/]+$", executable)
+    if m:
+        return m.group(1)
+    m = re.search(
+        r"/(?:conda|miniconda\d*|anaconda\d*|miniforge\d*|mambaforge)/bin/[^/]+$",
+        executable,
+    )
+    if m:
+        return "base"
+    parts = Path(executable).parts
+    if (
+        len(parts) >= 3
+        and parts[-2] == "bin"
+        and parts[-3]
+        not in {
+            "/",
+            "usr",
+            "local",
+            "opt",
+            "root",
+            "home",
+            "var",
+            "tmp",
+            "etc",
+            "System",
+            "Library",
+        }
+    ):
+        return parts[-3]
+    return language
+
+
 def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -93,11 +131,17 @@ class EnvironmentRegistry:
             "SELECT * FROM registered_environment_revisions WHERE environment_id=? AND revision=?",
             (environment_id, row["revision"]),
         ).fetchone()
+        spec = json.loads(row["spec_json"])
+        display_name = derive_environment_display_name(
+            spec.get("executable", ""), spec.get("language", "python")
+        )
         return {
             "schemaVersion": REGISTRY_SCHEMA_VERSION,
             "kind": "registered",
             "environmentId": row["environment_id"],
-            "spec": json.loads(row["spec_json"]),
+            "displayName": display_name,
+            "condaEnv": display_name,
+            "spec": spec,
             "revision": row["revision"],
             "acceptedRevision": row["accepted_revision"],
             "status": row["status"],

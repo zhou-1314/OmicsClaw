@@ -44,7 +44,17 @@ def bump(connection, notebook_id):
 def kernel_row(row):
     if row is None:
         return None
+    from ..ssh.environments import derive_environment_display_name
+
     environment = json.loads(row["environment_json"])
+    executable = (
+        (environment.get("spec") or {}).get("executable")
+        or (environment.get("observation") or {}).get("executable")
+        or ""
+    )
+    display_name = environment.get("displayName") or derive_environment_display_name(
+        executable, row["language"]
+    )
     return {
         "kernelInstanceId": row["instance_id"],
         "notebookId": row["notebook_id"],
@@ -52,6 +62,9 @@ def kernel_row(row):
         "environmentId": row["environment_id"],
         "environmentRevision": row["environment_revision"],
         "language": row["language"],
+        "displayName": display_name,
+        "condaEnv": display_name,
+        "executable": executable[:256] if executable else "",
         "state": row["state"],
         "process": json.loads(row["process_json"] or "null"),
         "confirmedAt": row["confirmed_at"],

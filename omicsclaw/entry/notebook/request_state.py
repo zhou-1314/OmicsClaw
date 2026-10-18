@@ -8,6 +8,7 @@ import hmac
 import json
 import secrets
 
+from ..ssh.environments import derive_environment_display_name
 from .contracts import bounded, encoded
 from .service import NotebookError, identifier
 from .store import (
@@ -77,6 +78,62 @@ class RequestState:
             and not (row["observation"] or {}).get("missing")
         )
 
+    _PREFERRED_ENV_NAMES = (
+        "omicsclaw",
+        "scrnaseq",
+        "seurat",
+        "spatial",
+        "rapids_singlecell",
+        "spfoundation",
+        ".venv",
+        ".venv-dev",
+    )
+
+    @classmethod
+    def _candidate_sort_key(cls, row, language="python", workspace=None, env=None):
+        exe = (row.get("spec") or {}).get("executable", "")
+        display = derive_environment_display_name(exe, language)
+        lower_name = display.lower()
+        conda_prefix = (env or {}).get("CONDA_PREFIX") or ""
+        if conda_prefix and exe.startswith(conda_prefix.rstrip("/") + "/bin/"):
+            tier = 0
+        elif workspace is not None and exe.startswith(
+            str(workspace).rstrip("/") + "/.venv"
+        ):
+            tier = 1
+        elif lower_name in cls._PREFERRED_ENV_NAMES:
+            tier = 2 + cls._PREFERRED_ENV_NAMES.index(lower_name)
+        elif "/envs/" in exe:
+            tier = 20
+        elif display == "base":
+            tier = 30
+        elif "/bin/" in exe:
+            tier = 40
+        else:
+            tier = 50
+        return (tier, lower_name, exe, row.get("environmentId", ""))
+
+    def _eligible_rows(self, language="python"):
+        ids = self.runtime.registry_db.run(
+            lambda registry: registry.execute(
+                "SELECT environment_id FROM registered_environments ORDER BY environment_id LIMIT 65"
+            ).fetchall()
+        )
+        eligible = []
+        for item in ids:
+            row = self.runtime.registry.get(item[0])
+            if self.eligible(row, language):
+                eligible.append(row)
+        eligible.sort(
+            key=lambda r: self._candidate_sort_key(
+                r,
+                language,
+                getattr(self.runtime, "workspace", None),
+                getattr(self.runtime, "env", None),
+            )
+        )
+        return eligible
+
     def selection(self, c, kernel, language="python"):
         default = c.execute(
             "SELECT * FROM notebook_language_defaults WHERE language=?", (language,)
@@ -102,37 +159,64 @@ class RequestState:
                 and row["revision"] == revision
             ):
                 rows = [row]
+            elif kernel is None:
+                fallback = self._eligible_rows(language)
+                if any("/bin/" in r["spec"]["executable"] for r in fallback):
+                    rows = fallback
+                    c.execute(
+                        "UPDATE notebook_language_defaults SET environment_id=?,environment_revision=? WHERE language=?",
+                        (rows[0]["environmentId"], rows[0]["revision"], language),
+                    )
             reason = "notebook_environment_invalid" if not rows else ""
         else:
-            ids = self.runtime.registry_db.run(
-                lambda registry: registry.execute(
-                    "SELECT environment_id FROM registered_environments ORDER BY environment_id LIMIT 65"
-                ).fetchall()
-            )
-            for item in ids:
-                row = self.runtime.registry.get(item[0])
-                if self.eligible(row, language):
-                    rows.append(row)
-            reason = (
-                "notebook_environment_required"
-                if not rows
-                else "notebook_environment_ambiguous"
-                if len(rows) > 1
-                else ""
-            )
+            rows = self._eligible_rows(language)
+            auto_resolvable = any("/bin/" in r["spec"]["executable"] for r in rows)
+            if len(rows) > 1 and auto_resolvable:
+                c.execute(
+                    "UPDATE notebook_language_defaults SET environment_id=?,environment_revision=? WHERE language=?",
+                    (rows[0]["environmentId"], rows[0]["revision"], language),
+                )
+                reason = ""
+            else:
+                reason = (
+                    "notebook_environment_required"
+                    if not rows
+                    else "notebook_environment_ambiguous"
+                    if len(rows) > 1
+                    else ""
+                )
         selected = rows[0] if not reason else None
+        selected_display = (
+            derive_environment_display_name(selected["spec"]["executable"], language)
+            if selected
+            else None
+        )
+        candidate_rows = rows
+        if selected is not None and kernel is None and len(rows) == 1:
+            others = [
+                r
+                for r in self._eligible_rows(language)
+                if r["environmentId"] != selected["environmentId"]
+            ]
+            if others:
+                candidate_rows = [selected, *others]
         return {
             "reason": reason,
             "environmentId": selected["environmentId"] if selected else environment_id,
             "environmentRevision": selected["revision"] if selected else revision,
             "selectionRevision": default["revision"] if kernel is None else None,
+            "displayName": selected_display,
+            "condaEnv": selected_display,
             "candidates": [
                 {
                     "environmentId": row["environmentId"],
                     "revision": row["revision"],
                     "executable": row["spec"]["executable"][:256],
+                    "displayName": derive_environment_display_name(
+                        row["spec"]["executable"], language
+                    ),
                 }
-                for row in rows[:16]
+                for row in candidate_rows[:16]
             ],
         }
 
@@ -269,6 +353,9 @@ class RequestState:
                     "environmentId",
                     "environmentRevision",
                     "language",
+                    "displayName",
+                    "condaEnv",
+                    "executable",
                     "state",
                     "environmentFingerprint",
                 }
