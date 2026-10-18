@@ -397,6 +397,8 @@ class SessionKernel:
                 for name, value in os.environ.items()
                 if name.upper() not in _KERNEL_CREDENTIAL_NAMES
             }
+        env.setdefault("KMP_AFFINITY", "disabled")
+        env.setdefault("OMP_NUM_THREADS", "4")
 
         extra_write_paths: list[Path] = [scratch]
         ipc_prefix: str | None = None

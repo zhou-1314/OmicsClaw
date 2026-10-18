@@ -891,10 +891,13 @@ class OwnerRuntime:
                     new_kernel=agent
                     and self.db.run(
                         lambda c: (
-                            current_kernel(
-                                c, document["notebookId"], document["language"]
+                            (
+                                k := current_kernel(
+                                    c, document["notebookId"], document["language"]
+                                )
                             )
                             is None
+                            or k["state"] in {"released", "lost"}
                         )
                     )
                 )
@@ -962,7 +965,8 @@ class OwnerRuntime:
         else:
             self.restores.require_clear(c, nid, document["language"])
             self.checkpoints.store.require_clear(c, nid, document["language"])
-            self.analysis.store.run_guard(c, nid, document)
+            if document["origin"] != "agent":
+                self.analysis.store.run_guard(c, nid, document)
         if document["origin"] == "agent" and operation is None:
             pre = document["preconditions"]
             facts = self.requests.verify(
@@ -972,7 +976,10 @@ class OwnerRuntime:
                 pre["requestId"],
                 language=document["language"],
             )
-            if facts["kernelInstanceId"] is None:
+            if facts["kernelInstanceId"] is None or facts["state"] in {
+                "released",
+                "lost",
+            }:
                 expected_nid = (
                     facts["notebookId"]
                     or hashlib.sha256(
@@ -985,6 +992,11 @@ class OwnerRuntime:
                         + pre["sessionId"]
                         + ":"
                         + pre["requestId"]
+                        + (
+                            f":gen{facts['nextGeneration']}"
+                            if facts["nextGeneration"] > 1
+                            else ""
+                        )
                         + (":r" if document["language"] == "r" else "")
                     ).encode()
                 ).hexdigest()[:32]
@@ -1320,6 +1332,8 @@ class OwnerRuntime:
 
                 return guard
 
+            from omicsclaw.entry.process_containment import SubreaperLifecycleWrapper
+
             kernel = SessionKernel(
                 state.session_id,
                 workspace=self.workspace,
@@ -1336,7 +1350,21 @@ class OwnerRuntime:
                 limits=self.manager.limits,
                 on_figure=on_figure,
                 spawn_wrapper=(
-                    self.sandbox.as_kernel_spawn_wrapper() if self.sandbox else None
+                    SubreaperLifecycleWrapper(
+                        private_directory(
+                            self.workspace / ".omicsclaw/process-lifecycles"
+                        ),
+                        inner=self.sandbox.spawn_wrapper(host_pid_lifecycle=True),
+                    )
+                    if (
+                        self.sandbox is not None
+                        and self.sandbox.as_kernel_spawn_wrapper() is not None
+                        and str(getattr(self.sandbox, "backend_name", "")) == "netns"
+                        and hasattr(self.sandbox, "spawn_wrapper")
+                    )
+                    else (
+                        self.sandbox.as_kernel_spawn_wrapper() if self.sandbox else None
+                    )
                 )
                 or self.lifecycle_wrapper,
                 env_scrubber=without_control_credentials,

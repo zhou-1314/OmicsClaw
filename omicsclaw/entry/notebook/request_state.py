@@ -7,9 +7,11 @@ import hashlib
 import hmac
 import json
 import secrets
+import time
 
 from ..ssh.environments import derive_environment_display_name
 from .contracts import bounded, encoded
+from .security import same_process
 from .service import NotebookError, identifier
 from .store import (
     OwnerViews,
@@ -265,6 +267,21 @@ class RequestState:
         binding = c.execute(
             "SELECT * FROM notebook_bindings WHERE session_id=?", (sid,)
         ).fetchone()
+        if binding:
+            for k_row in c.execute(
+                "SELECT instance_id,notebook_id,process_json FROM notebook_runtime_kernels WHERE notebook_id=? AND state IN ('ready','busy','unconfirmed')",
+                (binding["notebook_id"],),
+            ).fetchall():
+                if k_row["process_json"] and not same_process(
+                    json.loads(k_row["process_json"])
+                ):
+                    c.execute(
+                        "UPDATE notebook_runtime_kernels SET state='lost',confirmed_at=? WHERE instance_id=?",
+                        (time.time(), k_row["instance_id"]),
+                    )
+                    bump(c, k_row["notebook_id"])
+                    if self.runtime.environment_guard is not None:
+                        self.runtime.environment_guard.released(k_row["instance_id"])
         kernel = current_kernel(c, binding["notebook_id"]) if binding else None
         helper = c.execute(
             "SELECT helper_revision FROM notebook_request_sessions WHERE session_id=?",
@@ -333,7 +350,7 @@ class RequestState:
                     "SELECT cell_id,language,execution_id,status,revision,substr(source,1,1024) AS sourcePreview,"
                     "substr(json_extract(output_json,'$.stdout'),1,1024) AS stdoutPreview,"
                     "substr(json_extract(output_json,'$.error'),1,512) AS errorPreview "
-                    "FROM notebook_cells WHERE notebook_id=? ORDER BY updated_at DESC,cell_id LIMIT 6",
+                    "FROM notebook_cells WHERE notebook_id=? AND source NOT LIKE '%notebook_inspect.py%' AND source NOT LIKE '%notebook_inspect.R%' ORDER BY updated_at DESC,cell_id LIMIT 6",
                     (nid,),
                 ).fetchall()
             ]
@@ -428,16 +445,15 @@ class RequestState:
             self.runtime.checkpoints.store.require_clear(
                 c, current["notebookId"], language
             )
-            analysis = self.runtime.analysis.store.context(c, current["notebookId"])
-            self.runtime.analysis.store.validate_guard(
-                c,
-                current["notebookId"],
-                analysis["guards"][language],
-                language=language,
-            )
             if selected["reason"]:
                 raise NotebookError(selected["reason"], 409)
-            if kernel and kernel["state"] not in {"reserved", "ready", "busy"}:
+            if kernel and kernel["state"] not in {
+                "reserved",
+                "ready",
+                "busy",
+                "released",
+                "lost",
+            }:
                 raise NotebookError("notebook_kernel_unavailable", 409)
             if current["notebookId"]:
                 self.runtime.idle(c, current["notebookId"])

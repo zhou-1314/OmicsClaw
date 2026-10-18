@@ -302,3 +302,179 @@ def test_observer_budget_or_cancellation_never_cancels_accepted_science(
             await runtime.close()
 
     asyncio.run(run())
+
+
+
+def test_real_netns_scanpy_pipeline_object_register_defaults_and_sigkill_kernel_respawn(
+    tmp_path,
+):
+    pytest.importorskip("scanpy")
+    import os
+    import signal
+    import sys
+    from omicsclaw.entry.notebook.runtime import OwnerRuntime
+    from omicsclaw.entry.notebook.security import same_process
+    from omicsclaw.sandbox.config import BackendName, EgressMode, SandboxConfig
+    from omicsclaw.sandbox.manager import probe_sandbox_backend
+    from omicsclaw.tools.builtin.notebook_analysis import NotebookAnalysisTool
+    from tests.entry.test_notebook_r import observation
+
+    if not probe_sandbox_backend(BackendName.NETNS).available:
+        pytest.skip("netns unavailable on this host")
+
+    async def run():
+        runtime = OwnerRuntime(
+            tmp_path,
+            {"authorityId": "a" * 32, "workspaceId": "b" * 32},
+            source_digest="fixture-v3",
+            env=dict(os.environ),
+            config=SandboxConfig(backend=BackendName.NETNS, egress=EgressMode.NONE),
+            registry_probe=observation,
+        )
+        await runtime.start()
+        try:
+            await runtime.registry.register(
+                {
+                    "language": "python",
+                    "executable": sys.executable,
+                    "libraryPaths": [],
+                    "requiredPackages": [],
+                }
+            )
+            binding = SSHNotebookBinding(Client(runtime))
+            tools = ToolRegistry(
+                gate_tools(
+                    (
+                        PythonKernelTool(runner=binding),
+                        NotebookAnalysisTool(binding),
+                    ),
+                    PermissionGate(),
+                ),
+                before_execute=binding.before_tool,
+            )
+
+            async def run_turn(req_id: str, call: ToolCall):
+                async def approve(_req):
+                    return True
+
+                with use_tool_context(approval=approve, values={"session_id": "chat"}):
+                    prepared = await binding.notebook_augmentor("chat").prepare_request(
+                        (), (), req_id
+                    )
+                    assert "register it with notebook_analysis" not in prepared.messages[0].content
+                    with tools.use_request_context(prepared.context, 0, call):
+                        return await tools.execute(call)
+
+            # Step 1: Create and load synthetic PBMC AnnData
+            res1 = await run_turn(
+                "req-step-1",
+                action(
+                    "import scanpy as sc, anndata as ad, numpy as np, pandas as pd\n"
+                    "rng = np.random.default_rng(42)\n"
+                    "X = rng.poisson(2.0, size=(120, 80)).astype(np.float32)\n"
+                    "obs = pd.DataFrame({'sample': ['s1']*60 + ['s2']*60}, index=[f'cell_{i}' for i in range(120)])\n"
+                    "var = pd.DataFrame(index=[f'gene_{j}' for j in range(80)])\n"
+                    "adata = ad.AnnData(X=X, obs=obs, var=var)\n"
+                    "print('STEP1_OK', adata.shape)",
+                    "call-1",
+                ),
+            )
+            assert not res1.is_error, res1.output
+            assert "STEP1_OK (120, 80)" in res1.output
+
+            # Step 2: Register adata omitting optional fields (tableAxis, sourceRefs, rowIdentity, kernel, etc.)
+            reg_call = ToolCall(
+                id="call-reg",
+                name="notebook_analysis",
+                arguments=json.dumps(
+                    {
+                        "action": "object.register",
+                        "arguments": {"symbol": "adata"},
+                    }
+                ),
+            )
+            res_reg = await run_turn("req-step-2", reg_call)
+            assert not res_reg.is_error, res_reg.output
+            reg_payload = json.loads(res_reg.output)
+            op_id = reg_payload["receipt"]["result"]["operationId"]
+            nid = runtime.views.listing()["items"][0]["notebook_id"]
+            async with asyncio.timeout(30):
+                while True:
+                    rec = runtime.views.execution(nid, op_id)
+                    if rec["status"] not in {"queued", "running"} and rec["durability"] != "pending":
+                        assert rec["status"] == "completed", rec
+                        break
+                    await asyncio.sleep(0.05)
+
+            # Verify internal runpy inspection probe is filtered out of user-visible snapshot cells
+            snap_after_reg = runtime.views.snapshot(nid)
+            assert len(snap_after_reg["cells"]) == 1
+            assert all("notebook_inspect" not in c["source"] for c in snap_after_reg["cells"])
+
+            # Step 3: Modify adata (QC + normalize + HVG + PCA) -> marks adata as needs_inspection
+            res3 = await run_turn(
+                "req-step-3",
+                action(
+                    "sc.pp.filter_cells(adata, min_counts=1)\n"
+                    "sc.pp.filter_genes(adata, min_cells=1)\n"
+                    "sc.pp.normalize_total(adata, target_sum=1e4)\n"
+                    "sc.pp.log1p(adata)\n"
+                    "sc.pp.highly_variable_genes(adata, n_top_genes=40)\n"
+                    "sc.tl.pca(adata, n_comps=15)\n"
+                    "print('STEP3_PCA_OK', adata.obsm['X_pca'].shape)",
+                    "call-3",
+                ),
+            )
+            assert not res3.is_error, res3.output
+            assert "STEP3_PCA_OK" in res3.output
+
+            # Step 4: Run neighbors + umap + matplotlib WITHOUT calling object.inspect
+            # Verifies both: no notebook_analysis_reference_stale AND no Netns OpenMP SIGABRT crash
+            res4 = await run_turn(
+                "req-step-4",
+                action(
+                    "import matplotlib.pyplot as plt\n"
+                    "sc.pp.neighbors(adata, n_neighbors=10, n_pcs=10)\n"
+                    "sc.tl.umap(adata)\n"
+                    "fig, ax = plt.subplots(figsize=(4, 3))\n"
+                    "ax.scatter(adata.obsm['X_umap'][:, 0], adata.obsm['X_umap'][:, 1], s=5)\n"
+                    "plt.show()\n"
+                    "print('STEP4_UMAP_OK', adata.obsm['X_umap'].shape)",
+                    "call-4",
+                ),
+            )
+            assert not res4.is_error, res4.output
+            assert "STEP4_UMAP_OK" in res4.output
+
+            # Step 5: Kill the kernel process with SIGKILL and verify automatic respawn to generation 2
+            k_row = runtime.db.run(
+                lambda c: c.execute(
+                    "SELECT instance_id,generation,process_json FROM notebook_runtime_kernels WHERE notebook_id=? AND language='python' ORDER BY generation DESC LIMIT 1",
+                    (nid,),
+                ).fetchone()
+            )
+            assert k_row["generation"] == 1
+            proc_ev = json.loads(k_row["process_json"])
+            os.kill(proc_ev["pid"], signal.SIGKILL)
+            for _ in range(100):
+                if not same_process(proc_ev):
+                    break
+                await asyncio.sleep(0.02)
+            assert not same_process(proc_ev)
+
+            res5 = await run_turn(
+                "req-step-5",
+                action("print('STEP5_RESPAWN_OK', 6 * 7)", "call-5"),
+            )
+            assert not res5.is_error, res5.output
+            assert "STEP5_RESPAWN_OK 42" in res5.output
+
+            snap_final = runtime.views.snapshot(nid)
+            assert snap_final["kernel"]["generation"] == 2
+            assert snap_final["kernel"]["state"] == "ready"
+            assert len(snap_final["cells"]) == 4
+            assert all("notebook_inspect" not in c["source"] for c in snap_final["cells"])
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())

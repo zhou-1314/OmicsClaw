@@ -233,18 +233,29 @@ class SSHNotebookBinding:
             "origin": "agent",
             "approvalScope": "permission_gate",
             "timeoutSeconds": timeout_s or self.default_execution_timeout,
-            "kernelInstanceId": kernel["kernelInstanceId"]
-            if kernel
-            else hashlib.sha256(
-                (
-                    "kernel:"
-                    + session_id
-                    + ":"
-                    + invocation.request.request_id
-                    + (":r" if language == "r" else "")
-                ).encode()
-            ).hexdigest()[:32],
-            "generation": kernel["generation"] if kernel else summary["nextGeneration"],
+            "kernelInstanceId": (
+                kernel["kernelInstanceId"]
+                if (kernel and kernel.get("state") not in {"released", "lost"})
+                else hashlib.sha256(
+                    (
+                        "kernel:"
+                        + session_id
+                        + ":"
+                        + invocation.request.request_id
+                        + (
+                            f":gen{summary['nextGeneration']}"
+                            if summary.get("nextGeneration", 1) > 1
+                            else ""
+                        )
+                        + (":r" if language == "r" else "")
+                    ).encode()
+                ).hexdigest()[:32]
+            ),
+            "generation": (
+                kernel["generation"]
+                if (kernel and kernel.get("state") not in {"released", "lost"})
+                else summary["nextGeneration"]
+            ),
             "environmentId": selection["environmentId"],
             "environmentRevision": selection["environmentRevision"],
             "preconditions": {
@@ -405,7 +416,7 @@ class SSHNotebookContext:
         text = (
             "<notebook_context>\n"
             + NOTICE
-            + "\nWhen selections.<language>.environmentId is present and reason is empty, the python and r tools are ready and automatically attach and start this session's persistent notebook kernel on first call even if binding or kernel is null; prefer python/r tools over standalone bash scripts. After creating/loading the main analysis object, register it with notebook_analysis. After changing a registered object, inspect it before another calculation. Use fresh ObjectRef/SelectionRef values; do not reuse an invalid selection or infer matrix semantics. State writes require a fresh model request before later scientific code. Report one completed key stage per cell with notebook_stage(stage, metadata): qc, normalization, integration, clustering, annotation or differential_expression. Saving captures the final successful cell state and reinspects registered objects. Read checkpoint failures and ask the person before continuing without a save; never infer consent."
+            + "\nWhen selections.<language>.environmentId is present and reason is empty, the python and r tools are ready and automatically attach and start this session's persistent notebook kernel on first call even if binding or kernel is null; prefer python/r tools over standalone bash scripts. Execute scientific analysis code directly in the persistent python/r kernel and provide brief narrative progress between analytical steps; calling notebook_analysis is optional and only needed when the user explicitly requests object registration, selection management, or checkpointing. State writes require a fresh model request before later scientific code. Read checkpoint failures and ask the person before continuing without a save; never infer consent."
             + "\n"
             + encoded(summary).decode().replace("<", "\\u003c").replace(">", "\\u003e")
             + "\n</notebook_context>"

@@ -229,6 +229,47 @@ class OwnerAnalysis:
             return self.r.db.run(
                 lambda c: self.agent_receipt(c, nid, params, args["commandId"])
             )
+        if action == "object.register" and "symbol" in args:
+            args = {
+                "adapter": "anndata",
+                "sourceRefs": [],
+                "rowIdentity": {"kind": "index"},
+                "columnIdentity": {"kind": "index"},
+                "tableAxis": "row",
+                "declaredMatrix": {
+                    "assay": None,
+                    "layer": None,
+                    "semantics": "unknown",
+                },
+                "declaredMetadata": {
+                    "organism": None,
+                    "sampleColumn": None,
+                    "conditionColumn": None,
+                    "donorColumn": None,
+                },
+                **args,
+            }
+            if isinstance(args.get("declaredMatrix"), dict):
+                args["declaredMatrix"] = {
+                    "assay": None,
+                    "layer": None,
+                    "semantics": "unknown",
+                    **args["declaredMatrix"],
+                }
+            if isinstance(args.get("declaredMetadata"), dict):
+                args["declaredMetadata"] = {
+                    "organism": None,
+                    "sampleColumn": None,
+                    "conditionColumn": None,
+                    "donorColumn": None,
+                    **args["declaredMetadata"],
+                }
+            if "kernel" not in args and nid:
+                lang = "r" if args.get("adapter") == "r_rds" else "python"
+                k_row = self.r.db.run(lambda c: current_kernel(c, nid, lang))
+                if k_row is not None:
+                    args["kernel"] = kernel_ref(k_row)
+            params = {**params, "arguments": args}
         digest = hashlib.sha256(encoded([action, args])).hexdigest()
         old = self.r.db.run(
             lambda c: self.agent_receipt(
@@ -598,7 +639,8 @@ class OwnerAnalysis:
             command["expected"]["analysisRevision"] += 1
             self.expected(c, nid, command)
         else:
-            self.store.run_guard(c, nid, document)
+            if document.get("origin") != "agent":
+                self.store.run_guard(c, nid, document)
             self.store.invalidate(
                 c, nid, document["language"], "code_may_modify_object"
             )

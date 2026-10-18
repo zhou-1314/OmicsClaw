@@ -293,16 +293,26 @@ class OwnerViews:
                 if ca
                 else None
             )
+            c_probe_filter = (
+                "AND source NOT LIKE '%notebook_inspect.py%' "
+                "AND source NOT LIKE '%notebook_inspect.R%' "
+            )
             if c_anchor is not None:
                 cells = c.execute(
                     c_select
-                    + "WHERE notebook_id=? AND (COALESCE(cell_index,999999),COALESCE(created_at,updated_at),cell_id)>(?,?,?) "
+                    + "WHERE notebook_id=? "
+                    + c_probe_filter
+                    + "AND (COALESCE(cell_index,999999),COALESCE(created_at,updated_at),cell_id)>(?,?,?) "
                     + c_order,
                     (nid, c_anchor[0], c_anchor[1], ca, limit + 1),
                 ).fetchall()
             else:
                 cells = c.execute(
-                    c_select + "WHERE notebook_id=? AND cell_id>? " + c_order,
+                    c_select
+                    + "WHERE notebook_id=? "
+                    + c_probe_filter
+                    + "AND cell_id>? "
+                    + c_order,
                     (nid, ca, limit + 1),
                 ).fetchall()
             e_order = "ORDER BY e.created_at ASC,e.execution_id ASC LIMIT ?"

@@ -268,16 +268,21 @@ class NotebookOwnerClient:
                 except (ConnectionError, TimeoutError):
                     pass
 
-    def _launch(self):
+    @staticmethod
+    def _expected_source_digest() -> str:
         root = Path(__file__).resolve().parents[3]
         metadata = (
             verified_source_metadata(root)
             if (root / "controller-manifest.json").exists()
             else {}
         )
+        return metadata.get("sourceFilesHash", "development-unverified")
+
+    def _launch(self):
+        root = Path(__file__).resolve().parents[3]
         startup = {
             "identity": self.identity,
-            "sourceDigest": metadata.get("sourceFilesHash", "development-unverified"),
+            "sourceDigest": self._expected_source_digest(),
             "limits": self.limits,
             "workspace": str(self.workspace),
             "protocol": OWNER_PROTOCOL,
@@ -359,7 +364,34 @@ class NotebookOwnerClient:
                 state = read_private(state_path)
             except FileNotFoundError:
                 state = None
-            if state is None or not same_process(state.get("process")):
+            expected_digest = self._expected_source_digest()
+            if (
+                state is not None
+                and same_process(state.get("process"))
+                and state.get("sourceDigest") not in {None, expected_digest}
+            ):
+                proc = state.get("process")
+                old_owner_id = state.get("ownerId")
+                if same_process(proc):
+                    import signal
+
+                    try:
+                        os.kill(proc["pid"], signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    for _ in range(40):
+                        if not same_process(proc):
+                            break
+                        await asyncio.sleep(0.05)
+                    if same_process(proc):
+                        try:
+                            os.kill(proc["pid"], signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                state = await self._spawn_and_wait(
+                    state_path, previous_owner_id=old_owner_id
+                )
+            elif state is None or not same_process(state.get("process")):
                 state = await self._spawn_and_wait(state_path)
             if (
                 state.get("protocol") != OWNER_PROTOCOL

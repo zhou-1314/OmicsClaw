@@ -206,11 +206,11 @@ class SubreaperLifecycleWrapper:
         request = {"directory": str(directory), "nonce": nonce, "argv": list(argv)}
         return [sys.executable, "-I", "-B", str(worker), json.dumps(request)], dict(env)
 
-    def terminate(self, pid, guard):
+    def terminate(self, pid, guard=None):
         import signal
         import time
 
-        if not guard or not guard(pid):
+        if guard is not None and not guard(pid):
             return False
         root = process_evidence(pid)
         if root is None:
