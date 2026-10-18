@@ -214,3 +214,99 @@ def test_real_large_unicode_error_is_bounded_and_user_failure_keeps_mutation(tmp
             await r.close()
 
     asyncio.run(run())
+
+
+
+def test_same_path_figure_overwrite_across_cells_preserves_both_artifacts(tmp_path):
+    pytest.importorskip("ipykernel")
+
+    async def run():
+        runtime = OwnerRuntime(
+            tmp_path,
+            {"authorityId": "a" * 32, "workspaceId": "b" * 32},
+            source_digest="rich-overwrite",
+            env={},
+        )
+        await runtime.start()
+        try:
+            await register(runtime, sys.executable)
+            binding = SSHNotebookBinding(Client(runtime))
+            tools = registry(binding)
+
+            async def approve(request):
+                return True
+
+            async def run_cell(code_str, req_id):
+                call = ToolCall(
+                    id=req_id, name="python", arguments=json.dumps({"code": code_str})
+                )
+                with use_tool_context(approval=approve, values={"session_id": "chat-overwrite"}):
+                    prepared = await binding.notebook_augmentor("chat-overwrite").prepare_request(
+                        (), (), req_id
+                    )
+                    with tools.use_request_context(prepared.context, 0, call):
+                        response = await tools.execute(call)
+                assert not response.is_error, response.output
+                return json.loads(response.output)
+
+            png1 = base64.b64decode(PNG)
+            # Construct a second distinct valid PNG (append a harmless tEXt/trailing chunk or use matplotlib if available, or distinct valid PNG bytes)
+            png2 = png1 + b"second-cell-figure-payload"
+            res1 = await run_cell(
+                f"from pathlib import Path\nPath('figures').mkdir(exist_ok=True)\nPath('figures/qc_distributions.png').write_bytes({png1!r})",
+                "req-cell-1",
+            )
+            res2 = await run_cell(
+                f"from pathlib import Path\nPath('figures/qc_distributions.png').write_bytes({png2!r})",
+                "req-cell-2",
+            )
+            art1 = res1["output"]["figures"][0]["artifact_id"]
+            art2 = res2["output"]["figures"][0]["artifact_id"]
+            assert art1 != art2
+
+            info1 = runtime.artifact_reader.read(
+                {
+                    "notebookId": res1["notebook_id"],
+                    "executionId": res1["execution_id"],
+                    "artifactId": art1,
+                }
+            )
+            info2 = runtime.artifact_reader.read(
+                {
+                    "notebookId": res2["notebook_id"],
+                    "executionId": res2["execution_id"],
+                    "artifactId": art2,
+                }
+            )
+            assert info1["size"] == len(png1)
+            assert info1["sha256"] == hashlib.sha256(png1).hexdigest()
+            assert info2["size"] == len(png2)
+            assert info2["sha256"] == hashlib.sha256(png2).hexdigest()
+            chunk1 = runtime.artifact_reader.read(
+                {
+                    "notebookId": res1["notebook_id"],
+                    "executionId": res1["execution_id"],
+                    "artifactId": art1,
+                    "version": info1["version"],
+                    "offset": 0,
+                    "length": len(png1),
+                },
+                chunk=True,
+            )
+            chunk2 = runtime.artifact_reader.read(
+                {
+                    "notebookId": res2["notebook_id"],
+                    "executionId": res2["execution_id"],
+                    "artifactId": art2,
+                    "version": info2["version"],
+                    "offset": 0,
+                    "length": len(png2),
+                },
+                chunk=True,
+            )
+            assert base64.b64decode(chunk1["dataBase64"]) == png1
+            assert base64.b64decode(chunk2["dataBase64"]) == png2
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())

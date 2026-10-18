@@ -1798,9 +1798,27 @@ class OwnerRuntime:
                 (session_id,),
             ).fetchone()
         )
+        aid = new_artifact_id()
+        eid = execution[0] if execution else None
+        snapshot_path = None
+        try:
+            figures_dir = private_directory(self.workspace / ".omicsclaw/notebook-figures")
+            snap_target = figures_dir / f"{aid}.png"
+            snap_target.write_bytes(Path(path).read_bytes())
+            os.chmod(snap_target, 0o600)
+            snapshot_path = str(snap_target)
+        except OSError:
+            snapshot_path = None
+        meta = {
+            "capture": "kernel",
+            "executionId": eid,
+        }
+        if snapshot_path:
+            meta["snapshotPath"] = snapshot_path
+        scoped_job_id = f"{eid or job_id or 'notebook'}:{aid}"
         record = ArtifactRecord(
-            id=new_artifact_id(),
-            job_id=job_id,
+            id=aid,
+            job_id=scoped_job_id,
             session_id=session_id,
             kind="figure",
             path=str(path),
@@ -1809,10 +1827,7 @@ class OwnerRuntime:
             sha256=digest,
             size=size,
             produced_by="notebook_kernel",
-            meta={
-                "capture": "kernel",
-                "executionId": execution[0] if execution else None,
-            },
+            meta=meta,
             created_at=time.time(),
         )
         existing = self.artifacts.insert_artifact(record)

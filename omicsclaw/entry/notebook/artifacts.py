@@ -76,34 +76,59 @@ class OwnerArtifacts:
             or record.mime != "image/png"
         ):
             raise NotebookError("notebook_artifact_unavailable", 409)
-        fd = open_inside(self.r.workspace, record.path)
+        def _read_and_verify(target_path):
+            fd = open_inside(self.r.workspace, target_path)
+            try:
+                before = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_uid != os.getuid()
+                    or not 0 < before.st_size <= MAX_IMAGE_BYTES
+                ):
+                    raise NotebookError("notebook_artifact_unavailable", 409)
+                digest = hashlib.sha256()
+                header = os.read(fd, 8)
+                if header != b"\x89PNG\r\n\x1a\n":
+                    raise NotebookError("notebook_artifact_unavailable", 409)
+                digest.update(header)
+                total = 8
+                while total <= MAX_IMAGE_BYTES:
+                    block = os.read(fd, MAX_CHUNK_BYTES)
+                    if not block:
+                        break
+                    total += len(block)
+                    digest.update(block)
+                if (
+                    total != before.st_size
+                    or evidence(before) != evidence(os.fstat(fd))
+                    or digest.hexdigest() != record.sha256
+                    or total != record.size
+                ):
+                    raise NotebookError("notebook_artifact_changed", 409)
+                return fd, before, digest, total
+            except Exception:
+                os.close(fd)
+                raise
+
         try:
-            before = os.fstat(fd)
-            if (
-                not stat.S_ISREG(before.st_mode)
-                or before.st_uid != os.getuid()
-                or not 0 < before.st_size <= MAX_IMAGE_BYTES
-            ):
-                raise NotebookError("notebook_artifact_unavailable", 409)
-            digest = hashlib.sha256()
-            header = os.read(fd, 8)
-            if header != b"\x89PNG\r\n\x1a\n":
-                raise NotebookError("notebook_artifact_unavailable", 409)
-            digest.update(header)
-            total = 8
-            while total <= MAX_IMAGE_BYTES:
-                block = os.read(fd, MAX_CHUNK_BYTES)
-                if not block:
-                    break
-                total += len(block)
-                digest.update(block)
-            if (
-                total != before.st_size
-                or evidence(before) != evidence(os.fstat(fd))
-                or digest.hexdigest() != record.sha256
-                or total != record.size
-            ):
-                raise NotebookError("notebook_artifact_changed", 409)
+            fd, before, digest, total = _read_and_verify(record.path)
+        except NotebookError as err:
+            snapshot_path = record.meta.get("snapshotPath") if isinstance(record.meta, dict) else None
+            overwritten = (
+                bool(snapshot_path)
+                and err.code == "notebook_artifact_changed"
+                and self.r.artifact_db.run(
+                    lambda c: c.execute(
+                        "SELECT 1 FROM artifacts WHERE path = ? AND id != ? LIMIT 1",
+                        (record.path, record.id),
+                    ).fetchone()
+                )
+                is not None
+            )
+            if not overwritten:
+                raise
+            fd, before, digest, total = _read_and_verify(snapshot_path)
+        try:
             version = hashlib.sha256(
                 encoded([evidence(before), digest.hexdigest()])
             ).hexdigest()
