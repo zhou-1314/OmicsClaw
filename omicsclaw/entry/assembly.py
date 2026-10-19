@@ -139,6 +139,11 @@ from .sandbox import (
     sandbox_section,
     unstarted_sandbox,
 )
+from .session_options import (
+    SessionOptionsState,
+    render_planning_session_options_suffix,
+    render_tools_session_options_suffix,
+)
 from .shadow_review import ShadowReview
 from .skill_env import SkillEnvBinding, build_skill_env, log_skill_env
 from .subagent import ChildRunner, build_subagent_registry
@@ -1358,13 +1363,21 @@ def default_sections(
             ),
         )
 
+    def _tools_guidance_source() -> str:
+        suffix = render_tools_session_options_suffix(SessionOptionsState.from_context())
+        return TOOL_GUIDANCE + suffix if suffix else TOOL_GUIDANCE
+
+    def _planning_guidance_source() -> str:
+        suffix = render_planning_session_options_suffix(SessionOptionsState.from_context())
+        return PLANNING_GUIDANCE + suffix if suffix else PLANNING_GUIDANCE
+
     planning: tuple[Section, ...] = ()
     if config.planning and plan_tool:
         planning = (
             Section(
                 "planning",
                 PLANNING_SECTION_HEADING,
-                static(PLANNING_GUIDANCE),
+                _planning_guidance_source,
             ),
         )
 
@@ -1385,7 +1398,7 @@ def default_sections(
     return (
         *_front_matter(config),
         Section("safety", "## Safety rules", static(SAFETY_RULES)),
-        Section("tools", "## Tool guidance", static(TOOL_GUIDANCE)),
+        Section("tools", "## Tool guidance", _tools_guidance_source),
         *compaction,
         Section(
             "follow-ups",
@@ -1773,6 +1786,10 @@ class AgentApp:
     :func:`~omicsclaw.entry.session.attach_sessions`'s ``replace``. The
     desktop server binds the artifact store to it once the jobs manager
     exists; every other surface leaves it unbound and untouched."""
+
+    verifier_review: ShadowReview | None = None
+    """Standby ShadowReview instance used when per-session ``verifier_mode`` is
+    enabled on a deployment whose global ``config.shadow_review`` is False."""
 
     provider_for_role: Callable[[str], LLMProvider] | None = None
     """Deployment-owned caller selection. None reuses the main provider."""
@@ -2371,11 +2388,12 @@ def build_app(
         provider_for_role=provider_for_role,
         resolved_model=resolved_model,
     )
-    if config.shadow_review:
-        # The reviewer reads the config and receives everything else as
-        # arguments, so holding the pre-attach app is deliberate:
-        # attach_sessions copies this field onto the attached instance.
-        app = replace(app, shadow_review=ShadowReview(app, review_call=review_call))
+    verifier_instance = ShadowReview(app, review_call=review_call)
+    app = replace(
+        app,
+        verifier_review=verifier_instance,
+        shadow_review=verifier_instance if config.shadow_review else None,
+    )
     return app
 
 

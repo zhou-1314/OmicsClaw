@@ -32,6 +32,7 @@ from omicsclaw.schema import Message
 
 from .config import STATE_DIRNAME, AppConfig
 from .memory import build_memory_extractor
+from .session_options import SessionOptionsState
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
     from .assembly import AgentApp
@@ -172,6 +173,8 @@ def build_compactor(
     extractor = app.memory_extractor
     if extractor is None:
         extractor = build_memory_extractor(app.memory, app.summarizer)
+    if SessionOptionsState.from_context().memory_mode is False:
+        extractor = None
     archiver = _compaction_archiver(app, session_id)
     scratch = (
         SessionScratch(app.memory.database) if app.memory is not None else None

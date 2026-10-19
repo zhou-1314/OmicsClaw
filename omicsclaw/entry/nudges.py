@@ -18,14 +18,22 @@ from omicsclaw.schema import Message, Role, ToolDefinition
 from omicsclaw.schema.request import ModelRequestContext, PreparedModelRequest
 from omicsclaw.skills import SkillDiscovery
 
+from omicsclaw.tools.context import current_context
+
 from .memory import MEMORY_TRUST_NOTICE, MEMORY_WRITE_TOOL_NAME
 from .planning import build_injector
+from .session_options import (
+    SessionOptionsState,
+    get_recorded_session_options,
+    record_session_options_turn,
+    render_transition_nudges,
+)
 from .shadow_review import ShadowReviewNudge
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
     from .assembly import AgentApp
 
-__all__ = ["AugmentorChain", "build_augmentor", "chain"]
+__all__ = ["AugmentorChain", "SessionTransitionNudge", "build_augmentor", "chain"]
 
 
 class AugmentorChain:
@@ -119,6 +127,7 @@ def build_augmentor(app: "AgentApp", *, session_id: str = "") -> TurnAugmentor |
         the exchange, or ``None`` when the deployment has nothing to add.
     """
     return chain(
+        _session_transition_nudge(session_id),
         _memory_nudge(app),
         _precis_block(app),
         _scratch_block(app, session_id=session_id),
@@ -148,6 +157,13 @@ def _precis_block(app: "AgentApp") -> VolatileBlock | None:
     """
     if not app.config.precis_via_augmentor or app.memory is None:
         return None
+    if SessionOptionsState.from_context().memory_mode is False:
+        return None
+
+    def render() -> str:
+        if SessionOptionsState.from_context().memory_mode is False:
+            return ""
+        return app.memory.precis.read()
 
     def wrap(text: str) -> Message:
         safe = text.replace("<", "&lt;").replace(">", "&gt;")
@@ -162,7 +178,7 @@ def _precis_block(app: "AgentApp") -> VolatileBlock | None:
             ),
         )
 
-    return VolatileBlock(render=app.memory.precis.read, wrap=wrap)
+    return VolatileBlock(render=render, wrap=wrap)
 
 
 _SCRATCH_WARNING = (
@@ -247,15 +263,66 @@ def _scratch_block(app: "AgentApp", *, session_id: str) -> TurnAugmentor | None:
 
 
 
+class SessionTransitionNudge:
+    """One-shot per-turn ``<system-reminder>`` when session options change mid-session."""
+
+    __slots__ = ("_text", "_sent")
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._sent = False
+
+    async def augment(
+        self,
+        history: Sequence[Message],
+        tools: Sequence[ToolDefinition] = (),
+    ) -> tuple[Message, ...]:
+        if self._sent or not self._text:
+            return ()
+        self._sent = True
+        return (Message(role=Role.USER, content=self._text),)
+
+
+def _session_transition_nudge(session_id: str) -> SessionTransitionNudge | None:
+    """Return a one-shot transition nudge when session options changed mid-session."""
+    ctx_values = current_context().values
+    options = SessionOptionsState.from_mapping(ctx_values)
+    precomputed = ctx_values.get("_session_option_transitions")
+    if isinstance(precomputed, (tuple, list)):
+        transitions = tuple(str(x) for x in precomputed if x)
+    elif session_id and (
+        not options.is_empty()
+        or get_recorded_session_options(session_id) is not None
+    ):
+        transitions = record_session_options_turn(session_id, options)
+    else:
+        transitions = ()
+    if not transitions:
+        return None
+    return SessionTransitionNudge(render_transition_nudges(transitions))
+
+
 def _shadow_review_nudge(
     app: "AgentApp", session_id: str
 ) -> ShadowReviewNudge | None:
     """The nudge carrying a shadow-review verdict into *session_id*'s next
     turn, or ``None`` when shadow review is off or has nothing pending."""
+    options = SessionOptionsState.from_context()
+    if options.verifier_mode is False:
+        return None
     reviewer = getattr(app, "shadow_review", None)
+    if reviewer is None:
+        verifier = getattr(app, "verifier_review", None)
+        if verifier is not None and (
+            options.verifier_mode is True
+            or (session_id and session_id in getattr(verifier, "_notes", ()))
+        ):
+            reviewer = verifier
     if reviewer is None:
         return None
     return reviewer.nudge_for(session_id)
+
+
 def _skill_discovery(app: "AgentApp") -> SkillDiscovery | None:
     """The per-turn skill discovery block for *app*, or ``None``.
 
@@ -279,8 +346,10 @@ def _memory_nudge(app: "AgentApp") -> MemoryNudge | None:
 
     :returns: ``None`` when the deployment keeps no long-term memory or
         :attr:`~omicsclaw.entry.config.AppConfig.memory_nudge_turns` is
-        ``0`` or less.
+        ``0`` or less, or when ``memory_mode`` is disabled for the session.
     """
+    if SessionOptionsState.from_context().memory_mode is False:
+        return None
     every = app.config.memory_nudge_turns
     if app.memory is None or every <= 0:
         return None

@@ -49,6 +49,7 @@ from omicsclaw.entry.desktop.turn_submission import (
 )
 from omicsclaw.entry.memory import memory_db_path
 from omicsclaw.entry.session import SubmissionRefused
+from omicsclaw.entry.session_options import bind_reviewer_provider
 from omicsclaw.entry.shadow_review import review_with_provider
 from omicsclaw.memory.database import Database
 from omicsclaw.memory.turn_events import DurableTurnEventLog
@@ -396,11 +397,14 @@ class Controller:
         self.production = production
         self.snapshots = parsed
 
-        async def review_call(session_id, records, history):
+        async def review_call(session_id, records, history, *, reviewer_model=None):
+            rev_prov = self.role_providers["shadow_review"].bind(
+                max_tokens=min(4096, parsed["shadow_review"].output_tokens)
+            )
+            if reviewer_model:
+                rev_prov = bind_reviewer_provider(rev_prov, reviewer_model)
             return await review_with_provider(
-                self.role_providers["shadow_review"].bind(
-                    max_tokens=min(4096, parsed["shadow_review"].output_tokens)
-                ),
+                rev_prov,
                 session_id,
                 records,
                 history,
@@ -527,6 +531,8 @@ class Controller:
         self.maintenance_jobs_task = asyncio.create_task(poll_job_interrupts(self))
         if self.app.shadow_review:
             self.app.shadow_review.bind_store(self.jobs.artifacts)
+        if getattr(self.app, "verifier_review", None):
+            self.app.verifier_review.bind_store(self.jobs.artifacts)
         return {
             "configured": True,
             "revision": snapshot.revision,
@@ -655,7 +661,7 @@ class Controller:
             coverage,
             keepalive_s=None,
             approvals=handle.approvals,
-            questions=handle.questions,
+            questions=getattr(handle, "questions", None),
             interactions=self.interactions,
             provider=metadata.get("provider", self.model_snapshot.provider_id),
             model=metadata.get("model", self.model_snapshot.model),

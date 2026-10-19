@@ -13,6 +13,8 @@ from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.events import TurnEvent, TurnEventType
 from omicsclaw.entry.ingress import SenderPolicy
 from omicsclaw.entry.session import SessionRegistry
+from omicsclaw.entry.session_options import SessionOptionsState
+from omicsclaw.tools.context import current_context
 from omicsclaw.entry.stream import ObserverCapacityError, TurnObservation
 from omicsclaw.entry.turn import TurnHandle
 
@@ -99,20 +101,30 @@ async def open_chat_stream(
 
 
 def _maybe_fire_shadow_review(
-    app: AgentApp, registry: SessionRegistry, session_id: str
-) -> None:
+    app: AgentApp,
+    registry: SessionRegistry,
+    session_id: str,
+    *,
+    values: Mapping[str, object] | None = None,
+) -> Any:
     """Evaluate the shadow-review checkpoint and fire it, if crossed.
 
     Runs after the exchange exists, so the verdict's notice frame has a
     live stream to land in; the review itself is a background task and
     can never hold up the turn that just started.
     """
+    active_values = values if values is not None else current_context().values
+    options = SessionOptionsState.from_mapping(active_values)
+    if options.verifier_mode is False:
+        return None
     reviewer = app.shadow_review
+    if reviewer is None and options.verifier_mode is True:
+        reviewer = getattr(app, "verifier_review", None)
     if reviewer is None:
-        return
+        return None
     records = reviewer.evaluate(session_id)
     if not records:
-        return
+        return None
     session = registry.session(session_id)
     history = session.history if session is not None else ()
 
@@ -128,7 +140,13 @@ def _maybe_fire_shadow_review(
                 # next turn through the nudge.
                 handle.stream.publish(event)
 
-    reviewer.fire(session_id, records, history=history, publisher=publish)
+    return reviewer.fire(
+        session_id,
+        records,
+        history=history,
+        publisher=publish,
+        reviewer_model=options.reviewer_model,
+    )
 
 
 def _retained_exchange(registry: SessionRegistry, turn_id: str | None) -> TurnHandle:
@@ -290,7 +308,7 @@ async def admit_chat(
         handle.session_id, request.source_request_id, handle.turn_id
     )
     if newly_admitted:
-        _maybe_fire_shadow_review(app, registry, handle.session_id)
+        _maybe_fire_shadow_review(app, registry, handle.session_id, values=inbound.values)
     return ChatAdmission(handle, newly_admitted, interactions)
 
 

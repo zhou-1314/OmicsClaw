@@ -11,8 +11,12 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Sequence
 
+import inspect
+
 from omicsclaw.memory.artifacts import ArtifactRecord, ArtifactStore
 from omicsclaw.schema import Message, Role
+
+from .session_options import bind_reviewer_provider, resolve_reviewer_model
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
     from omicsclaw.entry.assembly import AgentApp
@@ -246,6 +250,7 @@ class ShadowReview:
     _store: ArtifactStore | None = None
     _checkpoints: dict[str, ShadowReviewCheckpoint] = field(default_factory=dict)
     _notes: dict[str, str] = field(default_factory=dict)
+    _last_reviewer_model: str = ""
 
     def __init__(
         self,
@@ -256,7 +261,7 @@ class ShadowReview:
         review_call: _ReviewCall | None = None,
     ) -> None:
         self._app = app
-        self._model = model
+        self._model = model or getattr(getattr(app, "config", None), "shadow_review_model", "")
         self._timeout_s = timeout_s
         # A test seam: the caller supplies the whole reviewer call, which
         # is how verdict handling is tested without a model on the wire.
@@ -264,9 +269,18 @@ class ShadowReview:
         self._store: ArtifactStore | None = None
         self._checkpoints: dict[str, ShadowReviewCheckpoint] = {}
         self._notes: dict[str, str] = {}
+        self._last_reviewer_model: str = ""
 
     def bind_store(self, store: ArtifactStore) -> None:
         """Point the detector at the desktop's artifact store."""
+        self._store = store
+
+    @property
+    def _artifacts(self) -> ArtifactStore | None:
+        return self._store
+
+    @_artifacts.setter
+    def _artifacts(self, store: ArtifactStore | None) -> None:
         self._store = store
 
     def evaluate(self, session_id: str) -> list[ArtifactRecord]:
@@ -296,6 +310,41 @@ class ShadowReview:
             self._checkpoints[session_id] = checkpoint
         return checkpoint.evaluate(records)
 
+    def _pick_provider(self, reviewer_model: str | None = None) -> Any:
+        """Resolve the provider for a shadow review call, honouring ``reviewer_model``."""
+        config = getattr(self._app, "config", None)
+        fallback = (
+            self._model
+            or (getattr(config, "shadow_review_model", "") if config is not None else "")
+        )
+        resolved = resolve_reviewer_model(reviewer_model, fallback_model=fallback)
+        self._last_reviewer_model = resolved
+
+        role_selector = getattr(self._app, "provider_for_role", None)
+        base_prov = None
+        if callable(role_selector):
+            try:
+                base_prov = role_selector("shadow_review")
+            except Exception:
+                base_prov = None
+        if base_prov is None:
+            base_prov = getattr(self._app, "provider", None)
+
+        if base_prov is not None:
+            if resolved:
+                return bind_reviewer_provider(base_prov, resolved)
+            return base_prov
+
+        from omicsclaw.provider.factory import provider_from_env
+
+        if config is None:
+            raise RuntimeError("shadow review has no provider or config")
+        return provider_from_env(
+            config.provider,
+            model=resolved or config.model,
+            max_tokens=_MAX_TOKENS,
+        )
+
     def fire(
         self,
         session_id: str,
@@ -303,6 +352,7 @@ class ShadowReview:
         *,
         history: Sequence[Message] = (),
         publisher: Callable[[ShadowReviewVerdict], None] | None = None,
+        reviewer_model: str | None = None,
     ) -> "asyncio.Task[None]":
         """Schedule one review for *records* and return its task.
 
@@ -312,7 +362,13 @@ class ShadowReview:
         returned task.
         """
         return asyncio.create_task(
-            self._review(session_id, records, history, publisher)
+            self._review(
+                session_id,
+                records,
+                history,
+                publisher,
+                reviewer_model=reviewer_model,
+            )
         )
 
     async def _review(
@@ -321,9 +377,13 @@ class ShadowReview:
         records: Sequence[ArtifactRecord],
         history: Sequence[Message],
         publisher: Callable[[ShadowReviewVerdict], None] | None,
+        *,
+        reviewer_model: str | None = None,
     ) -> None:
         try:
-            verdict = await self._run_review_call(session_id, records, history)
+            verdict = await self._run_review_call(
+                session_id, records, history, reviewer_model=reviewer_model
+            )
         except Exception as error:  # noqa: BLE001 - never blocks the loop
             _log.info(
                 "shadow review: reviewer call failed for session %s (%s)",
@@ -355,18 +415,34 @@ class ShadowReview:
         session_id: str,
         records: Sequence[ArtifactRecord],
         history: Sequence[Message],
+        *,
+        reviewer_model: str | None = None,
     ) -> ShadowReviewVerdict:
-        if self._review_call is not None:
-            return await self._review_call(session_id, records, history)
-        from omicsclaw.provider.factory import provider_from_env
-
-        config = self._app.config
-        model = self._model or config.model
-        provider = provider_from_env(
-            config.provider, model=model, max_tokens=_MAX_TOKENS
+        config = getattr(self._app, "config", None)
+        fallback = (
+            self._model
+            or (getattr(config, "shadow_review_model", "") if config is not None else "")
         )
+        resolved = resolve_reviewer_model(reviewer_model, fallback_model=fallback)
+        self._last_reviewer_model = resolved
+
+        if self._review_call is not None:
+            try:
+                sig = inspect.signature(self._review_call)
+                params = sig.parameters
+                if "reviewer_model" in params or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+                ):
+                    return await self._review_call(
+                        session_id, records, history, reviewer_model=resolved
+                    )
+            except (TypeError, ValueError):
+                pass
+            return await self._review_call(session_id, records, history)
+
+        selected_provider = self._pick_provider(reviewer_model=resolved)
         return await review_with_provider(
-            provider, session_id, records, history, timeout_s=self._timeout_s
+            selected_provider, session_id, records, history, timeout_s=self._timeout_s
         )
 
     def nudge_for(self, session_id: str) -> ShadowReviewNudge:

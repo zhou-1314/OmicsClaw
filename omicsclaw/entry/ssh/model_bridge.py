@@ -116,7 +116,13 @@ class RpcTransport:
             raise RpcError("SDK request outside model capability")
         body = json.loads(await request.aread())
         if body.get("model") not in self.snapshot.allowed_models:
-            raise RpcError("model outside Mac snapshot")
+            if (
+                self.role in ("subagent", "shadow_review")
+                and self.snapshot.model in self.snapshot.allowed_models
+            ):
+                body["model"] = self.snapshot.model
+            else:
+                raise RpcError("model outside Mac snapshot")
         caller = None
         if self.role is not None:
             identity = self.identity() if self.identity else None

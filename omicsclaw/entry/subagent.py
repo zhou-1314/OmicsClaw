@@ -48,7 +48,12 @@ from omicsclaw.tools.builtin.ask_user import TOOL_NAME as ASK_USER_TOOL_NAME
 from omicsclaw.tools.function_tool import ToolArgumentError
 
 from .config import AppConfig
-from .memory import MEMORY_WRITE_TOOL_NAME
+from .memory import MEMORY_SEARCH_TOOL_NAME, MEMORY_WRITE_TOOL_NAME
+from .session_options import (
+    SessionOptionsState,
+    bind_reviewer_provider,
+    resolve_reviewer_model,
+)
 from .project import REVIEW_BRIEF_FILE
 from .review import ReviewArchive
 from .sandbox import SandboxBinding, sandbox_section
@@ -183,8 +188,7 @@ not use it, the step says why.
 2. The validate step checks the outputs the REPORT relies on.
 3. The REPORT (M<NN>_<slug>_REPORT.md): every number matches a table or log \
 in results/<NN_slug>/; every figure it cites exists and is not listed under \
-orphan_outputs; claims stay within what the steps computed; it carries the \
-disclaimer.
+orphan_outputs; claims stay within what the steps computed; it carries the \ndisclaimer.
 4. The replay in the manifest succeeded and covers the current step files.
 
 Your first line is the verdict, exactly `VERDICT: APPROVE` or \
@@ -392,16 +396,42 @@ class ChildRunner:
         ):
             return await self._run_child(definition, prompt)
 
+    def _resolve_provider(
+        self,
+        definition: SubAgentDefinition,
+        values: Mapping[str, object] | None = None,
+    ) -> LLMProvider:
+        """Select the provider for *definition*, honouring ``reviewer_model`` on reviews."""
+        active_values = values if values is not None else current_context().values
+        options = SessionOptionsState.from_mapping(active_values)
+        if definition.name == "module-reviewer":
+            fallback = definition.model or getattr(self._config, "shadow_review_model", "") or ""
+            target_model = resolve_reviewer_model(options.reviewer_model, fallback_model=fallback)
+            if target_model:
+                return bind_reviewer_provider(self._provider, target_model)
+            return self._provider
+        if definition.model:
+            return self._provider.bind(model=definition.model)
+        return self._provider
+
     async def _run_child(self, definition: SubAgentDefinition, prompt: str) -> str:
         """Run *definition* over *prompt* in the tool context :meth:`delegate` bound.
 
         Returns and raises what :meth:`delegate` documents.
         """
         values = current_context().values
+        options = SessionOptionsState.from_mapping(values)
+        if options.ultra_mode is False and definition.name == GENERAL_PURPOSE.name:
+            return (
+                "[subagent:general-purpose] Delegation (ultra_mode) is currently "
+                "disabled in Session Options. Execute this step directly in the "
+                "main session without delegating to a general-purpose subagent."
+            )
         if (
             definition.name == "module-reviewer"
             and values.get("surface") == "desktop"
             and values.get("module_review_requested") is not True
+            and options.verifier_mode is not True
         ):
             raise ToolArgumentError(
                 "Independent review is off for this Desktop turn. "
@@ -413,9 +443,7 @@ class ChildRunner:
         if archive:
             prompt = f"Review module {module}.\n\n{prompt}"
         engine = AgentEngine(
-            self._provider.bind(model=definition.model)
-            if definition.model
-            else self._provider,
+            self._resolve_provider(definition, values),
             self._child_registry(definition),
             self._engine_config(definition),
         )
@@ -451,9 +479,12 @@ class ChildRunner:
         The parent's registration order is preserved, so two sub-agents
         with the same tool set present it to the model identically.
         """
+        memory_disabled = SessionOptionsState.from_context().memory_mode is False
         child = ToolRegistry(before_execute=self._parent.before_execute)
         for name in definition.resolve_tools(self._parent.names()):
             if name in _WITHHELD_FROM_SUB_AGENTS:
+                continue
+            if memory_disabled and name in (MEMORY_SEARCH_TOOL_NAME, MEMORY_WRITE_TOOL_NAME):
                 continue
             tool: Tool | None = self._parent.get(name)
             if tool is None:

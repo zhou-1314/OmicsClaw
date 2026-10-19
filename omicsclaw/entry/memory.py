@@ -39,6 +39,7 @@ from omicsclaw.tools import (
 )
 
 from .config import AppConfig
+from .session_options import SessionOptionsState
 
 __all__ = [
     "CONTENT_TRUNCATED_KEY",
@@ -56,6 +57,7 @@ __all__ = [
     "MemoryBinding",
     "PrecisRefreshingExtractor",
     "build_memory_extractor",
+    "build_memory_tools",
     "memory_db_path",
     "memory_search_tool",
     "memory_section",
@@ -236,6 +238,8 @@ def memory_section(binding: MemoryBinding) -> Section:
     precis = binding.precis
 
     def read() -> str:
+        if SessionOptionsState.from_context().memory_mode is False:
+            return ""
         text = precis.read()
         if not text:
             return ""
@@ -268,6 +272,8 @@ class PrecisRefreshingExtractor:
         :param messages: Conversation about to be summarized away.
         :returns: What the underlying extractor stored.
         """
+        if SessionOptionsState.from_context().memory_mode is False:
+            return ExtractionResult(stored=(), rejected=0, failure=None)
         result = await self.extractor.extract(messages)
         if result.failure:
             _log.warning("memory extraction failed: %s", result.failure)
@@ -468,6 +474,9 @@ def memory_tools(binding: MemoryBinding) -> tuple[Tool, ...]:
     return (memory_search_tool(binding), memory_write_tool(binding))
 
 
+build_memory_tools = memory_tools
+
+
 def memory_search_tool(binding: MemoryBinding) -> FunctionTool:
     """Build the ``memory_search`` tool over *binding*.
 
@@ -548,6 +557,11 @@ async def _search(binding: MemoryBinding, query: str, limit: int) -> str:
     :raises ToolArgumentError: If *query* has no searchable text, which
         the model can correct from the message.
     """
+    if SessionOptionsState.from_context().memory_mode is False:
+        return (
+            "Memory is disabled for this session (memory_mode=off). "
+            "Enable Memory in Session Options to search or write persistent notes."
+        )
     text = query.strip()
     if not text:
         raise ToolArgumentError(
@@ -646,6 +660,11 @@ async def _write(
         missing, or the named entry does not exist. Both reach the model
         as something it can correct.
     """
+    if SessionOptionsState.from_context().memory_mode is False:
+        return (
+            "Memory is disabled for this session (memory_mode=off). "
+            "Enable Memory in Session Options to search or write persistent notes."
+        )
     if action == "remove":
         removed = await binding.store.soft_delete(_required_id(entry_id, action))
         if not removed:

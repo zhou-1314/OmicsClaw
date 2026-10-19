@@ -397,7 +397,10 @@ def _reply(trajectory: Sequence[Message], given: Sequence[Message]) -> str:
 
 
 @contextmanager
-def _session_bound(session_id: str) -> Iterator[None]:
+def _session_bound(
+    session_id: str,
+    values: Mapping[str, object] | None = None,
+) -> Iterator[None]:
     """Tell this exchange's tools which session they are running in.
 
     :class:`TurnRunner` binds the same fact through
@@ -415,10 +418,13 @@ def _session_bound(session_id: str) -> Iterator[None]:
     failing closed. The question channel is carried inwards the same way.
     """
     outer = current_context()
+    merged = {**outer.values, "session_id": session_id}
+    if values:
+        merged.update(values)
     with use_tool_context(
         approval=outer.approval,
         progress=outer.progress,
-        values={**outer.values, "session_id": session_id},
+        values=merged,
         question=outer.question,
     ):
         yield
@@ -431,6 +437,7 @@ async def run_turn(
     *,
     state: CompactionState | None = None,
     session_id: str = "",
+    values: Mapping[str, object] | None = None,
 ) -> TurnOutcome:
     """Run one exchange to convergence and hand back what to keep.
 
@@ -445,10 +452,9 @@ async def run_turn(
         are cancelled by :func:`asyncio.timeout` on the way out, and the
         exchange leaves no partial history behind.
     """
-    exchange = _assemble(app, history, session_id=session_id, state=state)
-
     timeout = app.config.turn_timeout_s
-    with _session_bound(session_id):
+    with _session_bound(session_id, values=values):
+        exchange = _assemble(app, history, session_id=session_id, state=state)
         async with app.telemetry.run(
             session_id=session_id,
             prompt=user_text,
@@ -479,6 +485,7 @@ async def stream_turn(
     *,
     state: CompactionState | None = None,
     session_id: str = "",
+    values: Mapping[str, object] | None = None,
 ) -> AsyncIterator[EngineEvent]:
     """Run one exchange, yielding the engine's events as they happen.
 
@@ -491,8 +498,8 @@ async def stream_turn(
     :func:`run_turn`: an event stream reports what happened, not what to
     carry forward.
     """
-    exchange = _assemble(app, history, session_id=session_id, state=state)
-    with _session_bound(session_id):
+    with _session_bound(session_id, values=values):
+        exchange = _assemble(app, history, session_id=session_id, state=state)
         async with app.telemetry.run(
             session_id=session_id,
             prompt=user_text,

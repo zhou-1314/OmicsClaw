@@ -244,6 +244,8 @@ def create_desktop_app(
         # P6 item 4: the detector lives on the app, the store lives here.
         # One bind, at app creation, so every route sees the same store.
         app.shadow_review.bind_store(jobs.artifacts)
+    if getattr(app, "verifier_review", None) is not None:
+        app.verifier_review.bind_store(jobs.artifacts)
 
     def _authorized(request: Request) -> bool:
         if not bearer_token:

@@ -30,6 +30,12 @@ from .assembly import AgentApp
 from .events import Terminal
 from .ingress import InboundMessage
 from .memory import session_store
+from .session_options import (
+    SessionOptionsState,
+    clear_session_options_ledger,
+    get_recorded_session_options,
+    record_session_options_turn,
+)
 from .stream import TurnObservation
 from .turn import TurnHandle, TurnRunner
 
@@ -876,6 +882,25 @@ class SessionRegistry:
             handle._end_unstarted()
             return
 
+        merged_values: dict[str, object] = {**session.values, **handle.values}
+        options = SessionOptionsState.from_mapping(merged_values)
+        prior_dict = session.values.get("session_options_state")
+        prior_override = (
+            SessionOptionsState.from_mapping(prior_dict)
+            if isinstance(prior_dict, Mapping)
+            else None
+        )
+        if not options.is_empty() or prior_override is not None:
+            transitions = record_session_options_turn(
+                handle.session_id,
+                options,
+                previous_override=prior_override,
+            )
+            recorded = get_recorded_session_options(handle.session_id)
+            if recorded is not None and not recorded.is_empty():
+                session.values = MappingProxyType({**session.values, "session_options_state": recorded.to_dict()})
+            merged_values["_session_option_transitions"] = transitions
+
         runner = TurnRunner(
             self._app,
             handle.stream,
@@ -884,7 +909,7 @@ class SessionRegistry:
             history=session.history,
             compaction=session.compaction,
             user_text=handle.text,
-            values={**session.values, **handle.values},
+            values=merged_values,
             approval=handle.approvals,
             questions=handle.questions,
             force_compaction=handle.compaction_only,
@@ -937,8 +962,11 @@ class SessionRegistry:
         before the error goes on to :meth:`_run`, which ends the handle
         ``failed``.
         """
+        clear_session_options_ledger(handle.session_id)
         session = await self.load_session(handle.session_id)
         if session is not None:
+            if "session_options_state" in session.values:
+                session.values = MappingProxyType({k: v for k, v in session.values.items() if k != "session_options_state"})
             kept = (session.history, session.compaction, session.updated_at)
             session.history = ()
             session.compaction = CompactionState()
