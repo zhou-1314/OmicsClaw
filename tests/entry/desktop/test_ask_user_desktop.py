@@ -179,3 +179,94 @@ def test_decode_chat_stream_request_accepts_reasoning_effort_and_session_options
                 "reasoning_effort": "extreme",
             }
         )
+
+
+def test_ask_user_accepts_plain_string_answer_and_decline(tmp_path):
+    """OmicsClaw-App submitQuestionResponse sends `{request_id, answer: "<string>"}`."""
+    provider = Scripted(
+        _calls(
+            (
+                "ask_user",
+                {
+                    "question": "Which normalization methods should we run?",
+                    "options": [
+                        {"label": "LogNormalize", "description": "Standard log1p"},
+                        {"label": "SCTransform", "description": "NB regression"},
+                    ],
+                    "multi_select": True,
+                },
+            )
+        ),
+        _calls(
+            (
+                "ask_user",
+                {
+                    "question": "Should we filter doublets?",
+                    "options": [
+                        {"label": "Yes", "description": "Run Scrublet"},
+                        {"label": "No", "description": "Skip"},
+                    ],
+                },
+            )
+        ),
+        _says("Done."),
+    )
+
+    async def drive():
+        app = attach_sessions(make_app(tmp_path, provider, ask_user=True))
+        interactions = DesktopInteractions(app)
+        stream = await open_chat_stream(
+            app,
+            {
+                "ingress_schema_version": 3,
+                "session_id": "sess_ask_str",
+                "source_request_id": "d" * 32,
+                "content": "Run QC",
+            },
+            interactions=interactions,
+        )
+        resolutions: list[dict[str, object]] = []
+
+        async with stream.body as body:
+            async for raw_frame in body:
+                if "data: " not in raw_frame:
+                    continue
+                envelope = json.loads(raw_frame.split("data: ", 1)[1])
+                if envelope.get("type") == "question_request":
+                    data = json.loads(envelope["data"])
+                    if len(resolutions) == 0:
+                        res = await answer_question(
+                            app,
+                            interactions,
+                            {
+                                "request_id": data["request_id"],
+                                "answer": "LogNormalize, SCTransform",
+                            },
+                        )
+                    else:
+                        res = await answer_question(
+                            app,
+                            interactions,
+                            {
+                                "request_id": "call_fallback_id",
+                                "session_id": "sess_ask_str",
+                                "answer": "[Let the agent decide]",
+                            },
+                        )
+                    resolutions.append(res)
+                elif envelope.get("type") == "done":
+                    break
+
+        outcome = await app.sessions.handle(stream.turn_id).wait()
+        await app.aclose()
+        return resolutions, outcome
+
+    resolutions, outcome = asyncio.run(asyncio.wait_for(drive(), timeout=5.0))
+    assert len(resolutions) == 2
+    assert resolutions[0]["ok"] is True
+    assert resolutions[0]["status"] == "answered"
+    assert resolutions[0]["selected"] == ["LogNormalize", "SCTransform"]
+    assert resolutions[0]["answer"] == "LogNormalize, SCTransform"
+    assert resolutions[1]["ok"] is True
+    assert resolutions[1]["status"] == "declined"
+    assert outcome is not None

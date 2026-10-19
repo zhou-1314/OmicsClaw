@@ -643,8 +643,19 @@ async def answer_question(
 ) -> dict[str, Any]:
     """Apply one answer to one outstanding ``ask_user`` question."""
     request_id = document.get("request_id")
+    session_id = document.get("session_id")
     if not isinstance(request_id, str) or _REQUEST_ID.match(request_id) is None:
-        raise DesktopIngressError("invalid_request_id")
+        resolved_request_id: str | None = None
+        if isinstance(session_id, str) and session_id and app.sessions is not None:
+            for running_handle in app.sessions.running():
+                if running_handle.session_id == session_id:
+                    pending_ids = running_handle.questions.pending()
+                    if pending_ids:
+                        resolved_request_id = pending_ids[0]
+                        break
+        if resolved_request_id is None:
+            raise DesktopIngressError("invalid_request_id")
+        request_id = resolved_request_id
     turn_id = request_id.partition("#")[0]
     handle = _retained(app, turn_id)
     if handle is None or handle.done:
@@ -666,6 +677,7 @@ async def answer_question(
         "status": question_answer.status.value,
         "selected": list(question_answer.selected),
         "reply": question_answer.reply,
+        "answer": question_answer.reply,
         "session_id": handle.session_id,
     }
 
@@ -682,6 +694,11 @@ def _question_answer(
         behavior = raw.get("behavior")
         selected = raw.get("selected")
         reply = raw.get("reply", raw.get("message", ""))
+    elif isinstance(raw, str):
+        status = document.get("status")
+        behavior = document.get("behavior")
+        selected = document.get("selected")
+        reply = raw
     elif raw is not None:
         raise DesktopIngressError("invalid_answer")
     else:
@@ -695,12 +712,18 @@ def _question_answer(
     if not isinstance(reply, str):
         raise DesktopIngressError("invalid_answer")
 
-    if behavior in ("decline", "declined", "skip") or status in (
-        "declined",
-        "decline",
-        "skip",
+    trimmed_reply = reply.strip()
+    if (
+        behavior in ("decline", "declined", "skip")
+        or status in ("declined", "decline", "skip")
+        or trimmed_reply.lower() in ("[declined]", "[let the agent decide]")
     ):
-        return QuestionAnswer(status=AnswerStatus.DECLINED, reply=reply.strip())
+        clean_reply = (
+            ""
+            if trimmed_reply.lower() in ("[declined]", "[let the agent decide]")
+            else trimmed_reply
+        )
+        return QuestionAnswer(status=AnswerStatus.DECLINED, reply=clean_reply)
 
     if status is not None and status != "answered":
         raise DesktopIngressError("invalid_answer")
@@ -714,7 +737,6 @@ def _question_answer(
     else:
         selected_tuple = ()
 
-    trimmed_reply = reply.strip()
     if selected_tuple:
         return QuestionAnswer(
             status=AnswerStatus.ANSWERED,
@@ -723,7 +745,29 @@ def _question_answer(
         )
     if trimmed_reply:
         if pending is not None:
-            return read_reply(pending.request, trimmed_reply)
+            parsed = read_reply(pending.request, trimmed_reply)
+            if (
+                not parsed.selected
+                and pending.request.multi_select
+                and "," in trimmed_reply
+            ):
+                parts = [
+                    p.strip().casefold()
+                    for p in trimmed_reply.split(",")
+                    if p.strip()
+                ]
+                matched = tuple(
+                    opt.label
+                    for opt in pending.request.options
+                    if opt.label.casefold() in parts
+                )
+                if matched:
+                    return QuestionAnswer(
+                        status=AnswerStatus.ANSWERED,
+                        selected=matched,
+                        reply=trimmed_reply,
+                    )
+            return parsed
         return QuestionAnswer(
             status=AnswerStatus.ANSWERED,
             selected=(),
