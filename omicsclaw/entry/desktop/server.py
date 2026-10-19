@@ -113,6 +113,7 @@ from .interactions import (
     DesktopInteractions,
     abort_chat,
     answer_permission,
+    answer_question,
     change_permission_profile,
 )
 from .jobs import mount_jobs_routes
@@ -351,6 +352,16 @@ def create_desktop_app(
         try:
             document = await _read_json(request, CONTROL_MAX_REQUEST_BYTES)
             return await answer_permission(app, shared, document)
+        except DesktopIngressError as exc:
+            return _refused(exc)
+
+    @api.post("/chat/question")
+    async def chat_question(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        try:
+            document = await _read_json(request, CONTROL_MAX_REQUEST_BYTES)
+            return await answer_question(app, shared, document)
         except DesktopIngressError as exc:
             return _refused(exc)
 

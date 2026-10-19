@@ -23,6 +23,7 @@ from .interactions import TurnUsage
 
 if TYPE_CHECKING:
     from omicsclaw.entry.approval import ApprovalBroker
+    from omicsclaw.entry.question import QuestionBroker
     from omicsclaw.entry.turn import TurnHandle
 
     from .interactions import DesktopInteractions
@@ -192,6 +193,11 @@ def desktop_chat_frame(
         )
         payload["can_remember"] = can_remember
         return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
+    if kind is TurnEventType.QUESTION_ASKED:
+        payload = to_wire(event)
+        payload.pop("schema_version", None)
+        payload.pop("type", None)
+        return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
     if kind is TurnEventType.SUGGESTIONS:
         payload = to_wire(event)
         payload.pop("schema_version", None)
@@ -281,6 +287,7 @@ class DesktopChatSSEBody:
 
     __slots__ = (
         "_approvals",
+        "_questions",
         "_closed",
         "_epoch",
         "_compaction",
@@ -303,6 +310,7 @@ class DesktopChatSSEBody:
         keepalive_s: float | None = KEEPALIVE_INTERVAL_S,
         after_seq: int = 0,
         approvals: ApprovalBroker | None = None,
+        questions: QuestionBroker | None = None,
         interactions: DesktopInteractions | None = None,
         provider: str = "",
         model: str = "",
@@ -343,6 +351,7 @@ class DesktopChatSSEBody:
         self._observation = observation
         self._keepalive_s = keepalive_s
         self._approvals = approvals
+        self._questions = questions
         self._interactions = interactions
         self._provider = provider
         self._model = model
@@ -400,7 +409,11 @@ class DesktopChatSSEBody:
                 continue
             if event.type is TurnEventType.COMPACTION:
                 self._compaction_seen = True
-            if event.type is TurnEventType.APPROVAL_REQUIRED:
+            if event.type is TurnEventType.QUESTION_ASKED:
+                if not self._shows_question_card(event):
+                    continue
+                frame = desktop_chat_frame(event)
+            elif event.type is TurnEventType.APPROVAL_REQUIRED:
                 if not self._shows_card(event):
                     continue
                 frame = desktop_chat_frame(
@@ -485,6 +498,13 @@ class DesktopChatSSEBody:
         if self._interactions is None:
             return event.request_id in self._approvals.pending()
         return self._interactions.admit_approval(event, self._approvals)
+
+    def _shows_question_card(self, event: TurnEvent) -> bool:
+        if self._questions is None:
+            return True
+        if self._interactions is None:
+            return event.request_id in self._questions.pending()
+        return self._interactions.admit_question(event, self._questions)
 
     async def _next_event(self) -> TurnEvent | None:
         """The next frame, or ``None`` for "nothing to report right now".

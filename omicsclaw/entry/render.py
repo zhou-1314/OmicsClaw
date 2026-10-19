@@ -65,6 +65,7 @@ DESKTOP_CHAT_FRAME_TYPE: Final[dict[TurnEventType, str]] = {
     TurnEventType.TOOL_RESULT: "tool_result",
     TurnEventType.PROGRESS: "tool_output",
     TurnEventType.APPROVAL_REQUIRED: "permission_request",
+    TurnEventType.QUESTION_ASKED: "question_request",
     TurnEventType.SUGGESTIONS: "suggestions",
     # P6 item 4: an automatic shadow-review verdict, additive like the
     # other frames here — a client that does not know the type drops it.
@@ -542,6 +543,17 @@ def _payload(event: TurnEvent) -> dict[str, Any]:
         return _compaction_payload(event)
     if kind is TurnEventType.APPROVAL_REQUIRED:
         return _approval_payload(event)
+    if kind is TurnEventType.QUESTION_ASKED:
+        return _question_payload(event)
+    if kind is TurnEventType.QUESTION_SETTLED:
+        answer = event.answer
+        return {
+            "request_id": event.request_id,
+            "status": answer.status.value if answer is not None else "",
+            "selected": list(answer.selected) if answer is not None else [],
+            "reply": answer.reply if answer is not None else "",
+            "reason": answer.reason if answer is not None else "",
+        }
     if kind is TurnEventType.SUGGESTIONS:
         return {"suggestions": list(event.suggestions)}
     if kind is TurnEventType.APPROVAL_SETTLED:
@@ -657,6 +669,24 @@ def _compaction_payload(event: TurnEvent) -> dict[str, Any]:
         "offloaded": len(record.offloaded),
         "written_back": record.written_back,
         "forced": record.forced,
+    }
+
+
+def _question_payload(event: TurnEvent) -> dict[str, Any]:
+    request = event.question
+    if request is None:
+        return {"request_id": event.request_id}
+    return {
+        "request_id": event.request_id,
+        "question": request.question,
+        "options": [
+            {
+                "label": option.label,
+                "description": option.description,
+            }
+            for option in request.options
+        ],
+        "multi_select": bool(request.multi_select),
     }
 
 

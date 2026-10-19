@@ -55,6 +55,7 @@ conversations it is continuing.
 DEFAULT_PERMISSION_PROFILE: Final = "default"
 FULL_ACCESS: Final = "full_access"
 PERMISSION_PROFILES: Final = frozenset({DEFAULT_PERMISSION_PROFILE, FULL_ACCESS})
+REASONING_EFFORTS: Final = frozenset({"low", "medium", "high", "max"})
 """The values of a session's ``permission_profile``."""
 
 _OPAQUE_ID = re.compile(r"\A(?:|[0-9a-f]{32})\Z")
@@ -321,6 +322,28 @@ def decode_chat_stream_request(
     if permission_profile and permission_profile not in PERMISSION_PROFILES:
         raise DesktopIngressError("invalid_permission_profile")
 
+    extra_values: dict[str, object] = {}
+    reasoning_effort = document.get("reasoning_effort")
+    if reasoning_effort is not None:
+        if (
+            not isinstance(reasoning_effort, str)
+            or reasoning_effort not in REASONING_EFFORTS
+        ):
+            raise DesktopIngressError("invalid_reasoning_effort")
+        extra_values["reasoning_effort"] = reasoning_effort
+
+    for flag in ("ultra_mode", "verifier_mode", "memory_mode"):
+        if flag in document and document[flag] is not None:
+            if not isinstance(document[flag], bool):
+                raise DesktopIngressError(f"invalid_{flag}")
+            extra_values[flag] = document[flag]
+
+    for option_key in ("reviewer_model", "specialist"):
+        if option_key in document and document[option_key] is not None:
+            if not isinstance(document[option_key], str):
+                raise DesktopIngressError(f"invalid_{option_key}")
+            extra_values[option_key] = document[option_key].strip()
+
     session_id = _string(document, "session_id") or uuid.uuid4().hex
     return ChatStreamRequest(
         content=content,
@@ -332,6 +355,7 @@ def decode_chat_stream_request(
             "surface": DESKTOP_SURFACE,
             "installation_id": installation_id,
             "module_review_requested": review_requested,
+            **extra_values,
         },
         permission_profile=permission_profile,
         resume=resume,

@@ -172,6 +172,7 @@ def _observed_body(
         keepalive_s=keepalive_s,
         after_seq=after_seq,
         approvals=handle.approvals,
+        questions=handle.questions,
         interactions=interactions,
         provider=app.provider.name,
         model=effective_model(app),

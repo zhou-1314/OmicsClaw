@@ -487,6 +487,25 @@ def event_from_durable(row) -> TurnEvent | None:
                 reason_shows_call=bool(payload.get("reason_shows_call", False)),
                 ask_every_time=bool(payload.get("ask_every_time", False)),
             )
+    elif kind is TurnEventType.QUESTION_ASKED:
+        from omicsclaw.tools.context import QuestionOption, QuestionRequest
+
+        kwargs["request_id"] = str(payload.get("request_id", ""))
+        if payload.get("question"):
+            raw_options = payload.get("options") or ()
+            options = tuple(
+                QuestionOption(
+                    label=str(item.get("label", "")),
+                    description=str(item.get("description", "")),
+                )
+                for item in raw_options
+                if isinstance(item, dict) and item.get("label")
+            )
+            kwargs["question"] = QuestionRequest(
+                question=str(payload["question"]),
+                options=options,
+                multi_select=bool(payload.get("multi_select", False)),
+            )
     return TurnEvent(**kwargs)
 
 

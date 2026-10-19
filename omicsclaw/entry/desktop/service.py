@@ -27,7 +27,7 @@ from .files import (
     write_workspace_file,
 )
 from .git_service import execute_git
-from .interactions import abort_chat, answer_permission, change_permission_profile
+from .interactions import abort_chat, answer_permission, answer_question, change_permission_profile
 from .job_service import (
     create_job_from_document,
     event_cursor,
@@ -184,6 +184,8 @@ class DesktopService:
             payload = {**mcp_servers(app), "capability": "mcp", "enabled": False}
         elif method == "POST" and path == "/chat/permission":
             payload = await answer_permission(app, self.interactions, document)
+        elif method == "POST" and path == "/chat/question":
+            payload = await answer_question(app, self.interactions, document)
         elif method == "POST" and path == "/chat/abort":
             payload = await abort_chat(app, self.interactions, document)
         elif method == "POST" and path == "/chat/session-permission-profile":

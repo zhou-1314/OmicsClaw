@@ -496,23 +496,25 @@ def test_an_answered_question_prints_nothing_and_an_unanswered_one_says_why() ->
     assert line(QuestionAnswer(AnswerStatus.NO_ANSWER)) == "No answer [t#2]"
 
 
-def test_a_question_crosses_the_wire_as_identity_and_nothing_else() -> None:
-    """No client reads these frames yet, so nothing is published for one to
-    come to depend on: the question's text and the reply stay out of the
-    wire projection, and the Desktop frame table has no entry for either."""
+def test_a_question_crosses_the_wire_with_its_question_and_settlement() -> None:
+    """``QUESTION_ASKED`` projects to ``question_request`` on the Desktop wire
+    with ``request_id``, ``question``, ``options`` and ``multi_select``;
+    ``QUESTION_SETTLED`` carries the settlement payload."""
     frames = _one_of_every_type()
-    for kind in (TurnEventType.QUESTION_ASKED, TurnEventType.QUESTION_SETTLED):
-        wire = to_wire(frames[kind])
+    asked_wire = to_wire(frames[TurnEventType.QUESTION_ASKED])
+    assert asked_wire["request_id"] == "req-2"
+    assert asked_wire["question"] == "Which group is the control?"
+    assert asked_wire["options"] == [
+        {"label": "DMSO", "description": "the vehicle; recommended"},
+        {"label": "untreated", "description": ""},
+    ]
+    assert asked_wire["multi_select"] is False
+    assert DESKTOP_CHAT_FRAME_TYPE[TurnEventType.QUESTION_ASKED] == "question_request"
 
-        assert set(wire) == {
-            "schema_version",
-            "type",
-            "sequence",
-            "session_id",
-            "turn_id",
-        }
-        assert "control" not in json.dumps(wire, allow_nan=False)
-        assert kind not in DESKTOP_CHAT_FRAME_TYPE
+    settled_wire = to_wire(frames[TurnEventType.QUESTION_SETTLED])
+    assert settled_wire["request_id"] == "req-2"
+    assert settled_wire["status"] == "no_answer"
+    assert settled_wire["reason"] == QUESTION_TIMEOUT_REASON
 
 
 def test_the_terminal_frame_keeps_the_error_type_and_drops_its_text() -> None:
@@ -659,6 +661,7 @@ def test_the_desktop_frame_names_are_the_clients_and_not_invented() -> None:
         "tool_result",
         "tool_timeout",
         "permission_request",
+        "question_request",
         "ask_user_question",
         "task_update",
         "suggestions",

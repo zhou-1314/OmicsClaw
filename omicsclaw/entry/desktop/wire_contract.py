@@ -48,6 +48,7 @@ DESKTOP_CAPABILITIES: Final = {
 SERVED_PATHS: Final[tuple[str, ...]] = (
     "/chat/stream",
     "/chat/permission",
+    "/chat/question",
     "/chat/abort",
     "/chat/session-permission-profile",
     "/chat/session/{session_id}",
@@ -96,6 +97,7 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/notebooks/{notebook_id}/live-state",
     "/notebooks/{notebook_id}/live-app",
     "/notebooks/{notebook_id}/live-app/state",
+    "/compute/status",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``

@@ -108,6 +108,7 @@ def test_served_paths_names_the_routes_the_app_mounts():
     assert wire_contract.SERVED_PATHS == (
         "/chat/stream",
         "/chat/permission",
+        "/chat/question",
         "/chat/abort",
         "/chat/session-permission-profile",
         "/chat/session/{session_id}",
@@ -156,6 +157,7 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/notebooks/{notebook_id}/live-state",
         "/notebooks/{notebook_id}/live-app",
         "/notebooks/{notebook_id}/live-app/state",
+        "/compute/status",
    )
 
 

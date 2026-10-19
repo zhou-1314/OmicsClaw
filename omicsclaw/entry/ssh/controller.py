@@ -37,7 +37,7 @@ from omicsclaw.entry.desktop.chat_service import (
     prepare_chat_intent,
 )
 from omicsclaw.entry.desktop.event_service import ProjectionCoverage, replay_frames
-from omicsclaw.entry.desktop.interactions import DesktopInteractions, answer_permission
+from omicsclaw.entry.desktop.interactions import DesktopInteractions, answer_permission, answer_question
 from omicsclaw.entry.desktop.jobs_manager import JobsManager
 from omicsclaw.entry.desktop.provider_probe import probe_provider
 from omicsclaw.entry.desktop.service import DesktopService
@@ -173,6 +173,7 @@ class Controller:
                 "chat.submit": self.submit,
                 "chat.validate": self.validate_intent,
                 "chat.permission": self.permission,
+                "chat.question": self.question,
                 "chat.abort": self.abort,
                 "request.lookup": self.lookup,
                 "requests.list": self.requests,
@@ -654,6 +655,7 @@ class Controller:
             coverage,
             keepalive_s=None,
             approvals=handle.approvals,
+            questions=handle.questions,
             interactions=self.interactions,
             provider=metadata.get("provider", self.model_snapshot.provider_id),
             model=metadata.get("model", self.model_snapshot.model),
@@ -741,6 +743,9 @@ class Controller:
 
     async def permission(self, params):
         return await answer_permission(self._app(), self.interactions, params)
+
+    async def question(self, params):
+        return await answer_question(self._app(), self.interactions, params)
 
     async def abort(self, params):
         handle = self._app().sessions.handle(params["turnId"])

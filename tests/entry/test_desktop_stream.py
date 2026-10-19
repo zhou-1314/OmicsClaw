@@ -637,7 +637,6 @@ def test_a_gap_becomes_an_event_omitted_frame():
         TurnEventType.CONTEXT,
         TurnEventType.TURN_END,
         TurnEventType.APPROVAL_SETTLED,
-        TurnEventType.QUESTION_ASKED,
         TurnEventType.QUESTION_SETTLED,
     ],
 )
@@ -646,18 +645,14 @@ def test_an_event_with_no_frame_in_the_contract_produces_none(kind: TurnEventTyp
 
     ``TURN_END`` is not a frame of its own: its usage is summed into the
     ``result`` frame the body sends before ``done``.
-
-    The two question types have no frame because the Desktop surface runs
-    with ``ask_user`` off and has no route an answer could come back on.
     """
     event = TurnEvent(type=kind, seq=1, session_id="s", turn_id="t")
     assert desktop_chat_frame(event) is None
 
 
-def test_a_question_frame_with_its_payload_still_produces_no_desktop_frame():
-    """The parametrised case above builds bare frames; this one carries a
-    real question and a real answer, which is what a branch added to
-    ``desktop_chat_frame`` by mistake would project."""
+def test_a_question_frame_projects_question_request_and_settled_produces_none():
+    """``QUESTION_ASKED`` projects to ``question_request`` on the Desktop SSE
+    stream; ``QUESTION_SETTLED`` produces no frame."""
     asked = TurnEvent.question_asked(
         QuestionRequest(question="which build?"), "t#1", session_id="s", turn_id="t"
     )
@@ -668,7 +663,11 @@ def test_a_question_frame_with_its_payload_still_produces_no_desktop_frame():
         turn_id="t",
     )
 
-    assert desktop_chat_frame(asked) is None
+    frame = desktop_chat_frame(asked)
+    assert frame is not None
+    assert frame[0] == "question_request"
+    assert frame[1]["request_id"] == "t#1"
+    assert frame[1]["question"] == "which build?"
     assert desktop_chat_frame(settled) is None
 
 

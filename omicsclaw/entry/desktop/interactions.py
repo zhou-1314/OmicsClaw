@@ -15,8 +15,10 @@ from typing import Any, Final, Mapping
 from omicsclaw.entry.approval import ApprovalBroker
 from omicsclaw.entry.assembly import AgentApp
 from omicsclaw.entry.events import TurnEvent
+from omicsclaw.entry.question import QuestionBroker, read_reply
 from omicsclaw.entry.turn import TurnHandle
 from omicsclaw.tools import ApprovalDecision, ApprovalRequest
+from omicsclaw.tools.context import AnswerStatus, QuestionAnswer, QuestionRequest
 
 from .turn_submission import (
     DEFAULT_PERMISSION_PROFILE,
@@ -32,9 +34,11 @@ __all__ = [
     "USAGE_KEYS",
     "DesktopInteractions",
     "PendingApproval",
+    "PendingQuestion",
     "TurnUsage",
     "abort_chat",
     "answer_permission",
+    "answer_question",
     "resolve_permission",
     "change_permission_profile",
 ]
@@ -153,6 +157,15 @@ class PendingApproval:
     request: ApprovalRequest
 
 
+@dataclass(frozen=True, slots=True)
+class PendingQuestion:
+    """One user question a ``question_request`` card was shown for."""
+
+    session_id: str
+    turn_id: str
+    request: QuestionRequest
+
+
 class DesktopInteractions:
     """Bounded, in-memory interaction state for one Desktop server.
 
@@ -173,6 +186,7 @@ class DesktopInteractions:
         "_max_pending",
         "_max_requests",
         "_pending",
+        "_pending_questions",
         "_requests",
         "_usage",
     )
@@ -198,6 +212,7 @@ class DesktopInteractions:
             limit if max_granted_sessions is None else max_granted_sessions
         )
         self._pending: OrderedDict[str, PendingApproval] = OrderedDict()
+        self._pending_questions: OrderedDict[str, PendingQuestion] = OrderedDict()
         self._grants: OrderedDict[str, set[str]] = OrderedDict()
         self._full_access: OrderedDict[str, None] = OrderedDict()
         self._requests: OrderedDict[tuple[str, str], str] = OrderedDict()
@@ -421,6 +436,49 @@ class DesktopInteractions:
                 continue
             del self._pending[held_id]
 
+    # ---- question requests shown on the stream --------------------------
+
+    def admit_question(self, event: TurnEvent, questions: QuestionBroker) -> bool:
+        """Decide whether one ``QUESTION_ASKED`` frame shows a ``question_request`` card."""
+        request_id = event.request_id
+        if request_id not in questions.pending():
+            self._pending_questions.pop(request_id, None)
+            return False
+        request = event.question
+        if request is None:
+            return True
+        self._remember_pending_question(
+            request_id, PendingQuestion(event.session_id, event.turn_id, request)
+        )
+        return True
+
+    def pending_question(self, request_id: str) -> PendingQuestion | None:
+        """The question a card was shown for, if it is still remembered."""
+        return self._pending_questions.get(request_id)
+
+    def forget_question(self, request_id: str) -> None:
+        """Drop one remembered question. Unknown ids are a no-op."""
+        self._pending_questions.pop(request_id, None)
+
+    def _remember_pending_question(
+        self, request_id: str, entry: PendingQuestion
+    ) -> None:
+        self._pending_questions[request_id] = entry
+        self._pending_questions.move_to_end(request_id)
+        if len(self._pending_questions) <= self._max_pending:
+            return
+        for held_id, held in tuple(self._pending_questions.items()):
+            if len(self._pending_questions) <= self._max_pending:
+                break
+            handle = self._handle(held.turn_id)
+            if (
+                handle is not None
+                and not handle.done
+                and held_id in handle.questions.pending()
+            ):
+                continue
+            del self._pending_questions[held_id]
+
     def _handle(self, turn_id: str) -> TurnHandle | None:
         registry = self._app.sessions
         if registry is None:
@@ -573,6 +631,105 @@ def _permission_decision(
     if not isinstance(message, str):
         raise DesktopIngressError("invalid_decision")
     return request_id, behavior, scope, message.strip()
+
+
+# ---- POST /chat/question ----------------------------------------------
+
+
+async def answer_question(
+    app: AgentApp,
+    interactions: DesktopInteractions,
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply one answer to one outstanding ``ask_user`` question."""
+    request_id = document.get("request_id")
+    if not isinstance(request_id, str) or _REQUEST_ID.match(request_id) is None:
+        raise DesktopIngressError("invalid_request_id")
+    turn_id = request_id.partition("#")[0]
+    handle = _retained(app, turn_id)
+    if handle is None or handle.done:
+        interactions.forget_question(request_id)
+        return {"ok": False, "request_id": request_id, "status": "expired"}
+    if request_id not in handle.questions.pending():
+        interactions.forget_question(request_id)
+        return {"ok": False, "request_id": request_id, "status": "resolved"}
+
+    pending = interactions.pending_question(request_id)
+    question_answer = _question_answer(document, pending)
+    if not handle.questions.settle(request_id, question_answer):
+        interactions.forget_question(request_id)
+        return {"ok": False, "request_id": request_id, "status": "resolved"}
+    interactions.forget_question(request_id)
+    return {
+        "ok": True,
+        "request_id": request_id,
+        "status": question_answer.status.value,
+        "selected": list(question_answer.selected),
+        "reply": question_answer.reply,
+        "session_id": handle.session_id,
+    }
+
+
+def _question_answer(
+    document: Mapping[str, Any],
+    pending: PendingQuestion | None,
+) -> QuestionAnswer:
+    raw = document.get("answer")
+    if raw is None:
+        raw = document.get("decision")
+    if isinstance(raw, Mapping):
+        status = raw.get("status")
+        behavior = raw.get("behavior")
+        selected = raw.get("selected")
+        reply = raw.get("reply", raw.get("message", ""))
+    elif raw is not None:
+        raise DesktopIngressError("invalid_answer")
+    else:
+        status = document.get("status")
+        behavior = document.get("behavior")
+        selected = document.get("selected")
+        reply = document.get("reply", "")
+
+    if reply is None:
+        reply = ""
+    if not isinstance(reply, str):
+        raise DesktopIngressError("invalid_answer")
+
+    if behavior in ("decline", "declined", "skip") or status in (
+        "declined",
+        "decline",
+        "skip",
+    ):
+        return QuestionAnswer(status=AnswerStatus.DECLINED, reply=reply.strip())
+
+    if status is not None and status != "answered":
+        raise DesktopIngressError("invalid_answer")
+
+    if selected is not None:
+        if not isinstance(selected, (list, tuple)) or any(
+            not isinstance(item, str) for item in selected
+        ):
+            raise DesktopIngressError("invalid_answer")
+        selected_tuple = tuple(item.strip() for item in selected if item.strip())
+    else:
+        selected_tuple = ()
+
+    trimmed_reply = reply.strip()
+    if selected_tuple:
+        return QuestionAnswer(
+            status=AnswerStatus.ANSWERED,
+            selected=selected_tuple,
+            reply=trimmed_reply or ", ".join(selected_tuple),
+        )
+    if trimmed_reply:
+        if pending is not None:
+            return read_reply(pending.request, trimmed_reply)
+        return QuestionAnswer(
+            status=AnswerStatus.ANSWERED,
+            selected=(),
+            reply=trimmed_reply,
+        )
+    return QuestionAnswer(status=AnswerStatus.DECLINED)
 
 
 # ---- POST /chat/session-permission-profile ------------------------------
