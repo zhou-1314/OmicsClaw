@@ -140,7 +140,7 @@ def _parse_optional_str(value: object) -> str | None:
 
 @dataclass(frozen=True)
 class SessionOptionsState:
-    """Typed runtime representation of the six OmicsClaw session options."""
+    """Typed runtime representation of the OmicsClaw session options."""
 
     ultra_mode: bool | None = None
     verifier_mode: bool | None = None
@@ -148,6 +148,7 @@ class SessionOptionsState:
     memory_mode: bool | None = None
     specialist: str | None = None
     reasoning_effort: str | None = None
+    project_instructions: str | None = None
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, object] | None) -> SessionOptionsState:
@@ -160,6 +161,7 @@ class SessionOptionsState:
             memory_mode=_parse_optional_bool(values.get("memory_mode")),
             specialist=_parse_optional_str(values.get("specialist")),
             reasoning_effort=_parse_optional_str(values.get("reasoning_effort")),
+            project_instructions=_parse_optional_str(values.get("project_instructions")),
         )
 
     @classmethod
@@ -175,6 +177,7 @@ class SessionOptionsState:
             and self.memory_mode is None
             and self.specialist is None
             and self.reasoning_effort is None
+            and self.project_instructions is None
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -191,6 +194,8 @@ class SessionOptionsState:
             out["specialist"] = self.specialist
         if self.reasoning_effort is not None:
             out["reasoning_effort"] = self.reasoning_effort
+        if self.project_instructions is not None:
+            out["project_instructions"] = self.project_instructions
         return out
 
 
@@ -326,6 +331,11 @@ def record_session_options_turn(
                 current.reasoning_effort
                 if current.reasoning_effort is not None
                 else previous.reasoning_effort
+            ),
+            project_instructions=(
+                current.project_instructions
+                if current.project_instructions is not None
+                else previous.project_instructions
             ),
         )
         _SESSION_OPTIONS_LEDGER[session_id] = merged

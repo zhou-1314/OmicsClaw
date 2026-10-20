@@ -16,6 +16,7 @@ import inspect
 from omicsclaw.memory.artifacts import ArtifactRecord, ArtifactStore
 from omicsclaw.schema import Message, Role
 
+from .project_settings import resolve_project_instructions
 from .session_options import bind_reviewer_provider, resolve_reviewer_model
 
 if TYPE_CHECKING:  # pragma: no cover - a type-only import
@@ -353,6 +354,7 @@ class ShadowReview:
         history: Sequence[Message] = (),
         publisher: Callable[[ShadowReviewVerdict], None] | None = None,
         reviewer_model: str | None = None,
+        project_instructions: str | None = None,
     ) -> "asyncio.Task[None]":
         """Schedule one review for *records* and return its task.
 
@@ -368,6 +370,7 @@ class ShadowReview:
                 history,
                 publisher,
                 reviewer_model=reviewer_model,
+                project_instructions=project_instructions,
             )
         )
 
@@ -379,10 +382,15 @@ class ShadowReview:
         publisher: Callable[[ShadowReviewVerdict], None] | None,
         *,
         reviewer_model: str | None = None,
+        project_instructions: str | None = None,
     ) -> None:
         try:
             verdict = await self._run_review_call(
-                session_id, records, history, reviewer_model=reviewer_model
+                session_id,
+                records,
+                history,
+                reviewer_model=reviewer_model,
+                project_instructions=project_instructions,
             )
         except Exception as error:  # noqa: BLE001 - never blocks the loop
             _log.info(
@@ -417,6 +425,7 @@ class ShadowReview:
         history: Sequence[Message],
         *,
         reviewer_model: str | None = None,
+        project_instructions: str | None = None,
     ) -> ShadowReviewVerdict:
         config = getattr(self._app, "config", None)
         fallback = (
@@ -425,6 +434,10 @@ class ShadowReview:
         )
         resolved = resolve_reviewer_model(reviewer_model, fallback_model=fallback)
         self._last_reviewer_model = resolved
+        workspace = getattr(config, "workspace", None) if config is not None else None
+        resolved_instructions = resolve_project_instructions(
+            workspace, override=project_instructions, include_preamble=False
+        )
 
         if self._review_call is not None:
             try:
@@ -442,7 +455,12 @@ class ShadowReview:
 
         selected_provider = self._pick_provider(reviewer_model=resolved)
         return await review_with_provider(
-            selected_provider, session_id, records, history, timeout_s=self._timeout_s
+            selected_provider,
+            session_id,
+            records,
+            history,
+            timeout_s=self._timeout_s,
+            project_instructions=resolved_instructions,
         )
 
     def nudge_for(self, session_id: str) -> ShadowReviewNudge:
@@ -451,11 +469,23 @@ class ShadowReview:
 
 
 async def review_with_provider(
-    provider, session_id, records, history, *, timeout_s=30.0
+    provider,
+    session_id,
+    records,
+    history,
+    *,
+    timeout_s=30.0,
+    project_instructions: str = "",
 ):
     """The same review prompt and verdict codec for injected and ambient callers."""
     request = Message(
-        role=Role.USER, content=_review_prompt(session_id, records, history)
+        role=Role.USER,
+        content=_review_prompt(
+            session_id,
+            records,
+            history,
+            project_instructions=project_instructions,
+        ),
     )
     async with asyncio.timeout(timeout_s):
         completion = await provider.generate([request], None)
@@ -476,6 +506,8 @@ def _review_prompt(
     session_id: str,
     records: Sequence[ArtifactRecord],
     history: Sequence[Message],
+    *,
+    project_instructions: str = "",
 ) -> str:
     """The bounded prompt the reviewer model is sent.
 
@@ -492,8 +524,11 @@ def _review_prompt(
         "'VERDICT: WARN' or 'VERDICT: FAIL', then one short paragraph "
         "naming what you saw. PASS means nothing needs attention.",
         f"session_id: {session_id}",
-        "artifacts:",
     ]
+    if project_instructions.strip():
+        lines.append("project_instructions:")
+        lines.append(_strip_controls(project_instructions.strip())[:1000])
+    lines.append("artifacts:")
     for record in records:
         lines.append(
             f"- kind={record.kind} title={record.title[:80]!r} "

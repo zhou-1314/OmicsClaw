@@ -338,7 +338,7 @@ def decode_chat_stream_request(
                 raise DesktopIngressError(f"invalid_{flag}")
             extra_values[flag] = document[flag]
 
-    for option_key in ("reviewer_model", "specialist"):
+    for option_key in ("reviewer_model", "specialist", "project_instructions"):
         if option_key in document and document[option_key] is not None:
             if not isinstance(document[option_key], str):
                 raise DesktopIngressError(f"invalid_{option_key}")

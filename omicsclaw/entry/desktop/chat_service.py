@@ -146,6 +146,7 @@ def _maybe_fire_shadow_review(
         history=history,
         publisher=publish,
         reviewer_model=options.reviewer_model,
+        project_instructions=options.project_instructions,
     )
 
 

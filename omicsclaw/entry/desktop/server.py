@@ -101,6 +101,7 @@ from .catalog import mcp_servers, skill_catalog, skill_detail
 from .doctor import _sandbox_snapshot, doctor_report
 from .service import allow_sandbox_domain, revoke_sandbox_domain
 from .files import (
+    archive_workspace_artifacts,
     byte_span,
     content_disposition,
     file_chunks,
@@ -108,6 +109,10 @@ from .files import (
     open_served_file,
     serve_target,
     tree_depth,
+)
+from omicsclaw.entry.project_settings import (
+    load_project_settings,
+    save_project_settings,
 )
 from .interactions import (
     DesktopInteractions,
@@ -222,7 +227,7 @@ def create_desktop_app(
     from contextlib import asynccontextmanager
 
     from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import JSONResponse, Response, StreamingResponse
 
     @asynccontextmanager
     async def lifespan(_api):
@@ -474,6 +479,40 @@ def create_desktop_app(
         except DesktopIngressError as exc:
             return _refused(exc)
 
+    @api.get("/project/settings")
+    async def get_project_settings(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        current = await asyncio.to_thread(load_project_settings, app.config.workspace)
+        return {
+            **current.to_dict(),
+            "workspace": str(app.config.workspace),
+        }
+
+    @api.put("/project/settings")
+    async def put_project_settings(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        try:
+            document = await _read_json(request, CONTROL_MAX_REQUEST_BYTES)
+            for field_name in ("name", "description", "instructions"):
+                if field_name in document and document[field_name] is not None:
+                    if not isinstance(document[field_name], str):
+                        raise DesktopIngressError(f"invalid_{field_name}")
+            saved = await asyncio.to_thread(
+                save_project_settings,
+                app.config.workspace,
+                name=document.get("name"),
+                description=document.get("description"),
+                instructions=document.get("instructions"),
+            )
+            return {
+                **saved.to_dict(),
+                "workspace": str(app.config.workspace),
+            }
+        except DesktopIngressError as exc:
+            return _refused(exc)
+
     @api.get("/skills")
     async def skills(request: Request) -> Any:
         if not _authorized(request):
@@ -582,6 +621,32 @@ def create_desktop_app(
             headers["Content-Range"] = span.content_range
         return StreamingResponse(
             file_chunks(opened, span), status_code=span.status, headers=headers
+        )
+
+    @api.get("/files/archive")
+    async def files_archive(request: Request) -> Any:
+        if not _authorized(request):
+            return _nosniff(_unauthorized())
+        try:
+            archive_bytes = await asyncio.to_thread(
+                archive_workspace_artifacts, app.config.workspace
+            )
+        except DesktopIngressError as exc:
+            return _nosniff(_refused(exc))
+        folder_name = Path(app.config.workspace).name or "project"
+        archive_filename = f"{folder_name}-artifacts.zip"
+        headers = {
+            "Content-Length": str(len(archive_bytes)),
+            "Cache-Control": "no-store",
+            "Content-Disposition": content_disposition(archive_filename).replace(
+                "inline;", "attachment;", 1
+            ),
+            "X-Content-Type-Options": "nosniff",
+        }
+        return Response(
+            content=archive_bytes,
+            media_type="application/zip",
+            headers=headers,
         )
 
     @api.api_route("/health", methods=["GET", "HEAD"], name="health")

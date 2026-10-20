@@ -14,6 +14,7 @@ import os
 import re
 import stat
 import urllib.parse
+import zipfile
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ __all__ = [
     "OpenedFile",
     "ServeTarget",
     "WorkspacePath",
+    "archive_workspace_artifacts",
     "byte_span",
     "content_disposition",
     "file_chunks",
@@ -810,3 +812,65 @@ def browse_workspace_directories(
         "directories": directories,
         "drives": [],
     }
+
+
+_ARCHIVE_EXCLUDED_DIRS: Final = IGNORED_DIRECTORIES | frozenset(
+    {
+        ".venv",
+        "venv",
+        ".omicsclaw",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
+_ARCHIVE_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
+
+
+def archive_workspace_artifacts(
+    workspace: Path | str,
+    *,
+    max_file_bytes: int = _ARCHIVE_MAX_FILE_BYTES,
+) -> bytes:
+    """Create an in-memory ``.zip`` archive of deliverables inside *workspace*.
+
+    Excludes non-deliverable directories (:data:`IGNORED_DIRECTORIES`,
+    ``.venv``, ``venv``, ``.omicsclaw``, hidden directories), symlinks, and
+    files larger than *max_file_bytes*.
+    """
+    try:
+        root = Path(workspace).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise DesktopIngressError("directory_not_found", status_code=404) from exc
+
+    if not root.is_dir():
+        raise DesktopIngressError("not_a_directory", status_code=422)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = sorted(
+                d
+                for d in dirnames
+                if not d.startswith(".")
+                and d not in _ARCHIVE_EXCLUDED_DIRS
+                and not os.path.islink(os.path.join(dirpath, d))
+            )
+            for fname in sorted(filenames):
+                if fname.startswith("."):
+                    continue
+                full_path = Path(dirpath) / fname
+                if full_path.is_symlink():
+                    continue
+                try:
+                    st = full_path.stat()
+                    if not stat.S_ISREG(st.st_mode):
+                        continue
+                    if st.st_size > max_file_bytes:
+                        continue
+                    rel_arcname = full_path.relative_to(root).as_posix()
+                    zf.write(full_path, arcname=rel_arcname)
+                except (OSError, ValueError):
+                    continue
+    return buf.getvalue()
+

@@ -128,6 +128,7 @@ from .memory import (
     prepare_memory,
 )
 from .planning import build_plan_book
+from .project_settings import resolve_project_instructions
 from .sandbox import (
     EgressMode,
     RequestNetworkAccessTool,
@@ -158,6 +159,8 @@ __all__ = [
     "CONTRACT_FILE",
     "FOLLOW_UP_RULES",
     "LOGGER_NAME",
+    "PROJECT_CONTEXT_SECTION_HEADING",
+    "PROJECT_CONTEXT_SECTION_KEY",
     "REMOTE_SCHEDULING_RULES",
     "SAFETY_RULES",
     "SHUTDOWN_GRACE_S",
@@ -173,6 +176,7 @@ __all__ = [
     "default_sections",
     "foundation_tools",
     "open_app",
+    "project_instructions_section",
 ]
 
 LOGGER_NAME = "omicsclaw.entry"
@@ -1254,6 +1258,32 @@ def _skills_section(config: AppConfig, index: SkillIndex) -> Section:
     return Section("skills", "## Available skills", read)
 
 
+PROJECT_CONTEXT_SECTION_KEY = "project_instructions"
+PROJECT_CONTEXT_SECTION_HEADING = "## Project Context"
+
+
+def project_instructions_section(
+    config: AppConfig,
+    source: Callable[[], str] | str | None = None,
+) -> Section:
+    """The workspace's project instructions section, placed after ``environment``."""
+
+    def read() -> str:
+        if callable(source):
+            override = source()
+        elif isinstance(source, str):
+            override = source
+        else:
+            override = SessionOptionsState.from_context().project_instructions
+        return resolve_project_instructions(config.workspace, override=override)
+
+    return Section(
+        PROJECT_CONTEXT_SECTION_KEY,
+        PROJECT_CONTEXT_SECTION_HEADING,
+        read,
+    )
+
+
 def default_sections(
     config: AppConfig,
     *,
@@ -1264,6 +1294,7 @@ def default_sections(
     remote: bool = False,
     archive: bool = False,
     precis_in_prompt: bool = True,
+    project_instructions: bool | Callable[[], str] | str = False,
 ) -> tuple[Section, ...]:
     """The sections of the default system prompt, in render order.
 
@@ -1385,6 +1416,20 @@ def default_sections(
     if memory is not None and precis_in_prompt:
         remembered = (memory_section(memory),)
 
+    project_context: tuple[Section, ...] = ()
+    if project_instructions is True:
+        project_context = (project_instructions_section(config),)
+    elif callable(project_instructions) or (
+        isinstance(project_instructions, str) and project_instructions.strip()
+    ):
+        project_context = (
+            project_instructions_section(config, source=project_instructions),
+        )
+    elif isinstance(project_instructions, str):
+        project_context = (
+            project_instructions_section(config, source=project_instructions),
+        )
+
     compaction: tuple[Section, ...] = ()
     if archive:
         compaction = (
@@ -1410,6 +1455,7 @@ def default_sections(
         *remote_rules,
         *catalogue,
         _environment_source(config),
+        *project_context,
         *remembered,
     )
 
@@ -2316,6 +2362,7 @@ def build_app(
                 remote=remote_plane is not None,
                 archive=config.compaction_archive and remembering is not None,
                 precis_in_prompt=not config.precis_via_augmentor,
+                project_instructions=True,
             )
             if sections is None
             else sections
