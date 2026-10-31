@@ -28,7 +28,6 @@ from omicsclaw.evals import (
     ToolArgs,
     tool_call,
 )
-from omicsclaw.common.report import DISCLAIMER
 
 from ._checks import CountIs, ToolResultContains, user_changes
 from ._harness import check, seed
@@ -104,7 +103,6 @@ VALIDATE_STEP = (
 REPORT = (
     "# Module 01_clustering\n\n"
     "Four cells in two clusters of two (tables/clusters.json).\n\n"
-    f"{DISCLAIMER}\n"
 )
 REVIEW = "VERDICT: APPROVE\n\nNo findings: the steps, the validate step and the report agree."
 REVIEW_FILE = f"results/01_clustering/reviews/{date.today().isoformat()}_review.md"

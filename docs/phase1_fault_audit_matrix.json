@@ -1,0 +1,176 @@
+{
+  "generated_from_first_hand_sources": {
+    "reverse_engineered_work_dir": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work",
+    "omicsclaw_backend_dir": "/workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw",
+    "omicsclaw_app_frontend_dir": "/workspace/dataset/private/zhouwg_data/OmicsClaw-App/src",
+    "audited_reference_modules": [
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/src-recovered/claude-science.pretty.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/src-recovered/stallWatchdogEntry.js.pretty.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/KernelNotebookPane-BWS-wWPe.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/PermissionsWidgetCard-Ci1ZMARH.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/useExecutionLog-BqXr6v7M.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/omicos/extracted/frontend/assets/PendingInputChips-C84vRFP1.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/omicos/extracted/frontend/assets/EnvironmentsPanel-BZFlnBBn.js",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/kernel/handles.py",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/kernel/code_run_appendix.py",
+      "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/kernel/python_kernel.py",
+      "/workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/nudges.py",
+      "/workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/notebook_context.py",
+      "/workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/desktop/memory_service.py",
+      "/workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/desktop/jobs_manager.py",
+      "/workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/desktop/doctor.py"
+    ]
+  },
+  "faults": [
+    {
+      "id": "FAULT-01",
+      "domain": "Shadow Review Live & Persisted Verdict Closed Loop + Nudge Quality Guardrails",
+      "benchmark_source": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/src-recovered/claude-science.pretty.js, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/nudges.py:305",
+      "layer1_backend": {
+        "status": "implemented",
+        "location": "omicsclaw/entry/shadow_review.py:79, omicsclaw/entry/nudges.py:39-315, omicsclaw/entry/events.py:104",
+        "detail": "ShadowReview and _shadow_review_nudge evaluate turn artifacts/outputs and publish TurnEventType.SHADOW_REVIEW with verdict (pass/warn/fail) and reviewer note."
+      },
+      "layer2_wire_contract": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/entry/render.py:72, omicsclaw/entry/desktop/turn_observation.py:212",
+        "detail": "desktop_chat_frame projects TurnEventType.SHADOW_REVIEW as SSE frame type=shadow_review with {verdict, note, session_id, turn_id, sequence}."
+      },
+      "layer3_frontend_fsm": {
+        "status": "remediated_closed_loop",
+        "location": "src/types/index.ts, src/hooks/useSSEStream.ts, src/lib/chat-stream-transcript.ts:290-300,475-489, src/lib/stream-session-manager.ts:952",
+        "detail": "consumeSSEStream routes shadow_review to stream-session-manager and ChatStreamTranscriptBuilder; persisted MessageContentBlock(type=shadow_review) survives >500ms stream handoff and SQLite reload."
+      },
+      "layer4_visual_perceivability": {
+        "status": "remediated_closed_loop",
+        "location": "src/components/chat/ShadowReviewVerdictCard.tsx, src/components/chat/StreamingMessage.tsx:412, src/components/chat/MessageItem.tsx:115",
+        "detail": "Both StreamingMessage and MessageItem render ShadowReviewVerdictCard with session-scoped follow-up remediation composer injection."
+      }
+    },
+    {
+      "id": "FAULT-02",
+      "domain": "Persistent Kernel HandleRegistry (OV_KERNEL_ADATA), [code_run_appendix] & Session-Scoped Variable Space",
+      "benchmark_source": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/kernel/handles.py:20-25, /workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/kernel/code_run_appendix.py, /workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/KernelNotebookPane-BWS-wWPe.js",
+      "layer1_backend": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/kernel/handles.py:70, omicsclaw/kernel/manager.py:925-940, omicsclaw/entry/assembly.py:1139-1188",
+        "detail": "PersistentKernelManager maintains HandleRegistry (OV_KERNEL_ADATA), assembly.py persists object_versions and skills_loaded to NotebookStore, and format_cell_summary appends [code_run_appendix] JSON provenance."
+      },
+      "layer2_wire_contract": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/entry/desktop/service.py:438-442,607-885, omicsclaw/entry/desktop/server.py:672-679",
+        "detail": "GET /compute/status?session_id=... harvests .omicsclaw/kernels/<session_id>/ledger.jsonl and filters kernels, handles, object_versions, and skills_loaded by session_id."
+      },
+      "layer3_frontend_fsm": {
+        "status": "remediated_closed_loop",
+        "location": "src/app/api/compute/status/route.ts, src/lib/controller/api-router.ts:615, src/lib/stream-session-manager.ts:1112, src/components/chat/MessageInput.tsx:136",
+        "detail": "/api/compute/status forwards session_id; stream-session-manager dispatches omicsclaw:kernel-status-refresh; MessageInput enforces strict detail.sessionId !== sessionId guard."
+      },
+      "layer4_visual_perceivability": {
+        "status": "remediated_closed_loop",
+        "location": "src/components/chat/KernelVariableInspector.tsx:113-155, src/components/ai-elements/tool-step-detail-card.tsx:191,383, src/components/chat/TurnArtifactTray.tsx:229,717",
+        "detail": "KernelVariableInspector isolates kernels/handles/variables by sessionId; tool-step-detail-card and TurnArtifactTray parse [code_run_appendix] provenance and deduplicate turn deliverables."
+      }
+    },
+    {
+      "id": "FAULT-03",
+      "domain": "Approval Rendezvous Subagent Provenance & Question RPC",
+      "benchmark_source": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/PermissionsWidgetCard-Ci1ZMARH.js, /workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/omicos/extracted/frontend/assets/PendingInputChips-C84vRFP1.js",
+      "layer1_backend": {
+        "status": "implemented",
+        "location": "omicsclaw/entry/events.py:446, omicsclaw/entry/approval.py:187, omicsclaw/entry/question.py:187, omicsclaw/entry/subagent.py:1",
+        "detail": "TurnEvent.approval_required carries subagent provenance when a delegated subagent triggers tool approval."
+      },
+      "layer2_wire_contract": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/entry/desktop/turn_observation.py:194,200",
+        "detail": "desktop_chat_frame includes subagent in permission_request payload whenever event.subagent is present."
+      },
+      "layer3_frontend_fsm": {
+        "status": "remediated_closed_loop",
+        "location": "src/lib/chat-permission.ts, src/lib/controller/connection.ts",
+        "detail": "PermissionRequestEvent preserves subagent; connection.ts registers chat.question in SSH RPC METHODS."
+      },
+      "layer4_visual_perceivability": {
+        "status": "remediated_closed_loop",
+        "location": "src/components/chat/PermissionPrompt.tsx:89, src/components/chat/AskUserQuestionCard.tsx",
+        "detail": "PermissionPrompt renders permission-subagent-badge when a delegated subagent requests tool approval."
+      }
+    },
+    {
+      "id": "FAULT-04",
+      "domain": "Intra-Turn Context Pressure Telemetry, Memory Recall & Auto-Compaction Inline Persistence",
+      "benchmark_source": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/src-recovered/claude-science.pretty.js, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/desktop/memory_service.py:34-160, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/nudges.py:141,344",
+      "layer1_backend": {
+        "status": "implemented",
+        "location": "omicsclaw/context/budget.py:29, omicsclaw/entry/compaction.py:1, omicsclaw/entry/desktop/memory_service.py:46,76, omicsclaw/entry/nudges.py:141,344",
+        "detail": "Engine measures BudgetReport and emits TurnEventType.CONTEXT and TurnEventType.COMPACTION while memory_service refreshes long-term memory precis injected via _precis_block and _memory_nudge."
+      },
+      "layer2_wire_contract": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/entry/desktop/turn_observation.py:148-168",
+        "detail": "QUEUED projects to status(kind=queued), COMPACTION projects to status(kind=compaction), and CONTEXT with elevated pressure projects to status(kind=context)."
+      },
+      "layer3_frontend_fsm": {
+        "status": "remediated_closed_loop",
+        "location": "src/hooks/useSSEStream.ts, src/lib/stream-session-manager.ts:941-970,1078-1085, src/lib/chat-stream-transcript.ts:272-282,450-472",
+        "detail": "useSSEStream routes statusData.kind === context and compaction; both buildPersistedAssistantMessageContent and ChatStreamTranscriptBuilder persist MessageContentBlock(type=context_budget) and MessageContentBlock(type=compaction)."
+      },
+      "layer4_visual_perceivability": {
+        "status": "remediated_closed_loop",
+        "location": "src/components/chat/StreamingMessage.tsx:277-315, src/components/chat/MessageItem.tsx:40-62",
+        "detail": "Both StreamingMessage and settled MessageItem render context-pressure-banner and CompactionNotice across >500ms stream handoff and SQLite reload."
+      }
+    },
+    {
+      "id": "FAULT-05",
+      "domain": "Subagent Execution Tree, Skill Env / Doctor Diagnostics & Long-Running Bio-Compute Stall/Heartbeat Transparency",
+      "benchmark_source": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/src-recovered/stallWatchdogEntry.js.pretty.js, /workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/useExecutionLog-BqXr6v7M.js, /workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/omicos/extracted/frontend/assets/EnvironmentsPanel-BZFlnBBn.js, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/desktop/jobs_manager.py:128, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/desktop/doctor.py:1",
+      "layer1_backend": {
+        "status": "implemented",
+        "location": "omicsclaw/entry/subagent.py:1, omicsclaw/entry/skill_env.py:77, omicsclaw/entry/environment_coordination.py:1, omicsclaw/kernel/session.py:1, omicsclaw/entry/desktop/doctor.py:1, omicsclaw/entry/desktop/jobs_manager.py:128",
+        "detail": "Subagent emits [<subagent_name>] <step> progress updates; skill_env and doctor probe/bootstrap environments; kernel session and jobs_manager emit [still running — Ns elapsed] heartbeats."
+      },
+      "layer2_wire_contract": {
+        "status": "implemented",
+        "location": "omicsclaw/entry/desktop/turn_observation.py:170",
+        "detail": "TurnEventType.PROGRESS projects as tool_output string."
+      },
+      "layer3_frontend_fsm": {
+        "status": "remediated_closed_loop",
+        "location": "src/lib/stream-session-manager.ts:891-912, src/lib/chat-stream-transcript.ts:192-220,440-449",
+        "detail": "stream-session-manager and ChatStreamTranscriptBuilder split multi-line tool_output chunks, parse subagent steps with strict compound-identifier regex excluding log prefixes ([INFO], [scanpy], [code_run_appendix], [still running...]), and persist MessageContentBlock(type=subagent_tree)."
+      },
+      "layer4_visual_perceivability": {
+        "status": "remediated_closed_loop",
+        "location": "src/components/chat/StreamingMessage.tsx:316-390, src/components/chat/MessageItem.tsx:63-111, src/components/ai-elements/tool-step-detail-card.tsx:367",
+        "detail": "Both StreamingMessage and settled MessageItem render subagent-execution-tree; StreamingMessage renders env-provisioning-capsule, bio-compute-heartbeat, and bio-compute-self-heal-hint."
+      }
+    },
+    {
+      "id": "FAULT-06",
+      "domain": "Bidirectional Notebook Live Context & Session Scratchpad Sync",
+      "benchmark_source": "/workspace/dataset/private/zhouwg_data/逆向工程-bioAgent/work/claude-science/extracted/web-dist/assets/KernelNotebookPane-BWS-wWPe.js, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/notebook_context.py:23-250, /workspace/dataset/private/zhouwg_data/OmicsClaw/omicsclaw/entry/nudges.py:195,359",
+      "layer1_backend": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/entry/notebook_context.py:23,200, omicsclaw/entry/nudges.py:195,359, omicsclaw/entry/assembly.py:1139-1188",
+        "detail": "NotebookLiveState and NotebookContext.augment inject <notebook_context> into model turns; assembly.py records object_versions, skills_loaded, skill_calls, and figures into NotebookStore."
+      },
+      "layer2_wire_contract": {
+        "status": "remediated_closed_loop",
+        "location": "omicsclaw/entry/desktop/notebooks.py:1-220, omicsclaw/entry/notebook/service.py:671",
+        "detail": "Desktop notebooks endpoints serve cell snapshots, execution streams, and provenance metadata."
+      },
+      "layer3_frontend_fsm": {
+        "status": "remediated_closed_loop",
+        "location": "src/lib/notebook-proxy.ts, src/components/notebooks/SSHNotebookWorkspace.tsx:621",
+        "detail": "notebook-proxy and SSHNotebookWorkspace synchronize cell execution outputs and session-scoped KernelVariableInspector."
+      },
+      "layer4_visual_perceivability": {
+        "status": "remediated_closed_loop",
+        "location": "src/components/notebooks/ChatNotebookLink.tsx, src/components/notebooks/SSHNotebookWorkspace.tsx, src/components/notebooks/SSHNotebookAnalysisSurface.tsx",
+        "detail": "ChatNotebookLink and SSHNotebookWorkspace link chat sessions with live notebooks and variable inspection."
+      }
+    }
+  ]
+}

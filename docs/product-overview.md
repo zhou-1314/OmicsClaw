@@ -1263,20 +1263,16 @@ oc replot <skill> --output <dir> --renderer plot_de_volcano --top-n 30
 
 每次 Run 自动生成：
 
-- **`README.md`**：本次 Run 的命令、参数、产物清单、关键 metric、disclaimer
+- **`README.md`**：本次 Run 的命令、参数、产物清单、关键 metric
 - **`reproducibility/replay.json`**：机器可读的 Skill 修订、输入、参数、环境与验证证据
 - **`reproducibility/environment.json`**：有界 producer 环境证据，不是完整跨机器 lockfile
 - **`reproducibility/replay.sh`**：通过 `oc replay` 创建新 Run 并与原证据比较
 
 这些文件**由 Skill Runner 而不是 Skill 脚本**写——保证 96 个 Skill 使用同一回放 Interface。标准 Skill Run 不自动生成 notebook；真正的 notebook 仍属于显式 Notebook 或 Autonomous Code Mini-Agent 工作流。契约见 `docs/engineering/2026-05-07-output-ownership-contract.md`。
 
-#### 安全免责声明
+#### 报告文字
 
-每份 README 都包含：
-
-> *"OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results."*
-
-这是硬性合规要求，不允许 Skill 单独关闭。
+分析报告、结果总结和输出目录的 README 不再自动附加固定免责声明。
 
 #### 对应代码
 
@@ -2048,7 +2044,3 @@ OmicsClaw 的设计可以归结为一句话：**把"研究者在终端里用 Pyt
 - 为了让长流程可控 → **Research Pipeline + Plan 审批 + Stage 编排**
 
 当你读到某段文案、某个 UI 模块、某个 Python 文件时，请把它放回这个"研究者 + LLM + 本地工具栈"的坐标系里去理解它的位置。
-
----
-
-> *"OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results."*

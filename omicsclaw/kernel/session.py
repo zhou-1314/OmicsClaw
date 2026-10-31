@@ -10,6 +10,7 @@ import base64
 import contextlib
 import contextvars
 import ctypes
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -137,11 +139,25 @@ class CellResult:
     error: dict[str, Any] | None = None
     figures: list[FigureRef] = field(default_factory=list)
     execution_count: int | None = None
+    execution_id: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
     notice: str = ""
     outputs: list[dict[str, Any]] = field(default_factory=list)
     files_written: list[dict[str, Any]] = field(default_factory=list)
+    files_read: list[dict[str, Any]] = field(default_factory=list)
+    skill_calls: list[dict[str, Any]] = field(default_factory=list)
+    skills_loaded: list[dict[str, Any]] = field(default_factory=list)
+    object_versions: list[dict[str, Any]] = field(default_factory=list)
     """A kernel-restart handover notice, prepended to stderr by the manager."""
+
+    @property
+    def writes(self) -> list[str]:
+        return [str(w.get("path") if isinstance(w, dict) else w) for w in self.files_written if w]
+
+    @property
+    def reads(self) -> list[str]:
+        return [str(r.get("path") if isinstance(r, dict) else r) for r in self.files_read if r]
+
 
 
 @dataclass(slots=True)
@@ -252,7 +268,7 @@ def _scan_workspace_files(
             if seen >= max_entries:
                 break
             name = entry.name
-            if name.startswith(".") or name in {"node_modules", "__pycache__", "venv"}:
+            if name.startswith(".") or name in {"node_modules", "__pycache__", "venv", "provenance"}:
                 continue
             seen += 1
             try:
@@ -315,9 +331,10 @@ class SessionKernel:
 
     def __init__(
         self,
-        session_id: str,
+        session_id: str = "default",
         *,
-        workspace: Path,
+        workspace: Path | str | None = None,
+        cwd: Path | str | None = None,
         python: str | None = None,
         python_isolated: bool = False,
         limits: OutputLimits | None = None,
@@ -329,8 +346,11 @@ class SessionKernel:
         env_scrubber: Callable[[Mapping[str, str]], dict[str, str]] | None = None,
         signal_guard_factory: Callable[[int], Callable[[int], bool]] | None = None,
     ) -> None:
+        ws_val = workspace if workspace is not None else cwd
+        if ws_val is None:
+            raise TypeError("SessionKernel.__init__() missing required argument: 'workspace'")
         self.session_id = session_id
-        self.workspace = Path(workspace)
+        self.workspace = Path(ws_val)
         self.python = python or sys.executable
         self._python_isolated = python_isolated
         self.limits = limits or OutputLimits()
@@ -345,6 +365,7 @@ class SessionKernel:
         self._km: Any = None
         self._kc: Any = None
         self._scratch: Path | None = None
+        self._ledger_path: Path | None = None
         self._ipc_dir: Path | None = None
         self.started_at = 0.0
         self.cells = 0
@@ -500,6 +521,12 @@ class SessionKernel:
             }
             for folder in isolated.values():
                 Path(folder).mkdir(parents=True, exist_ok=True)
+            self._ledger_path = scratch / "kernel_ledger.jsonl"
+            _write_ipython_ledger_startup(
+                Path(isolated["IPYTHONDIR"]),
+                workspace=self.workspace.resolve(),
+                ledger_path=self._ledger_path.resolve(),
+            )
             env.update(isolated)
             # A headless host may use Agg; notebook kernels must emit display_data.
             # This startup default still allows cells to select another backend.
@@ -862,6 +889,7 @@ class SessionKernel:
         callbacks: KernelCallbacks | None = None,
         store_history: bool = True,
         preserve_on_timeout: bool = False,
+        execution_id: str = "",
     ) -> CellResult:
         """Run one cell to ``status: idle`` and return its outcome.
 
@@ -880,7 +908,8 @@ class SessionKernel:
         ordered = OrderedOutputs(
             limit=self.limits.ordered_output_max, sink=callbacks.on_output
         )
-        result = CellResult()
+        eid = str(execution_id or "").strip() or uuid.uuid4().hex
+        result = CellResult(execution_id=eid)
         tallies = {
             "stdout": _StreamTally("stdout", self.limits),
             "stderr": _StreamTally("stderr", self.limits),
@@ -905,7 +934,16 @@ class SessionKernel:
 
         self._interrupted = False
         before_files = _scan_workspace_files(self.workspace) if store_history else {}
-        msg_id = self._kc.execute(code, store_history=store_history)
+        ledger_offset = (
+            self._ledger_path.stat().st_size
+            if (store_history and self._ledger_path is not None and self._ledger_path.is_file())
+            else 0
+        )
+        if store_history and self._scratch is not None:
+            with contextlib.suppress(OSError):
+                (self._scratch / "current_execution_id.txt").write_text(eid, encoding="utf-8")
+        exec_code = _resolve_kernel_code_markers(code, self.workspace) if self.language == "python" else code
+        msg_id = self._kc.execute(exec_code, store_history=store_history)
         deadline = began + max(0.0, float(timeout_s))
         interrupted_at: float | None = None
         pending_noticed = False
@@ -1107,7 +1145,43 @@ class SessionKernel:
                             pass
                     if artifact_id:
                         ordered.add({"type": "image", "artifactId": artifact_id, "mime": mime})
+            audit_reads, audit_writes, audit_skills, audit_loaded, audit_objects = _harvest_kernel_ledger_v2(
+                self._ledger_path, ledger_offset
+            )
+            for sc in audit_skills:
+                if isinstance(sc, dict) and not sc.get("execution_id"):
+                    sc["execution_id"] = eid
+            written_by_path = {w["path"]: w for w in written}
+            for aw in audit_writes:
+                p = aw.get("path")
+                if p and p not in written_by_path:
+                    written.append(aw)
+                    written_by_path[p] = aw
+                elif p and aw.get("sha256"):
+                    written_by_path[p]["sha256"] = aw["sha256"]
+            for w in written:
+                if "sha256" not in w:
+                    fp = self.workspace / w["path"]
+                    if fp.is_file() and fp.stat().st_size <= 64 * 1024 * 1024:
+                        w["sha256"] = _sha256_quick(fp)
             result.files_written = written
+            result.files_read = audit_reads
+            result.skill_calls = audit_skills
+            result.skills_loaded = audit_loaded
+            result.object_versions = audit_objects
+            _append_workspace_ledger(
+                self.workspace,
+                session_id=self.session_id,
+                execution_count=result.execution_count,
+                execution_id=eid,
+                status=result.status,
+                code=code,
+                files_read=audit_reads,
+                files_written=written,
+                skill_calls=audit_skills,
+                skills_loaded=audit_loaded,
+                object_versions=audit_objects,
+            )
         result.stdout = tallies["stdout"].text()
         result.stderr = tallies["stderr"].text()
         result.figures = figures
@@ -1290,3 +1364,863 @@ def _win_cpu_seconds(pid: int) -> float | None:
 
 
 KernelSession = SessionKernel
+
+
+def _sha256_quick(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(262144), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+
+
+_KERNEL_MARKER_RE: Final = re.compile(r"\{\{(!?)artifact:([^}]*)\}\}")
+
+
+def _resolve_kernel_artifact_path(raw_id: str, workspace: Path) -> Path | None:
+    rid = str(raw_id or "").strip()
+    if not rid or any(ch in rid for ch in ("'", '"', "[", "]", "{", "}", " ", "\t", "\n", "\r", "\\", "..")):
+        return None
+    if rid.startswith("/"):
+        return None
+    ws = workspace.resolve()
+    candidates = [rid, rid[4:] if rid.startswith("art_") else f"art_{rid}"]
+
+    for reg_cand in (
+        ws / "provenance" / "artifacts.json",
+        ws / ".omicsclaw" / "provenance" / "artifacts.json",
+    ):
+        if reg_cand.is_file():
+            try:
+                reg = json.loads(reg_cand.read_text(encoding="utf-8"))
+                entries: list[dict[str, Any]] = []
+                if isinstance(reg, dict):
+                    if rid in reg and isinstance(reg[rid], (str, dict)):
+                        val = reg[rid]
+                        p_str = val if isinstance(val, str) else str(val.get("path") or "")
+                        if p_str:
+                            fp = (ws / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+                            if fp.is_file():
+                                return fp
+                    if isinstance(reg.get("artifacts"), list):
+                        entries.extend(x for x in reg["artifacts"] if isinstance(x, dict))
+                    else:
+                        entries.extend(v for v in reg.values() if isinstance(v, dict))
+                elif isinstance(reg, list):
+                    entries.extend(x for x in reg if isinstance(x, dict))
+                for ent in entries:
+                    ent_ids = {
+                        str(ent.get(k) or "")
+                        for k in ("id", "artifact_id", "version_id", "latest_version_id", "vid")
+                    } - {""}
+                    ent_path = str(ent.get("path") or ent.get("filename") or "")
+                    if (ent_ids & set(candidates)) or ent_path == rid or (ent_path and Path(ent_path).name == rid):
+                        if ent_path:
+                            fp = (ws / ent_path).resolve() if not Path(ent_path).is_absolute() else Path(ent_path).resolve()
+                            if fp.is_file():
+                                return fp
+            except Exception:  # noqa: BLE001
+                pass
+
+    jobs_db = ws / ".omicsclaw" / "jobs.db"
+    if jobs_db.is_file():
+        try:
+            import sqlite3
+            with sqlite3.connect(str(jobs_db)) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT id, path, sha256, meta_json FROM artifacts ORDER BY created_at DESC LIMIT 500").fetchall()
+            for r in rows:
+                r_id = str(r["id"] or "")
+                r_path = Path(str(r["path"] or ""))
+                if not r_path.is_absolute():
+                    r_path = ws / r_path
+                r_sha = str(r["sha256"] or "")
+                try:
+                    meta = json.loads(r["meta_json"] or "{}")
+                except Exception:
+                    meta = {}
+                ver_id = str(meta.get("version_id") or meta.get("latest_version_id") or "")
+                rel_p = ""
+                try:
+                    rel_p = r_path.resolve().relative_to(ws).as_posix()
+                except ValueError:
+                    rel_p = ""
+                if (
+                    r_id in candidates
+                    or (ver_id and ver_id in candidates)
+                    or (r_sha and len(rid) >= 8 and r_sha.startswith(rid))
+                    or r_path.name == rid
+                    or rel_p == rid
+                    or (rel_p and rel_p.endswith(f"/{rid}"))
+                ):
+                    if r_path.is_file():
+                        return r_path.resolve()
+        except Exception:  # noqa: BLE001
+            pass
+
+    for direct_cand in (ws / rid, ws / "output" / rid):
+        try:
+            resolved_cand = direct_cand.resolve()
+            if resolved_cand.is_relative_to(ws) and resolved_cand.is_file():
+                return resolved_cand
+        except Exception:  # noqa: BLE001
+            pass
+
+    for sub in ("output", "results", "figures", "tables"):
+        base = ws / sub
+        if not base.is_dir():
+            continue
+        for fp in sorted(base.rglob("*")):
+            if not fp.is_file():
+                continue
+            rel = fp.relative_to(ws).as_posix()
+            if (
+                rel == rid
+                or rel.endswith(f"/{rid}")
+                or fp.name == rid
+                or f"art_{fp.stem}" in candidates
+            ):
+                return fp.resolve()
+    return None
+
+
+def _resolve_kernel_code_markers(code: str, workspace: Path) -> str:
+    if "artifact:" not in code:
+        return code
+    ws = workspace.resolve()
+
+    def _sub(m: re.Match[str]) -> str:
+        bang, rid = m.group(1), m.group(2)
+        if bang == "!":
+            return f"{{{{artifact:{rid}}}}}"
+        resolved = _resolve_kernel_artifact_path(rid, ws)
+        if resolved is None:
+            return m.group(0)
+        try:
+            return resolved.relative_to(ws).as_posix()
+        except ValueError:
+            return resolved.as_posix()
+
+    return _KERNEL_MARKER_RE.sub(_sub, code)
+
+
+_LEDGER_STARTUP_TEMPLATE: Final = r'''# OmicsClaw kernel I/O, object-version, host.* SDK & skill auto-ledger hook
+def __omicsclaw_install_ledger():
+    import builtins, functools, hashlib, json, os, pathlib, sqlite3, sys, time
+    try:
+        from IPython import get_ipython
+        ip = get_ipython()
+    except Exception:
+        ip = None
+    if ip is None:
+        return
+    cfg = json.loads(__OMICSCLAW_CFG_REPR__)
+    ws_lex = pathlib.Path(os.path.abspath(cfg["workspace"]))
+    ws_root = pathlib.Path(cfg["workspace"]).resolve()
+    ledger_file = pathlib.Path(cfg["ledger"]).resolve()
+    exec_id_file = pathlib.Path(cfg["exec_id_file"]).resolve()
+    state = {
+        "active": False,
+        "reads": {},
+        "writes": {},
+        "skills": [],
+        "skills_loaded": [],
+        "object_versions": [],
+        "pre_objects": {},
+    }
+    skip_prefixes = (".omicsclaw/", ".git/", "__pycache__/", ".pytest_cache/", "provenance/")
+    obj_registry = ip.user_ns.setdefault("__omicsclaw_object_versions__", {})
+
+    def _record_skill(entry):
+        if isinstance(entry, dict):
+            item = dict(entry)
+            if not item.get("execution_id"):
+                item["execution_id"] = str(ip.user_ns.get("__omicsclaw_execution_id__", ""))
+            state["skills"].append(item)
+            if item.get("assumptions"):
+                matched = False
+                for sl in state["skills_loaded"]:
+                    if isinstance(sl, dict) and (sl.get("skill") == item.get("skill") or sl.get("slug") == item.get("slug")):
+                        sl["assumptions"] = dict(item["assumptions"])
+                        matched = True
+                if not matched:
+                    state["skills_loaded"].append(item)
+
+    def _record_sidecar_loaded(entry):
+        if isinstance(entry, dict):
+            item = dict(entry)
+            if item not in state["skills_loaded"]:
+                state["skills_loaded"].append(item)
+            if not state["active"]:
+                try:
+                    with ledger_file.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"skills_loaded": [item]}) + "\n")
+                except Exception:
+                    pass
+
+    ip.user_ns["__omicsclaw_record_skill_call__"] = _record_skill
+    ip.user_ns["__omicsclaw_record_sidecar_loaded__"] = _record_sidecar_loaded
+
+    def _record_path(target, mode="r"):
+        if not state["active"]:
+            return
+        try:
+            if isinstance(target, int) or target is None:
+                return
+            raw = os.fsdecode(os.fspath(target))
+            p = pathlib.Path(raw)
+            if not p.is_absolute():
+                p = pathlib.Path(os.getcwd()) / p
+            lex_p = pathlib.Path(os.path.abspath(str(p)))
+            real_p = p.resolve()
+            rel = None
+            for cand_p, cand_ws in ((lex_p, ws_lex), (lex_p, ws_root), (real_p, ws_root)):
+                try:
+                    rel = cand_p.relative_to(cand_ws).as_posix()
+                    break
+                except Exception:
+                    continue
+            if not rel or rel == "." or rel.startswith(skip_prefixes) or "/." in f"/{rel}":
+                return
+            mode_str = str(mode or "r")
+            if any(ch in mode_str for ch in "wa+x"):
+                state["writes"][rel] = str(real_p)
+            else:
+                if rel not in state["writes"]:
+                    state["reads"].setdefault(rel, str(real_p))
+        except Exception:
+            return
+
+    def _fingerprint_one(obj):
+        try:
+            if hasattr(obj, "obs") and hasattr(obj, "var") and hasattr(obj, "shape"):
+                shape = [int(x) for x in obj.shape]
+                obs_cols = [str(c) for c in getattr(obj.obs, "columns", ())]
+                var_cols = [str(c) for c in getattr(obj.var, "columns", ())]
+                uns_keys = sorted(str(k) for k in getattr(obj, "uns", {}).keys())
+                obsm_keys = sorted(str(k) for k in getattr(obj, "obsm", {}).keys())
+                layers_keys = sorted(str(k) for k in getattr(obj, "layers", {}).keys())
+                x_sig = ""
+                x_mat = getattr(obj, "X", None)
+                if x_mat is not None:
+                    try:
+                        arr = x_mat[: min(4, shape[0]), : min(4, shape[1])]
+                        if hasattr(arr, "toarray"):
+                            arr = arr.toarray()
+                        x_sig = f"{getattr(x_mat, 'dtype', '')}:{repr(arr.tolist() if hasattr(arr, 'tolist') else str(arr))[:160]}"
+                    except Exception:
+                        x_sig = repr(x_mat)[:160]
+                obs_sig = ""
+                try:
+                    if obs_cols and len(obj.obs) > 0:
+                        if hasattr(obj.obs, "iloc"):
+                            obs_sig = repr(obj.obs.iloc[: min(3, len(obj.obs))].to_dict(orient="list"))[:200]
+                        elif hasattr(obj.obs, "to_dict"):
+                            obs_sig = repr(obj.obs.to_dict())[:200]
+                except Exception:
+                    pass
+                meta = {
+                    "type": "AnnData",
+                    "shape": shape,
+                    "obs_columns": obs_cols,
+                    "var_columns": var_cols,
+                    "uns_keys": uns_keys,
+                    "obsm_keys": obsm_keys,
+                    "layers_keys": layers_keys,
+                }
+                fp = hashlib.sha256(
+                    json.dumps({**meta, "x_sig": x_sig, "obs_sig": obs_sig}, sort_keys=True).encode("utf-8")
+                ).hexdigest()[:16]
+                return {"fingerprint": fp, "meta": meta}
+            if hasattr(obj, "columns") and hasattr(obj, "shape") and not hasattr(obj, "obs"):
+                shape = [int(x) for x in obj.shape]
+                cols = [str(c) for c in obj.columns]
+                val_sig = ""
+                try:
+                    if shape[0] > 0 and shape[1] > 0:
+                        if hasattr(obj, "iloc"):
+                            val_sig = repr(obj.iloc[: min(3, shape[0]), : min(6, shape[1])].to_dict(orient="list"))[:200]
+                        elif hasattr(obj, "to_dict"):
+                            val_sig = repr(obj.to_dict())[:200]
+                        elif hasattr(obj, "_data"):
+                            val_sig = repr(obj._data)[:200]
+                except Exception:
+                    pass
+                meta = {"type": "DataFrame", "shape": shape, "columns": cols}
+                fp = hashlib.sha256(
+                    json.dumps({**meta, "val_sig": val_sig}, sort_keys=True).encode("utf-8")
+                ).hexdigest()[:16]
+                return {"fingerprint": fp, "meta": meta}
+        except Exception:
+            return None
+        return None
+
+    def _scan_namespace_objects():
+        snap = {}
+        skip_names = {"In", "Out", "exit", "quit", "get_ipython", "host", "load_skill"}
+        for k, v in list(ip.user_ns.items()):
+            if not isinstance(k, str) or k.startswith("_") or k in skip_names:
+                continue
+            info = _fingerprint_one(v)
+            if info is not None:
+                snap[k] = info
+        return snap
+
+    class _FindingsResult(list):
+        def __getitem__(self, key):
+            if isinstance(key, str):
+                if key == "findings":
+                    return list(self)
+                if key == "count":
+                    return len(self)
+                raise KeyError(key)
+            return super().__getitem__(key)
+
+        def get(self, key, default=None):
+            if key == "findings":
+                return list(self)
+            if key == "count":
+                return len(self)
+            return default
+
+        def __contains__(self, item):
+            if item in ("findings", "count"):
+                return True
+            return super().__contains__(item)
+
+    class _FindingsAccessor:
+        _VALID = ("unresolved", "open", "addressed", "claimed", "unaddressed", "resolved", "all")
+
+        def _paths(self):
+            return [
+                ws_root / ".omicsclaw" / "provenance" / "findings.json",
+                ws_root / "provenance" / "findings.json",
+            ]
+
+        def _load_all(self):
+            for p in self._paths():
+                if p.is_file():
+                    try:
+                        data = json.loads(p.read_text(encoding="utf-8"))
+                        if isinstance(data, list):
+                            return [x for x in data if isinstance(x, dict)]
+                        if isinstance(data, dict) and isinstance(data.get("findings"), list):
+                            return [x for x in data["findings"] if isinstance(x, dict)]
+                    except Exception:
+                        continue
+            return []
+
+        def _save_all(self, items):
+            payload = json.dumps(items, indent=2, ensure_ascii=False)
+            for p in self._paths():
+                try:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(payload, encoding="utf-8")
+                except Exception:
+                    pass
+
+        def __call__(self, status="unresolved", frame=None, all_branches=False):
+            if not isinstance(status, str) or status not in self._VALID:
+                raise ValueError(f"host.findings: status={status!r} is not valid. Must be one of: {list(self._VALID)}")
+            items = self._load_all()
+            if status == "all":
+                filtered = items
+            elif status == "unresolved":
+                filtered = [f for f in items if f.get("status", "unresolved") in ("unresolved", "open", "unaddressed")]
+            elif status == "addressed":
+                filtered = [f for f in items if f.get("status", "unresolved") in ("addressed", "claimed", "resolved")]
+            else:
+                filtered = [f for f in items if f.get("status", "unresolved") == status]
+            return _FindingsResult(filtered)
+
+        def mark_addressed(self, ids, note=""):
+            if isinstance(ids, str):
+                ids = [ids]
+            if not isinstance(ids, (list, tuple)) or not ids or any(not isinstance(i, str) or not i.strip() for i in ids):
+                raise TypeError("host.findings.mark_addressed: ids must be a non-empty finding id or list of finding ids")
+            if len(ids) > 100:
+                raise ValueError("host.findings.mark_addressed: at most 100 ids per call")
+            if not isinstance(note, str) or len(note) > 2000:
+                raise ValueError("host.findings.mark_addressed: note must be a string (max 2000 chars)")
+            target_set = set(ids)
+            items = self._load_all()
+            updated = []
+            now = time.time()
+            for f in items:
+                fid = str(f.get("id") or "")
+                if fid in target_set or "*" in target_set:
+                    f["status"] = "addressed"
+                    f["resolution_note"] = note.strip()
+                    f["addressed_note"] = note.strip()
+                    f["addressed_at"] = now
+                    updated.append(fid)
+            self._save_all(items)
+            return {"addressed": updated, "count": len(updated)}
+
+    class _OperonHost:
+        def __init__(self):
+            self.findings = _FindingsAccessor()
+
+        def artifacts(self, filename=None, exact=False, kind=None, limit=200):
+            items = []
+            seen_keys = set()
+            seen_paths = set()
+            for reg_cand in (
+                ws_root / "provenance" / "artifacts.json",
+                ws_root / ".omicsclaw" / "provenance" / "artifacts.json",
+            ):
+                if reg_cand.is_file():
+                    try:
+                        reg = json.loads(reg_cand.read_text(encoding="utf-8"))
+                        reg_list = []
+                        if isinstance(reg, list):
+                            reg_list = reg
+                        elif isinstance(reg, dict):
+                            if isinstance(reg.get("artifacts"), list):
+                                reg_list = list(reg["artifacts"])
+                            for k, v in reg.items():
+                                if k == "artifacts":
+                                    continue
+                                if isinstance(v, str):
+                                    reg_list.append({"id": k, "vid": k, "path": v})
+                                elif isinstance(v, dict):
+                                    ent_copy = dict(v)
+                                    ent_copy.setdefault("id", k)
+                                    ent_copy.setdefault("vid", k)
+                                    reg_list.append(ent_copy)
+                        for ent in reg_list:
+                            if not isinstance(ent, dict):
+                                continue
+                            rel = str(ent.get("path") or ent.get("filename") or "")
+                            if not rel:
+                                continue
+                            p = (ws_root / rel).resolve() if not pathlib.Path(rel).is_absolute() else pathlib.Path(rel).resolve()
+                            aid = str(ent.get("id") or ent.get("artifact_id") or ent.get("vid") or f"art_{p.stem}")
+                            vid_val = str(ent.get("vid") or ent.get("version_id") or ent.get("latest_version_id") or aid)
+                            if (aid, rel) in seen_keys:
+                                continue
+                            seen_keys.add((aid, rel))
+                            seen_paths.add(rel)
+                            items.append({
+                                "id": aid,
+                                "vid": vid_val,
+                                "artifact_id": aid,
+                                "latest_version_id": vid_val,
+                                "marker": "{{artifact:" + aid + "}}",
+                                "kind": str(ent.get("kind") or "other"),
+                                "path": rel,
+                                "abs_path": str(p),
+                                "filename": p.name,
+                                "title": str(ent.get("title") or p.name),
+                                "sha256": str(ent.get("sha256") or ""),
+                                "size": int(ent.get("size") or (p.stat().st_size if p.is_file() else 0)),
+                            })
+                    except Exception:
+                        pass
+            jobs_db = ws_root / ".omicsclaw" / "jobs.db"
+            if jobs_db.is_file():
+                try:
+                    with sqlite3.connect(str(jobs_db)) as conn:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?", (int(limit),)).fetchall()
+                    for r in rows:
+                        p = pathlib.Path(str(r["path"] or ""))
+                        if not p.is_absolute():
+                            p = ws_root / p
+                        try:
+                            rel = p.resolve().relative_to(ws_root).as_posix()
+                        except Exception:
+                            rel = str(p)
+                        aid = str(r["id"])
+                        try:
+                            meta = json.loads(r["meta_json"] or "{}") if r["meta_json"] else {}
+                        except Exception:
+                            meta = {}
+                        vid_val = str(meta.get("version_id") or meta.get("latest_version_id") or aid)
+                        if (aid, rel) in seen_keys:
+                            continue
+                        seen_keys.add((aid, rel))
+                        seen_paths.add(rel)
+                        items.append({
+                            "id": aid,
+                            "vid": vid_val,
+                            "artifact_id": aid,
+                            "latest_version_id": vid_val,
+                            "marker": "{{artifact:" + aid + "}}",
+                            "kind": str(r["kind"] or "other"),
+                            "path": rel,
+                            "abs_path": str(p.resolve()) if p.exists() else str(p),
+                            "filename": p.name,
+                            "title": str(r["title"] or p.name),
+                            "sha256": str(r["sha256"] or ""),
+                            "size": int(r["size"] or 0),
+                        })
+                except Exception:
+                    pass
+            for sub in ("output", "results", "figures", "tables"):
+                base = ws_root / sub
+                if not base.is_dir():
+                    continue
+                for fp in sorted(base.rglob("*")):
+                    if not fp.is_file() or fp.name.startswith("."):
+                        continue
+                    rel = fp.relative_to(ws_root).as_posix()
+                    if rel in seen_paths or "/provenance/" in f"/{rel}" or "/sidecars/" in f"/{rel}":
+                        continue
+                    seen_paths.add(rel)
+                    aid = f"art_{fp.stem}"
+                    items.append({
+                        "id": aid,
+                        "vid": rel,
+                        "artifact_id": aid,
+                        "latest_version_id": aid,
+                        "marker": "{{artifact:" + rel + "}}",
+                        "kind": "table" if fp.suffix.lower() in (".csv", ".tsv") else ("figure" if fp.suffix.lower() in (".png", ".svg", ".pdf") else "other"),
+                        "path": rel,
+                        "abs_path": str(fp.resolve()),
+                        "filename": fp.name,
+                        "title": fp.name,
+                        "sha256": "",
+                        "size": fp.stat().st_size,
+                    })
+            if kind:
+                items = [x for x in items if x.get("kind") == kind]
+            if filename:
+                fn_str = str(filename)
+                if exact:
+                    items = [x for x in items if x.get("filename") == fn_str or x.get("path") == fn_str]
+                else:
+                    items = [x for x in items if fn_str.lower() in x.get("filename", "").lower() or fn_str.lower() in x.get("path", "").lower()]
+            return items[: max(1, min(int(limit), 1000))]
+
+        def artifact_path(self, vid):
+            raw = str(vid or "").strip()
+            if raw.startswith("{{artifact:") and raw.endswith("}}"):
+                raw = raw[len("{{artifact:"):-2].strip()
+            elif raw.startswith("{{!artifact:") and raw.endswith("}}"):
+                raw = raw[len("{{!artifact:"):-2].strip()
+            if not raw or any(ch in raw for ch in ("'", '"', "[", "]", "{", "}", " ", "\t", "\n", "\r", "\\", "..")):
+                raise ValueError(f"host.artifact_path: invalid artifact id {vid!r}")
+            cands = {raw, raw[4:] if raw.startswith("art_") else f"art_{raw}"}
+            for item in self.artifacts(limit=1000):
+                if (
+                    item["id"] in cands
+                    or item.get("vid") in cands
+                    or item["artifact_id"] in cands
+                    or item["latest_version_id"] in cands
+                    or item["filename"] == raw
+                    or item["path"] == raw
+                    or item["path"].endswith(f"/{raw}")
+                    or (item.get("sha256") and len(raw) >= 8 and item["sha256"].startswith(raw))
+                ):
+                    abs_p = item["abs_path"]
+                    _record_path(abs_p, "r")
+                    return abs_p
+            for direct_cand in (ws_root / raw, ws_root / "output" / raw):
+                try:
+                    resolved = direct_cand.resolve()
+                    if resolved.is_relative_to(ws_root) and resolved.is_file():
+                        abs_p = str(resolved)
+                        _record_path(abs_p, "r")
+                        return abs_p
+                except Exception:
+                    pass
+            raise FileNotFoundError(f"host.artifact_path: unknown artifact {vid!r}")
+
+        def artifact_marker(self, vid, escaped=False):
+            raw = str(vid or "").strip()
+            if raw.startswith("{{artifact:") and raw.endswith("}}"):
+                raw = raw[len("{{artifact:"):-2].strip()
+            elif raw.startswith("{{!artifact:") and raw.endswith("}}"):
+                raw = raw[len("{{!artifact:"):-2].strip()
+            if not raw or any(ch in raw for ch in ("'", '"', "[", "]", "{", "}", " ", "\t", "\n", "\r", "\\", "..")):
+                raise ValueError(f"host.artifact_marker: invalid artifact id {vid!r}")
+            prefix = "{{!artifact:" if escaped else "{{artifact:"
+            return f"{prefix}{raw}}}}}"
+
+    ip.user_ns["host"] = _OperonHost()
+
+    def _patch_h5_and_anndata():
+        h5_mod = sys.modules.get("h5py")
+        if h5_mod is not None:
+            file_cls = getattr(h5_mod, "File", None)
+            if file_cls is not None and not getattr(file_cls.__init__, "__omicsclaw_patched__", False):
+                orig_init = file_cls.__init__
+                @functools.wraps(orig_init)
+                def _wrapped_h5_init(self, name, mode="r", *args, **kwargs):
+                    _record_path(name, mode if isinstance(mode, str) else "r")
+                    return orig_init(self, name, mode, *args, **kwargs)
+                _wrapped_h5_init.__omicsclaw_patched__ = True
+                try:
+                    file_cls.__init__ = _wrapped_h5_init
+                except Exception:
+                    pass
+        for mod_name in ("anndata", "scanpy"):
+            mod = sys.modules.get(mod_name)
+            if mod is not None:
+                fn = getattr(mod, "read_h5ad", None)
+                if callable(fn) and not getattr(fn, "__omicsclaw_patched__", False):
+                    @functools.wraps(fn)
+                    def _wrapped_read_h5ad(filename, backed=None, *args, _orig=fn, **kwargs):
+                        _record_path(filename, "r+" if backed == "r+" else "r")
+                        return _orig(filename, backed=backed, *args, **kwargs)
+                    _wrapped_read_h5ad.__omicsclaw_patched__ = True
+                    try:
+                        setattr(mod, "read_h5ad", _wrapped_read_h5ad)
+                    except Exception:
+                        pass
+
+    _orig_import = builtins.__import__
+    if not getattr(_orig_import, "__omicsclaw_patched__", False):
+        @functools.wraps(_orig_import)
+        def _wrapped_import(name, globals=None, locals=None, fromlist=(), level=0):
+            res = _orig_import(name, globals, locals, fromlist, level)
+            if isinstance(name, str) and (
+                name in ("h5py", "anndata", "scanpy")
+                or name.startswith(("h5py.", "anndata.", "scanpy."))
+            ):
+                _patch_h5_and_anndata()
+            return res
+        _wrapped_import.__omicsclaw_patched__ = True
+        builtins.__import__ = _wrapped_import
+
+    def _audit(event, args):
+        if not state["active"]:
+            return
+        if event == "open" and args:
+            target = args[0]
+            mode = str(args[1]) if len(args) > 1 and args[1] is not None else "r"
+            _record_path(target, mode)
+        elif event == "import":
+            _patch_h5_and_anndata()
+
+    def _hash_map(mapping):
+        items = []
+        for rel, full_str in sorted(mapping.items()):
+            try:
+                fp = pathlib.Path(full_str)
+                if not fp.is_file():
+                    continue
+                st = fp.stat()
+                sha = ""
+                if st.st_size <= 64 * 1024 * 1024:
+                    h = hashlib.sha256()
+                    with fp.open("rb") as fh:
+                        for chunk in iter(lambda: fh.read(262144), b""):
+                            h.update(chunk)
+                    sha = h.hexdigest()
+                items.append({"path": rel, "size_bytes": st.st_size, "sha256": sha})
+            except Exception:
+                continue
+        return items
+
+    def _pre_cell(info):
+        if not getattr(info, "store_history", True):
+            state["active"] = False
+            return
+        state["reads"].clear()
+        state["writes"].clear()
+        state["skills"].clear()
+        state["skills_loaded"].clear()
+        state["object_versions"].clear()
+        state["pre_objects"] = _scan_namespace_objects()
+        try:
+            if exec_id_file.is_file():
+                ip.user_ns["__omicsclaw_execution_id__"] = exec_id_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+        _patch_h5_and_anndata()
+        state["active"] = True
+
+    def _post_cell(result):
+        if not state["active"]:
+            return
+        state["active"] = False
+        try:
+            post_objects = _scan_namespace_objects()
+            for name, info in sorted(post_objects.items()):
+                prev = obj_registry.get(name)
+                fp = info["fingerprint"]
+                meta = info["meta"]
+                if prev is None or prev.get("fingerprint") != fp:
+                    prev_ver = int(prev.get("version", 0)) if prev else 0
+                    new_ver = prev_ver + 1
+                    prev_meta = (prev.get("meta") if prev else None) or {}
+                    entry = {
+                        "name": name,
+                        "type": meta.get("type", "Object"),
+                        "version": new_ver,
+                        "previous_version": prev_ver,
+                        "prev_version": prev_ver,
+                        "pointer": f"{name}@v{new_ver}",
+                        "action": "created" if prev_ver == 0 else "mutated",
+                        "shape": meta.get("shape"),
+                        "shape_before": prev_meta.get("shape"),
+                        "fingerprint": fp,
+                        "execution_id": str(ip.user_ns.get("__omicsclaw_execution_id__", "")),
+                    }
+                    if meta.get("type") == "AnnData":
+                        for field_k, out_k in (
+                            ("obs_columns", "added_obs"),
+                            ("uns_keys", "added_uns"),
+                            ("obsm_keys", "added_obsm"),
+                            ("layers_keys", "added_layers"),
+                        ):
+                            before_s = set(prev_meta.get(field_k) or ())
+                            after_l = [x for x in (meta.get(field_k) or ()) if x not in before_s]
+                            if after_l:
+                                entry[out_k] = after_l
+                    elif meta.get("type") == "DataFrame":
+                        before_c = set(prev_meta.get("columns") or ())
+                        added_c = [x for x in (meta.get("columns") or ()) if x not in before_c]
+                        if added_c:
+                            entry["added_columns"] = added_c
+                    obj_registry[name] = {"version": new_ver, "fingerprint": fp, "meta": meta}
+                    state["object_versions"].append(entry)
+
+            reads_list = _hash_map(state["reads"])
+            writes_list = _hash_map(state["writes"])
+            skills_list = list(state["skills"])
+            loaded_list = list(state["skills_loaded"])
+            objects_list = list(state["object_versions"])
+            for s_item in ip.user_ns.get("__omicsclaw_loaded_sidecars__", ()):
+                if isinstance(s_item, dict) and s_item not in loaded_list:
+                    loaded_list.append(dict(s_item))
+            if reads_list or writes_list or skills_list or loaded_list or objects_list:
+                payload = json.dumps({
+                    "execution_count": getattr(result, "execution_count", None),
+                    "execution_id": str(ip.user_ns.get("__omicsclaw_execution_id__", "")),
+                    "files_read": reads_list,
+                    "files_written": writes_list,
+                    "skill_calls": skills_list,
+                    "skills_loaded": loaded_list,
+                    "object_versions": objects_list,
+                })
+                with ledger_file.open("a", encoding="utf-8") as fh:
+                    fh.write(payload + "\n")
+        except Exception:
+            pass
+
+    ip.events.register("pre_run_cell", _pre_cell)
+    ip.events.register("post_run_cell", _post_cell)
+    sys.addaudithook(_audit)
+
+try:
+    __omicsclaw_install_ledger()
+finally:
+    del __omicsclaw_install_ledger
+'''
+
+
+def _write_ipython_ledger_startup(
+    ipython_dir: Path, *, workspace: Path, ledger_path: Path
+) -> None:
+    startup_dir = ipython_dir / "profile_default" / "startup"
+    startup_dir.mkdir(parents=True, exist_ok=True)
+    script = startup_dir / "00_omicsclaw_ledger.py"
+    exec_id_file = ipython_dir.parent / "current_execution_id.txt"
+    cfg = json.dumps(
+        {
+            "workspace": str(workspace),
+            "ledger": str(ledger_path),
+            "exec_id_file": str(exec_id_file),
+        }
+    )
+    code = _LEDGER_STARTUP_TEMPLATE.replace("__OMICSCLAW_CFG_REPR__", repr(cfg))
+    script.write_text(code, encoding="utf-8")
+
+
+def _harvest_kernel_ledger_v2(
+    ledger_path: Path | None, offset: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    if ledger_path is None or not ledger_path.is_file():
+        return [], [], [], [], []
+    reads: list[dict[str, Any]] = []
+    writes: list[dict[str, Any]] = []
+    skills: list[dict[str, Any]] = []
+    loaded: list[dict[str, Any]] = []
+    objects: list[dict[str, Any]] = []
+    try:
+        with ledger_path.open("rb") as fh:
+            fh.seek(offset)
+            raw = fh.read().decode("utf-8", errors="ignore")
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            if not isinstance(item, dict):
+                continue
+            for r in item.get("files_read") or []:
+                if r not in reads:
+                    reads.append(r)
+            for w in item.get("files_written") or []:
+                if w not in writes:
+                    writes.append(w)
+            for s in item.get("skill_calls") or []:
+                if s not in skills:
+                    skills.append(s)
+            for sl in item.get("skills_loaded") or []:
+                if sl not in loaded:
+                    loaded.append(sl)
+            for ov in item.get("object_versions") or []:
+                if ov not in objects:
+                    objects.append(ov)
+    except Exception:  # noqa: BLE001
+        pass
+    return reads, writes, skills, loaded, objects
+
+
+def _harvest_kernel_ledger(
+    ledger_path: Path | None, offset: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    r, w, s, sl, _ov = _harvest_kernel_ledger_v2(ledger_path, offset)
+    return r, w, s, sl
+
+
+def _append_workspace_ledger(
+    workspace: Path,
+    *,
+    session_id: str,
+    execution_count: int | None,
+    execution_id: str = "",
+    status: str = "ok",
+    code: str,
+    files_read: list[dict[str, Any]],
+    files_written: list[dict[str, Any]],
+    skill_calls: list[dict[str, Any]],
+    skills_loaded: list[dict[str, Any]] | None = None,
+    object_versions: list[dict[str, Any]] | None = None,
+) -> None:
+    if not code.strip() and not (files_read or files_written or skill_calls or skills_loaded or object_versions):
+        return
+    try:
+        record = {
+            "session_id": session_id,
+            "execution_count": execution_count,
+            "execution_id": execution_id,
+            "status": status,
+            "timestamp": time.time(),
+            "code_sha256": hashlib.sha256(code.strip().encode("utf-8")).hexdigest(),
+            "code": code[:65536],
+            "files_read": files_read,
+            "files_written": files_written,
+            "skill_calls": skill_calls,
+            "skills_loaded": list(skills_loaded or []),
+            "object_versions": list(object_versions or []),
+        }
+        line = json.dumps(record, sort_keys=True) + "\n"
+        for prov_dir in (
+            workspace / ".omicsclaw" / "provenance",
+            workspace / "provenance",
+        ):
+            prov_dir.mkdir(parents=True, exist_ok=True)
+            for fname in ("kernel_ledger.jsonl", "session_ledger.jsonl"):
+                with (prov_dir / fname).open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+    except OSError:
+        pass
+

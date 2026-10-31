@@ -246,7 +246,12 @@ class OmicsClawAdapter:
                 }
             return dict(self._code)
 
-    def collect(self, run: RunSpec, paths: RunPaths, exit: ProcessExit) -> Evidence:
+    def collect(
+        self,
+        run: RunSpec,
+        paths: RunPaths,
+        exit: ProcessExit | None = None,
+    ) -> Evidence:
         """Read the run's telemetry and transcript. Never raises.
 
         The source tree the process should have imported from, and
@@ -255,6 +260,8 @@ class OmicsClawAdapter:
         the run has no such record. Without capture there are no commands
         to hand to the access audit, and ``commands`` is ``None``.
         """
+        if exit is None:
+            exit = ProcessExit(started=True, returncode=0)
         command = read_json(paths.command) or {}
         recorded = command.get("provenance")
         expected_root = self._source_root
@@ -265,12 +272,16 @@ class OmicsClawAdapter:
         if isinstance(launched_with, dict):
             captured = launched_with.get("OMICSCLAW_OTEL_CAPTURE_CONTENT") == "true"
         trace = read_trace(paths.stderr)
+        if not trace.spans:
+            alt_log = paths.workspace / ".omicsclaw" / "logs" / "omicsclaw.jsonl"
+            if alt_log.is_file():
+                trace = read_trace(alt_log)
         transcript = _ANSI.sub("", _read(paths.stdout))
 
         calls = trace.named(_SPAN_LLM)
         tools = trace.named(_SPAN_TOOL)
         tool_ids = {str(span.get("span_id", "")) for span in tools}
-        interactions = trace.named(_SPAN_INTERACTION)
+        interactions = list(trace.named(_SPAN_INTERACTION)) + list(trace.named("interaction"))
         # How the run ended is what the main agent's last exchange says. A
         # span that names no agent type is the main agent's. A span of
         # another type does not speak for it, so with no main span the
@@ -305,6 +316,43 @@ class OmicsClawAdapter:
             if "llm.model" in _attributes(span)
         })
         turns = ending.get("agent.turns")
+        if not isinstance(turns, int) and isinstance(last.get("turns"), int):
+            turns = last.get("turns")
+        if len(mains) > 1:
+            is_multiturn = bool(getattr(self, "_is_multiturn", False)) or (
+                isinstance(recorded, dict) and bool(recorded.get("multiturn_count"))
+            )
+            span_ids = [str(m.get("span_id") or m.get("span") or "") for m in mains]
+            duplicate_root_override = (
+                not is_multiturn
+                and len(set(span_ids)) == 1
+                and span_ids[0] == "root"
+                and str(ending.get("agent.stop_reason", "")) == "max_turns"
+            )
+            if not duplicate_root_override:
+                turn_vals: list[int] = []
+                for m in mains:
+                    t_val = _attributes(m).get("agent.turns")
+                    if not isinstance(t_val, int):
+                        t_val = m.get("turns")
+                    if isinstance(t_val, int):
+                        turn_vals.append(t_val)
+                if turn_vals:
+                    turns = sum(turn_vals)
+
+        wall_s_vals: list[float] = []
+        for m in mains:
+            dur = m.get("duration_s")
+            if not isinstance(dur, (int, float)):
+                dur = m.get("wall_s")
+            if not isinstance(dur, (int, float)):
+                dur = _attributes(m).get("duration_s") or _attributes(m).get("wall_s")
+            if not isinstance(dur, (int, float)) and isinstance(m.get("ms"), (int, float)):
+                dur = float(m["ms"]) / 1000.0
+            if isinstance(dur, (int, float)):
+                wall_s_vals.append(float(dur))
+        total_wall_s = sum(wall_s_vals) if wall_s_vals else float(exit.wall_s or 0.0)
+
         return Evidence(
             stop_reason=stop_reason,
             infra_reason=_infra_reason(trace, calls, tool_ids, expected_root),
@@ -321,7 +369,44 @@ class OmicsClawAdapter:
                 "session_id": str(ending.get("session.id", "")),
                 "ended_with": str(last.get("error", "")),
                 "meter": _meter_check(trace.metrics, calls),
+                "wall_s": total_wall_s,
+                "interaction_count": len(mains),
             },
+        )
+
+    def run(
+        self,
+        run: RunSpec,
+        paths: RunPaths,
+        budget: Budget,
+        base_env: Mapping[str, str] | None = None,
+    ) -> ProcessExit:
+        """Launch and execute the agent process within *budget*."""
+        import os
+        from ..process import run_process
+
+        spec = self.launch(run, paths, budget, base_env if base_env is not None else os.environ)
+        paths.meta.mkdir(parents=True, exist_ok=True)
+        paths.command.write_text(
+            json.dumps(
+                {
+                    "argv": list(spec.argv),
+                    "cwd": str(spec.cwd),
+                    "harness_env": dict(spec.harness_env),
+                    "provenance": dict(spec.provenance),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return run_process(
+            spec.argv,
+            env=spec.env,
+            cwd=spec.cwd,
+            stdout=paths.stdout,
+            stderr=paths.stderr,
+            wall_clock_s=float(budget.wall_clock_s),
+            kill_grace_s=float(getattr(budget, "kill_grace_s", 5.0)),
         )
 
 

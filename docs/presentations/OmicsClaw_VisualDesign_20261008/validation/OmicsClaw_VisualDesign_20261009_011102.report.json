@@ -1,0 +1,399 @@
+{
+  "schema": "ppt-master.pptx-postflight-report.v1",
+  "status": "passed",
+  "output": {
+    "path": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/presentations/OmicsClaw_VisualDesign_20261008/exports/OmicsClaw_VisualDesign_20261009_011102.pptx",
+    "bytes": 1412407
+  },
+  "source": {
+    "svg_slide_count": 33,
+    "layout_definition_count": 0,
+    "fingerprint": {
+      "algorithm": "sha256",
+      "digest": "dd28d1777398f58f9089bb8a0f594c50e315e770c3b3100d6d0d9e5724252f7b",
+      "file_count": 33,
+      "files": [
+        {
+          "file": "01_cover.svg",
+          "sha256": "90a012e3a7c381b62af72a66a1f2bb47cb4240aa57b76d65347a52f96df0b3f4"
+        },
+        {
+          "file": "02_evolution.svg",
+          "sha256": "0f2d57fdb902b6ff086167b454ca63fd261cb23e74dca6865a9af286de7e9230"
+        },
+        {
+          "file": "03_problem.svg",
+          "sha256": "13c5b80d680c5eb5604bb13da6b5978940eabcead07b335b2857029b6b92d160"
+        },
+        {
+          "file": "04_map.svg",
+          "sha256": "6a66a544f24ea89e35510c8487538afa2a7877be233701f25389ec39f1a8a6af"
+        },
+        {
+          "file": "05_engine.svg",
+          "sha256": "ecef57a93d88cc707797c8ea17503292cb7b8a252c0ee8e7b0dd49ea06eee455"
+        },
+        {
+          "file": "06_schema.svg",
+          "sha256": "9b11a36c39429c40a88ec317aea440327dade7bd5c37cbc5a6800b988b958d5f"
+        },
+        {
+          "file": "07_provider.svg",
+          "sha256": "6d6bc271003c60d943abc373aee36e1c7243277f90bae6fc6c8b8c5dd42c3006"
+        },
+        {
+          "file": "08_tools.svg",
+          "sha256": "3fc59a1d749b2dbc2ff929d54f90259798fee0db2cb11749ccebb07d7a91b8a1"
+        },
+        {
+          "file": "09_prompt.svg",
+          "sha256": "eacde06e71a2095d0dae25b711e9e225cc0ed7cab211b190eb2718bae79f5ef3"
+        },
+        {
+          "file": "10_skills.svg",
+          "sha256": "57d036960214d9616bcf6685f52ffc87860256a8e0248d99a57e2d2209af9161"
+        },
+        {
+          "file": "11_context.svg",
+          "sha256": "ffe56fa1e68a29f7b08fbdd2b3576f8710b7f65024f22434baf9fe9c75f9290b"
+        },
+        {
+          "file": "12_memory_plan.svg",
+          "sha256": "0864198b4e9e75a2e44c28c8ea4a84355ab820ddb67f3acc59f0354f7179ed52"
+        },
+        {
+          "file": "13_entry.svg",
+          "sha256": "a5dbef52dee35e21e62a8db07b2ebd4f19228be5fdecd7ec299de7df609aa87a"
+        },
+        {
+          "file": "14_recovery.svg",
+          "sha256": "6ce44fa39a706141b7419d10dea70beb8707aa94dee1ead7b739e5bccd7710dc"
+        },
+        {
+          "file": "15_permission.svg",
+          "sha256": "dfe2a54dcdbec6b228b16900347eafd59c22340584608e9b5e05a8282afce392"
+        },
+        {
+          "file": "16_sandbox.svg",
+          "sha256": "a6e2e0197ba094b93b108145358b58f9e6c45638c829ad77a86f6635708f73e0"
+        },
+        {
+          "file": "17_skillenv.svg",
+          "sha256": "64fa114e992730e1bce4c3b0fd1f085501133d798d16083ed8ae0f82e209bbde"
+        },
+        {
+          "file": "18_extensions.svg",
+          "sha256": "29df7f117f469f1cf5c2287e9ece2f5bc02a0d2b120d301afc8c88fcf30289ab"
+        },
+        {
+          "file": "19_observe.svg",
+          "sha256": "a3785220c7fa38506aa4054da1fe5f79090a7572039daa4dc8ddd6183271e148"
+        },
+        {
+          "file": "20_eval.svg",
+          "sha256": "0bbd72b893624000f9a8a0e112dd71549755c70041ccb91577bd0d8c32b8dd33"
+        },
+        {
+          "file": "21_boundary.svg",
+          "sha256": "f2839de80e6989a21dbb2b85cb49f99f299c17ae93aa51303eb9d230ee138b03"
+        },
+        {
+          "file": "22_api_cli.svg",
+          "sha256": "e5ea40b46e554b1dccbd68ebf7f08a41cbadb73aeb839db67788fbf7e672ec27"
+        },
+        {
+          "file": "23_modules.svg",
+          "sha256": "0a5399208d2223bf0193b698e9823721c909d061cb5a9fad89858b3321389c9c"
+        },
+        {
+          "file": "24_replay.svg",
+          "sha256": "0525e40ef87536582fb9d135b2f7fdaa3635011e7fa9b49bf0e7a7679f6616cb"
+        },
+        {
+          "file": "25_review.svg",
+          "sha256": "db81328858f9f4b5ba5ddda9e10aca256130aecb3c0e1a04fec70e4ef0a18918"
+        },
+        {
+          "file": "26_case.svg",
+          "sha256": "25236476dba32dfe5911a26c6890596f67dc015cc1e7e5a563fab7fb3804ea33"
+        },
+        {
+          "file": "27_paper_background.svg",
+          "sha256": "b2e0e3a15e4a328cf89c77873b05dfc1b510ecda70ce6666b376dad9c3956432"
+        },
+        {
+          "file": "28_paper_design.svg",
+          "sha256": "7cf042ea364e5d65ccce17c4299c5036efd8792c351d73d0b0b6e424758b1ba2"
+        },
+        {
+          "file": "29_paper_finding.svg",
+          "sha256": "c78cbc235f9e49ef22c8577c68d8fb4378524f6291392c8ed15d6fa97cebe235"
+        },
+        {
+          "file": "30_project_question.svg",
+          "sha256": "4a8544a3b6c7e9f92123d4095d56cc456e4914e0bef90a23c704e3c6f5192320"
+        },
+        {
+          "file": "31_research_mechanisms.svg",
+          "sha256": "4dec5b94ba7eae9b936670ace13c33d5bab9b9618d5f4badb4332fecd36fc648"
+        },
+        {
+          "file": "32_research_benchmark.svg",
+          "sha256": "f32d1da7b1558d8a307e5b11de5d8fc9f22469c874cf7c03db2bffb3341c6b03"
+        },
+        {
+          "file": "33_research_pilot.svg",
+          "sha256": "bc8eba53dc24dcbf6ed1bfa5763c8670f73ab7e243f44a3dc33f4a7f9ea2439a"
+        }
+      ]
+    },
+    "authoring_roundtrip": null
+  },
+  "package": {
+    "zip_integrity": "passed",
+    "corrupt_member": null,
+    "slides": 33,
+    "notes": 33,
+    "masters": 1,
+    "layouts": 1
+  },
+  "checks": {
+    "zip_integrity": "passed",
+    "slide_count": "passed",
+    "internal_relationships": "enforced-at-build",
+    "structured_package": "not-applicable",
+    "transitions": "enforced-at-build",
+    "animations": "enforced-at-build",
+    "project_svg_contract": "enforced-at-build",
+    "compatibility_normalization": "not-applicable",
+    "authoring_roundtrip": "not-applicable",
+    "quality_gate": "passed",
+    "quality_warnings": "passed",
+    "template_tokens": "passed",
+    "external_images": "passed",
+    "font_portability": "passed"
+  },
+  "quality": {
+    "status": "loaded",
+    "path": "docs/presentations/OmicsClaw_VisualDesign_20261008/validation/svg_quality_report.json",
+    "schema": "ppt-master.svg-quality-report.v1",
+    "stage": "final",
+    "source_match": "passed",
+    "source_fingerprint": {
+      "algorithm": "sha256",
+      "digest": "dd28d1777398f58f9089bb8a0f594c50e315e770c3b3100d6d0d9e5724252f7b",
+      "file_count": 33,
+      "files": [
+        {
+          "file": "01_cover.svg",
+          "sha256": "90a012e3a7c381b62af72a66a1f2bb47cb4240aa57b76d65347a52f96df0b3f4"
+        },
+        {
+          "file": "02_evolution.svg",
+          "sha256": "0f2d57fdb902b6ff086167b454ca63fd261cb23e74dca6865a9af286de7e9230"
+        },
+        {
+          "file": "03_problem.svg",
+          "sha256": "13c5b80d680c5eb5604bb13da6b5978940eabcead07b335b2857029b6b92d160"
+        },
+        {
+          "file": "04_map.svg",
+          "sha256": "6a66a544f24ea89e35510c8487538afa2a7877be233701f25389ec39f1a8a6af"
+        },
+        {
+          "file": "05_engine.svg",
+          "sha256": "ecef57a93d88cc707797c8ea17503292cb7b8a252c0ee8e7b0dd49ea06eee455"
+        },
+        {
+          "file": "06_schema.svg",
+          "sha256": "9b11a36c39429c40a88ec317aea440327dade7bd5c37cbc5a6800b988b958d5f"
+        },
+        {
+          "file": "07_provider.svg",
+          "sha256": "6d6bc271003c60d943abc373aee36e1c7243277f90bae6fc6c8b8c5dd42c3006"
+        },
+        {
+          "file": "08_tools.svg",
+          "sha256": "3fc59a1d749b2dbc2ff929d54f90259798fee0db2cb11749ccebb07d7a91b8a1"
+        },
+        {
+          "file": "09_prompt.svg",
+          "sha256": "eacde06e71a2095d0dae25b711e9e225cc0ed7cab211b190eb2718bae79f5ef3"
+        },
+        {
+          "file": "10_skills.svg",
+          "sha256": "57d036960214d9616bcf6685f52ffc87860256a8e0248d99a57e2d2209af9161"
+        },
+        {
+          "file": "11_context.svg",
+          "sha256": "ffe56fa1e68a29f7b08fbdd2b3576f8710b7f65024f22434baf9fe9c75f9290b"
+        },
+        {
+          "file": "12_memory_plan.svg",
+          "sha256": "0864198b4e9e75a2e44c28c8ea4a84355ab820ddb67f3acc59f0354f7179ed52"
+        },
+        {
+          "file": "13_entry.svg",
+          "sha256": "a5dbef52dee35e21e62a8db07b2ebd4f19228be5fdecd7ec299de7df609aa87a"
+        },
+        {
+          "file": "14_recovery.svg",
+          "sha256": "6ce44fa39a706141b7419d10dea70beb8707aa94dee1ead7b739e5bccd7710dc"
+        },
+        {
+          "file": "15_permission.svg",
+          "sha256": "dfe2a54dcdbec6b228b16900347eafd59c22340584608e9b5e05a8282afce392"
+        },
+        {
+          "file": "16_sandbox.svg",
+          "sha256": "a6e2e0197ba094b93b108145358b58f9e6c45638c829ad77a86f6635708f73e0"
+        },
+        {
+          "file": "17_skillenv.svg",
+          "sha256": "64fa114e992730e1bce4c3b0fd1f085501133d798d16083ed8ae0f82e209bbde"
+        },
+        {
+          "file": "18_extensions.svg",
+          "sha256": "29df7f117f469f1cf5c2287e9ece2f5bc02a0d2b120d301afc8c88fcf30289ab"
+        },
+        {
+          "file": "19_observe.svg",
+          "sha256": "a3785220c7fa38506aa4054da1fe5f79090a7572039daa4dc8ddd6183271e148"
+        },
+        {
+          "file": "20_eval.svg",
+          "sha256": "0bbd72b893624000f9a8a0e112dd71549755c70041ccb91577bd0d8c32b8dd33"
+        },
+        {
+          "file": "21_boundary.svg",
+          "sha256": "f2839de80e6989a21dbb2b85cb49f99f299c17ae93aa51303eb9d230ee138b03"
+        },
+        {
+          "file": "22_api_cli.svg",
+          "sha256": "e5ea40b46e554b1dccbd68ebf7f08a41cbadb73aeb839db67788fbf7e672ec27"
+        },
+        {
+          "file": "23_modules.svg",
+          "sha256": "0a5399208d2223bf0193b698e9823721c909d061cb5a9fad89858b3321389c9c"
+        },
+        {
+          "file": "24_replay.svg",
+          "sha256": "0525e40ef87536582fb9d135b2f7fdaa3635011e7fa9b49bf0e7a7679f6616cb"
+        },
+        {
+          "file": "25_review.svg",
+          "sha256": "db81328858f9f4b5ba5ddda9e10aca256130aecb3c0e1a04fec70e4ef0a18918"
+        },
+        {
+          "file": "26_case.svg",
+          "sha256": "25236476dba32dfe5911a26c6890596f67dc015cc1e7e5a563fab7fb3804ea33"
+        },
+        {
+          "file": "27_paper_background.svg",
+          "sha256": "b2e0e3a15e4a328cf89c77873b05dfc1b510ecda70ce6666b376dad9c3956432"
+        },
+        {
+          "file": "28_paper_design.svg",
+          "sha256": "7cf042ea364e5d65ccce17c4299c5036efd8792c351d73d0b0b6e424758b1ba2"
+        },
+        {
+          "file": "29_paper_finding.svg",
+          "sha256": "c78cbc235f9e49ef22c8577c68d8fb4378524f6291392c8ed15d6fa97cebe235"
+        },
+        {
+          "file": "30_project_question.svg",
+          "sha256": "4a8544a3b6c7e9f92123d4095d56cc456e4914e0bef90a23c704e3c6f5192320"
+        },
+        {
+          "file": "31_research_mechanisms.svg",
+          "sha256": "4dec5b94ba7eae9b936670ace13c33d5bab9b9618d5f4badb4332fecd36fc648"
+        },
+        {
+          "file": "32_research_benchmark.svg",
+          "sha256": "f32d1da7b1558d8a307e5b11de5d8fc9f22469c874cf7c03db2bffb3341c6b03"
+        },
+        {
+          "file": "33_research_pilot.svg",
+          "sha256": "bc8eba53dc24dcbf6ed1bfa5763c8670f73ab7e243f44a3dc33f4a7f9ea2439a"
+        }
+      ]
+    },
+    "summary": {
+      "total": 33,
+      "passed": 33,
+      "warnings": 0,
+      "errors": 0
+    },
+    "categories": {
+      "blocking": {
+        "count": 0,
+        "issues": []
+      },
+      "introduced": {
+        "count": 0,
+        "issues": []
+      },
+      "inherited": {
+        "count": 0,
+        "issues": []
+      },
+      "source-import": {
+        "count": 0,
+        "summary": {
+          "warning_count": 0,
+          "by_code": {}
+        }
+      }
+    }
+  },
+  "resources": {
+    "unresolved_template_tokens": [],
+    "fonts": {
+      "stacks": [
+        "Microsoft YaHei, Arial",
+        "Microsoft YaHei, Consolas"
+      ],
+      "generic_only_stacks": [],
+      "unsafe_exported_faces": []
+    },
+    "images": {
+      "data_uri": 0,
+      "local": 1,
+      "external": 0,
+      "external_references": []
+    }
+  },
+  "export_policy": {
+    "project_svg_contract": "strict",
+    "dangerous_normalization_count": 0
+  },
+  "deck_motion": {
+    "transition": {
+      "effect": "fade",
+      "effect_options": {},
+      "duration": 0.4,
+      "auto_advance": null,
+      "sound": null
+    },
+    "animation": {
+      "effect": "none",
+      "effect_request": null,
+      "duration": 0.4,
+      "stagger": 0.5,
+      "trigger": "after-previous"
+    },
+    "cli_overrides": {
+      "transition": false,
+      "transition_duration": false,
+      "auto_advance": false,
+      "transition_sound": false,
+      "animation": false,
+      "animation_duration": false,
+      "animation_stagger": false,
+      "animation_trigger": false
+    },
+    "narration_timings": false
+  },
+  "backup_path": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/presentations/OmicsClaw_VisualDesign_20261008/backup/20261009_011102/svg_output",
+  "conversion_trace_path": null
+}

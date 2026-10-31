@@ -1390,3 +1390,60 @@ def test_an_exchange_with_every_observer_slot_taken_answers_429(
     with pytest.raises(DesktopIngressError) as caught:
         asyncio.run(scenario())
     assert (caught.value.code, caught.value.status_code) == ("too_many_observers", 429)
+
+
+def test_permission_request_carries_subagent_provenance_when_present():
+    request = ApprovalRequest(
+        tool_name="bash",
+        arguments='{"command": "echo hi"}',
+        reason="run: echo hi",
+        reason_shows_call=True,
+        ask_every_time=False,
+    )
+    delegated = TurnEvent.approval_required(
+        request, "t" * 32 + "#2", seq=10, session_id="s1", turn_id="t" * 32, subagent="scrna-specialist"
+    )
+    name, data = desktop_chat_frame(delegated)
+    assert name == "permission_request"
+    assert data["subagent"] == "scrna-specialist"
+
+
+def test_elevated_context_pressure_and_queued_turns_project_status_frames():
+    from omicsclaw.context.budget import BudgetReport, ContextBudget, Pressure
+
+    budget = ContextBudget(
+        context_tokens=100_000, reserve_output_tokens=8_000, reserve_tool_tokens=2_000
+    )
+    calm = BudgetReport(
+        budget=budget,
+        message_tokens=5_000,
+        tool_tokens=1_000,
+        tool_reserve_shortfall=0,
+        pressure=Pressure.NONE,
+        ratio=0.07,
+    )
+    assert desktop_chat_frame(TurnEvent.context(calm, seq=1, session_id="s1", turn_id="t1")) is None
+
+    warn_report = BudgetReport(
+        budget=budget,
+        message_tokens=60_000,
+        tool_tokens=2_000,
+        tool_reserve_shortfall=500,
+        pressure=Pressure.WARN,
+        ratio=0.69,
+    )
+    frame = desktop_chat_frame(TurnEvent.context(warn_report, seq=2, session_id="s1", turn_id="t1"))
+    assert frame is not None
+    assert frame[0] == "status"
+    assert frame[1]["kind"] == "context"
+    assert frame[1]["pressure"] == "warn"
+    assert frame[1]["context_tokens"] == 100_000
+    assert frame[1]["message_tokens"] == 60_000
+    assert frame[1]["tool_reserve_shortfall"] == 500
+
+    assert desktop_chat_frame(TurnEvent.queued(0, seq=3, session_id="s1", turn_id="t1")) is None
+    q_frame = desktop_chat_frame(TurnEvent.queued(3, seq=4, session_id="s1", turn_id="t1"))
+    assert q_frame is not None
+    assert q_frame[0] == "status"
+    assert q_frame[1]["kind"] == "queued"
+    assert q_frame[1]["ahead"] == 3

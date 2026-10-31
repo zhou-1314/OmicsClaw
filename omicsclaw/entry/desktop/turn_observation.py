@@ -192,6 +192,8 @@ def desktop_chat_frame(
             request.ask_every_time if request is not None else False
         )
         payload["can_remember"] = can_remember
+        if event.subagent:
+            payload["subagent"] = event.subagent
         return (DESKTOP_CHAT_FRAME_TYPE[kind], _wire_json_value(payload))
     if kind is TurnEventType.QUESTION_ASKED:
         payload = to_wire(event)
@@ -206,6 +208,27 @@ def desktop_chat_frame(
     if kind is TurnEventType.COMPACTION:
         payload = to_wire(event)
         payload["kind"] = "compaction"
+        payload.pop("schema_version", None)
+        payload.pop("type", None)
+        return ("status", _wire_json_value(payload))
+    if kind is TurnEventType.CONTEXT:
+        if event.report is None and not event.wire_payload:
+            return None
+        payload = to_wire(event)
+        pressure = str(payload.get("pressure") or "none")
+        shortfall = int(payload.get("tool_reserve_shortfall") or 0)
+        if pressure in ("none", "ok", "low") and shortfall <= 0:
+            return None
+        payload["kind"] = "context"
+        payload.pop("schema_version", None)
+        payload.pop("type", None)
+        return ("status", _wire_json_value(payload))
+    if kind is TurnEventType.QUEUED:
+        ahead = event.queued_ahead if event.queued_ahead > 0 else int((event.wire_payload or {}).get("ahead") or 0)
+        if ahead <= 0:
+            return None
+        payload = to_wire(event)
+        payload["kind"] = "queued"
         payload.pop("schema_version", None)
         payload.pop("type", None)
         return ("status", _wire_json_value(payload))
@@ -409,6 +432,8 @@ class DesktopChatSSEBody:
                 continue
             if event.type is TurnEventType.COMPACTION:
                 self._compaction_seen = True
+            if event.type is TurnEventType.CONTEXT and self._compaction is not None:
+                continue
             if event.type is TurnEventType.QUESTION_ASKED:
                 if not self._shows_question_card(event):
                     continue

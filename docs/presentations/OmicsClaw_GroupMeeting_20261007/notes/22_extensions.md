@@ -1,0 +1,5 @@
+MCP 和 subagent 扩展的对象不同。MCP 把外部服务工具接入进来：服务由 .mcp.json 声明，通过 stdio 或 Streamable HTTP 连接，然后转换成普通 Tool 注册。engine 因而不必为每类服务增加新的循环分支，权限和工具定义继续走统一接口。
+
+subagent 则把一个有明确范围的任务交给独立上下文。角色提示与缩小后的工具集决定它能做什么，仍然复用相同的 engine；子运行由 entry 构造并接收回复，避免子代理包又长出一套应用组装逻辑。
+
+例如 module-reviewer 可以检查模块材料，但不能代替用户接受模块。独立上下文有助于减少当前会话的干扰，却不会自动消除不同模型或同一模型的共同盲点。相关入口是 omicsclaw/mcp/、subagent/ 和 entry/subagent.py。

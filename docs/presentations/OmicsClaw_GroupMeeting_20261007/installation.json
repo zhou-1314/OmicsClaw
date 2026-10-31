@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/hugohe3/ppt-master",
+  "checkout": "/root/.local/share/ppt-master",
+  "revision": "2d72da616cf9fa40d4dcaf59fd4c980ecf534b7d",
+  "skill": "/root/.codex/skills/ppt-master",
+  "version": "6.6.0",
+  "python": "/root/.local/share/ppt-master/.venv/bin/python",
+  "verification": [
+    "pip check: No broken requirements found",
+    "attribution_guard.py: exit 0",
+    "svg_to_pptx.py --help: exit 0",
+    "Final SVG gate: 36 slides, 0 errors, 0 warnings",
+    "Native PPTX postflight: passed, 0 warning categories",
+    "ZIP/XML/python-pptx: 36 slides, 36 notes, 631 editable text runs, 0 raster picture shapes",
+    "Source preview PDF: 36 pages; CJK font fallback documented"
+  ],
+  "presentation_status": "completed",
+  "user_authorization": "Explicit delegation in conversation: Chinese lab meeting, 30–40 minutes, 16:9, detailed component/design discussion, notes and sources; autonomous completion."
+}

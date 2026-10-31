@@ -1,0 +1,799 @@
+{
+  "captured_date": "2026-10-08",
+  "commit": "90a3bec3e6549bc33dddbf67e4b23869736c49d1",
+  "scope": "Current tracked code; pre-existing presentation artifacts and CHANGELOG edits are outside the architecture snapshot.",
+  "skill_count": 88,
+  "skipped": 0,
+  "function_library_count": 83,
+  "function_libraries_by_domain": {
+    "singlecell": 27,
+    "proteomics": 8,
+    "metabolomics": 7,
+    "genomics": 10,
+    "literature": 1,
+    "bulkrna": 14,
+    "spatial": 16
+  },
+  "skills": [
+    {
+      "name": "bulkrna-batch-correction",
+      "description": "Load when correcting batch effects in bulk expression using R sva ComBat or the legacy Python parametric approximation. Skip single-batch inputs; use sc-batch-integration for single-cell data or spatial-integrate for spatial slices.",
+      "relative_path": "bulkrna/bulkrna-batch-correction/SKILL.md"
+    },
+    {
+      "name": "bulkrna-coexpression",
+      "description": "Load when discovering bulk gene co-expression modules and hub genes with R WGCNA. Skip direct expression contrasts (use bulkrna-de), existing-gene-list PPI lookup (use bulkrna-ppi-network), or single-cell networks (use sc-grn).",
+      "relative_path": "bulkrna/bulkrna-coexpression/SKILL.md"
+    },
+    {
+      "name": "bulkrna-de",
+      "description": "Load when comparing gene expression between two conditions in bulk RNA-seq count data. Skip when the data is single-cell (use sc-de); spatial (use spatial-de); you need exon-level alternative splicing (use bulkrna-splicing).",
+      "relative_path": "bulkrna/bulkrna-de/SKILL.md"
+    },
+    {
+      "name": "bulkrna-deconvolution",
+      "description": "Load when estimating cell-type proportions in bulk RNA-seq samples from a single-cell or signature-matrix reference. Skip when the data is already single-cell (no deconvolution needed); spatial deconvolution (use spatial-deconv).",
+      "relative_path": "bulkrna/bulkrna-deconvolution/SKILL.md"
+    },
+    {
+      "name": "bulkrna-enrichment",
+      "description": "Load when running pathway / GO term enrichment on a bulk RNA-seq DE result list. Skip when the input is single-cell (use sc-enrichment); the input is spatial (use spatial-enrichment); metabolite pathways (use metabolomics-pathway-enrichment).",
+      "relative_path": "bulkrna/bulkrna-enrichment/SKILL.md"
+    },
+    {
+      "name": "bulkrna-geneid-mapping",
+      "description": "Load when converting Ensembl, Entrez or symbol IDs in a bulk RNA count matrix using an explicit mapping or a small human demo reference. Skip when IDs already match downstream needs; use fetch_mapping explicitly for MyGene lookup.",
+      "relative_path": "bulkrna/bulkrna-geneid-mapping/SKILL.md"
+    },
+    {
+      "name": "bulkrna-ppi-network",
+      "description": "Load when querying STRING for the protein-protein interaction neighborhood of a bulk RNA-seq DEG list and finding hub genes. Skip when pathway enrichment of the same list (use bulkrna-enrichment); de novo co-expression network discovery (use bulkrna-coexpression).",
+      "relative_path": "bulkrna/bulkrna-ppi-network/SKILL.md"
+    },
+    {
+      "name": "bulkrna-qc",
+      "description": "Load when checking a bulk RNA-seq count matrix for library-size outliers, gene detection rates, and sample-sample correlation before DE. Skip when data is raw FASTQ (use bulkrna-read-qc); aligner logs (use bulkrna-read-alignment); single-cell counts (use sc-qc).",
+      "relative_path": "bulkrna/bulkrna-qc/SKILL.md"
+    },
+    {
+      "name": "bulkrna-read-alignment",
+      "description": "Load when summarising STAR / HISAT2 / Salmon alignment-rate logs in bulk RNA-seq. Skip when data is raw FASTQ (use bulkrna-read-qc); already counted (use bulkrna-qc); genome-DNA alignment (use genomics-alignment).",
+      "relative_path": "bulkrna/bulkrna-read-alignment/SKILL.md"
+    },
+    {
+      "name": "bulkrna-read-qc",
+      "description": "Load when checking raw FASTQ quality (Phred / GC / adapter / Q20-Q30) before alignment in bulk RNA-seq. Skip when reads are already aligned (use bulkrna-read-alignment); counted (use bulkrna-qc); single-cell FASTQ (use sc-fastq-qc).",
+      "relative_path": "bulkrna/bulkrna-read-qc/SKILL.md"
+    },
+    {
+      "name": "bulkrna-splicing",
+      "description": "Load when summarising rMATS / SUPPA2 alternative-splicing output and identifying significant differential splicing events. Skip when you only have count-level DE (use bulkrna-de); splicing in single-cell; spatial data (currently unsupported).",
+      "relative_path": "bulkrna/bulkrna-splicing/SKILL.md"
+    },
+    {
+      "name": "bulkrna-survival",
+      "description": "Load when comparing bulk expression strata against clinical time-to-event data with Kaplan-Meier and log-rank tests. R survival also fits Cox HR; Python reports a descriptive events/person-time ratio. Skip missing clinical outcomes.",
+      "relative_path": "bulkrna/bulkrna-survival/SKILL.md"
+    },
+    {
+      "name": "bulkrna-trajblend",
+      "description": "Load when placing bulk RNA-seq samples on a single-cell reference's pseudotime axis (NNLS deconvolution + nearest-neighbour mapping). Skip when plain cell-type proportions (use bulkrna-deconvolution); native single-cell trajectory inference (use sc-pseudotime).",
+      "relative_path": "bulkrna/bulkrna-trajblend/SKILL.md"
+    },
+    {
+      "name": "bulkrna-cosinor-rhythm",
+      "description": "Load when the user needs Deterministic fixed-period 24-hour single-component cosinor OLS rhythm analysis for a bulk RNA time-course CSV. Skip when an existing bulkrna skill already covers the request.",
+      "relative_path": "bulkrna/run-derived/bulkrna-cosinor-rhythm/SKILL.md"
+    },
+    {
+      "name": "genomics-alignment",
+      "description": "Load when computing alignment QC metrics (mapping rate, MAPQ distribution, insert size, duplicate rate, proper-pair rate) from a text SAM file produced by any short-/long-read aligner (BWA / Bowtie2 / Minimap2); convert a BAM with samtools view -h first. Skip when running the alignment step itself; only FASTQ-level QC is needed (use genomics-qc).",
+      "relative_path": "genomics/genomics-alignment/SKILL.md"
+    },
+    {
+      "name": "genomics-assembly",
+      "description": "Load when computing genome-assembly QC metrics — N50/N90, L50/L90, total length, contig count, GC content, longest-contig — from a FASTA produced by any assembler (SPAdes / Megahit / Flye / Canu). Skip when running the assembly itself; assessing alignment quality (use genomics-alignment).",
+      "relative_path": "genomics/genomics-assembly/SKILL.md"
+    },
+    {
+      "name": "genomics-cnv-calling",
+      "description": "Load when calling CNV segments via CBS-style segmentation on a bin-level log2-ratio CSV from exome / WGS coverage — emits per-segment 5-class CN state (`amplification` / `gain` / `neutral` / `loss` / `deep_deletion`), per-chromosome summary, genome-fraction-altered. Skip when working with single-cell / spatial CNV (use spatial-cnv).",
+      "relative_path": "genomics/genomics-cnv-calling/SKILL.md"
+    },
+    {
+      "name": "genomics-epigenomics",
+      "description": "Load when summarising a peak file (BED / narrowPeak) from ATAC-seq / ChIP-seq / CUT&Tag — peak count, width distribution, per-chromosome counts, score statistics. Skip when calling peaks from BAM (run MACS / Genrich externally first); working with single-cell ATAC (use scatac-preprocessing).",
+      "relative_path": "genomics/genomics-epigenomics/SKILL.md"
+    },
+    {
+      "name": "genomics-phasing",
+      "description": "Load when summarising a phased VCF (output of WhatsHap / SHAPEIT5 / Eagle2) — phased fraction of het variants, phase-block N50, PS-field parsing, pipe-delimited genotype detection. Skip when the input is unphased (run a phaser first); calling small variants (use genomics-variant-calling).",
+      "relative_path": "genomics/genomics-phasing/SKILL.md"
+    },
+    {
+      "name": "genomics-qc",
+      "description": "Load when running pre-alignment FASTQ quality control — Phred quality scores, Q20/Q30 rates, GC / N content, read-length distribution, adapter-contamination detection. Skip when working with already-aligned BAMs (use genomics-alignment); peak / variant files are the input (use the relevant downstream skill).",
+      "relative_path": "genomics/genomics-qc/SKILL.md"
+    },
+    {
+      "name": "genomics-sv-detection",
+      "description": "Load when summarising structural variants from an SV VCF (DEL / DUP / INV / TRA) — INFO/SVTYPE-based classification, size classification, per-type counts. Skip when working with small SNVs / indels (use genomics-variant-calling); calling SVs from BAM (run Manta / Delly / Sniffles first).",
+      "relative_path": "genomics/genomics-sv-detection/SKILL.md"
+    },
+    {
+      "name": "genomics-variant-annotation",
+      "description": "Load when summarising functional impact of an annotated variant CSV — per-IMPACT counts (HIGH / MODERATE / LOW / MODIFIER), top consequences, gene-affected count. Skip when input is a raw VCF (convert with `bcftools +split-vep` first); calling raw variants (use genomics-variant-calling); filtering VCFs (use genomics-vcf-operations).",
+      "relative_path": "genomics/genomics-variant-annotation/SKILL.md"
+    },
+    {
+      "name": "genomics-variant-calling",
+      "description": "Load when summarising small variants (SNVs / indels) from a VCF or computing demo-pattern variant statistics (Ti/Tv ratio, per-chromosome distribution, SNP / indel split). Skip when filtering / merging VCFs (use genomics-vcf-operations); calling structural variants (use genomics-sv-detection); adding functional annotations (use genomics-variant-annotation).",
+      "relative_path": "genomics/genomics-variant-calling/SKILL.md"
+    },
+    {
+      "name": "genomics-vcf-operations",
+      "description": "Load when summarising / filtering a VCF — variant classification (SNP / MNP / INS / DEL / COMPLEX), Ti/Tv ratio, QUAL / DP threshold filtering, INFO-field parsing. Skip when calling variants from BAM (run an external caller first); adding functional annotations (use genomics-variant-annotation).",
+      "relative_path": "genomics/genomics-vcf-operations/SKILL.md"
+    },
+    {
+      "name": "literature",
+      "description": "Load when extracting GEO accessions, dataset metadata, and downloadable references from a scientific paper (PDF / URL / DOI / PubMed ID / raw text) for downstream omics analysis. Skip when the dataset is already in hand; the paper names no dataset to fetch.",
+      "relative_path": "literature/SKILL.md"
+    },
+    {
+      "name": "metabolomics-annotation",
+      "description": "Load when matching LC-MS m/z features to an explicit local metabolite reference within a ppm tolerance; bundled HMDB entries are for explicit demonstrations only. Skip pathway ORA (use metabolomics-pathway-enrichment) and spectral matching or online searches (use external SIRIUS / GNPS).",
+      "relative_path": "metabolomics/metabolomics-annotation/SKILL.md"
+    },
+    {
+      "name": "metabolomics-de",
+      "description": "Load when running two-group metabolomics DE (t-test + log2FC + BH-FDR + PCA) on a feature × sample CSV using `--group-a-prefix` / `--group-b-prefix` (default `ctrl` / `treat`). Skip when needing tunable test backends (use metabolomics-statistics); raw spectra.",
+      "relative_path": "metabolomics/metabolomics-de/SKILL.md"
+    },
+    {
+      "name": "metabolomics-normalization",
+      "description": "Load when normalising a feature × sample metabolomics CSV via median, quantile, total (sum), PQN (probabilistic quotient), or log methods — emits a normalised wide-form table. Skip when also imputing (use metabolomics-quantification); raw spectra (use metabolomics-xcms-preprocessing).",
+      "relative_path": "metabolomics/metabolomics-normalization/SKILL.md"
+    },
+    {
+      "name": "metabolomics-pathway-enrichment",
+      "description": "Load when running metabolite-name ORA against an explicit local pathway reference with BH-FDR; bundled pathway sets are for explicit demonstrations only. Skip m/z annotation (use metabolomics-annotation) and topology analysis or online pathway retrieval (use external mummichog / FELLA or database tools).",
+      "relative_path": "metabolomics/metabolomics-pathway-enrichment/SKILL.md"
+    },
+    {
+      "name": "metabolomics-peak-detection",
+      "description": "Load when running per-sample peak picking on a feature × intensity table via `scipy.signal.find_peaks` — emits per-(sample, feature) detected peaks with prominence and width. Skip when working with mz / RT raw scans (use metabolomics-xcms-preprocessing); only normalising / quantifying (use metabolomics-quantification).",
+      "relative_path": "metabolomics/metabolomics-peak-detection/SKILL.md"
+    },
+    {
+      "name": "metabolomics-quantification",
+      "description": "Load when imputing missing values (min / median / KNN) and normalising (TIC / median / log) a feature × sample metabolomics CSV. Skip when only normalisation is needed (use metabolomics-normalization); the input is raw spectra (use metabolomics-xcms-preprocessing).",
+      "relative_path": "metabolomics/metabolomics-quantification/SKILL.md"
+    },
+    {
+      "name": "metabolomics-statistics",
+      "description": "Load when running univariate two-group testing (t-test / Wilcoxon / ANOVA / Kruskal-Wallis) on a feature × sample metabolomics CSV with `--group1-prefix` / `--group2-prefix` column matching, BH-FDR adjusted. Skip when working with raw spectra (use metabolomics-xcms-preprocessing); two-group DE with default `ctrl` / `treat` prefixes (use metabolomics-de).",
+      "relative_path": "metabolomics/metabolomics-statistics/SKILL.md"
+    },
+    {
+      "name": "metabolomics-xcms-preprocessing",
+      "description": "Load when exercising the CLI and replay pipeline with a synthetic LC-MS peak table. Skip real mzML preprocessing (run XCMS externally); table peak picking belongs to metabolomics-peak-detection.",
+      "relative_path": "metabolomics/metabolomics-xcms-preprocessing/SKILL.md"
+    },
+    {
+      "name": "proteomics-data-import",
+      "description": "Load when ingesting a MaxQuant `proteinGroups.txt`, FragPipe `combined_protein.tsv`, DIA-NN report, or generic CSV / TSV protein-quantification table — normalises columns to a standard schema, emits `tables/proteins.csv`. Skip when raw spectra are the input (run the search engine first); the file is already OmicsClaw schema.",
+      "relative_path": "proteomics/proteomics-data-import/SKILL.md"
+    },
+    {
+      "name": "proteomics-de",
+      "description": "Load when computing two-group differential protein abundance (group2 vs group1, log2FC + p-value + BH-adjusted FDR) via Welch t-test, equal-variance t-test, or Mann-Whitney on a wide protein × sample CSV. Skip when you need multi-condition DE (run pairwise contrasts manually); label-based TMT linear-mixed models.",
+      "relative_path": "proteomics/proteomics-de/SKILL.md"
+    },
+    {
+      "name": "proteomics-enrichment",
+      "description": "Load for Fisher over-representation analysis of protein identifiers against caller-supplied pathways. Skip rank-based GSEA (use bulkrna-enrichment) or protein differential testing (use proteomics-de).",
+      "relative_path": "proteomics/proteomics-enrichment/SKILL.md"
+    },
+    {
+      "name": "proteomics-identification",
+      "description": "Load when summarising peptide identifications (PSM count, unique peptide count, distinct protein count, score / charge distributions) from a peptide-level CSV produced by MaxQuant / FragPipe / DIA-NN. Skip when raw spectra are the input (run a search engine first); working with protein-quantification tables (use proteomics-ms-qc).",
+      "relative_path": "proteomics/proteomics-identification/SKILL.md"
+    },
+    {
+      "name": "proteomics-ms-qc",
+      "description": "Load when computing protein-table QC — proteins × samples count, missing-value rate, intensity CV (median + mean) — from a MaxQuant / FragPipe / DIA-NN protein-quantification CSV. Skip when raw mzML / RAW spectra are the input (run a search engine first); peptide-level QC is needed (use proteomics-identification).",
+      "relative_path": "proteomics/proteomics-ms-qc/SKILL.md"
+    },
+    {
+      "name": "proteomics-ptm",
+      "description": "Load when summarising PTM sites (phosphorylation, acetylation, ubiquitination, etc.) from a per-site CSV — site-class assignment (Olsen et al. Class I/II/III by `localization_probability`), per-PTM-type counts, amino-acid distribution, sites-per-protein. Skip when raw spectra are the input; you only need protein-level abundance (use proteomics-quantification).",
+      "relative_path": "proteomics/proteomics-ptm/SKILL.md"
+    },
+    {
+      "name": "proteomics-quantification",
+      "description": "Load when computing per-protein abundance from a peptide / PSM table via LFQ (intensity summation), iBAQ (intensity / tryptic peptide count), or spectral counting (PSMs per protein). Skip when the input is already protein-level (use proteomics-ms-qc); label-based TMT / iTRAQ workflows (search upstream first).",
+      "relative_path": "proteomics/proteomics-quantification/SKILL.md"
+    },
+    {
+      "name": "proteomics-structural",
+      "description": "Load when summarising cross-linking MS (XL-MS) results — intra/inter-protein link split, optional FDR filtering, distance-constraint validation against a per-crosslinker (DSS / BS3 / EDC / DSSO / DSBU) max distance. Skip when raw spectra are the input (run XlinkX / pLink / xiSEARCH first); no XL-MS experiment was performed.",
+      "relative_path": "proteomics/proteomics-structural/SKILL.md"
+    },
+    {
+      "name": "scatac-preprocessing",
+      "description": "Load when preprocessing a single-cell ATAC peak × cell AnnData via Signac-style TF-IDF + LSI + Leiden, producing a clustered UMAP-ready object. Skip when input is fragments; BAM (peak calling not implemented here); scRNA preprocessing (use sc-preprocessing).",
+      "relative_path": "singlecell/scatac/scatac-preprocessing/SKILL.md"
+    },
+    {
+      "name": "sc-ambient-removal",
+      "description": "Load when removing ambient RNA contamination from droplet-based scRNA-seq using a simple subtraction path, CellBender, or SoupX. Skip when the contamination is multiplet barcodes (use sc-doublet-detection); before counts exist (use sc-count).",
+      "relative_path": "singlecell/scrna/sc-ambient-removal/SKILL.md"
+    },
+    {
+      "name": "sc-batch-integration",
+      "description": "Load when integrating multi-sample scRNA-seq with Harmony, scVI, scANVI, BBKNN, Scanorama, SIMBA, or supported R-backed methods to remove batch effects. Skip when the data is one sample (no batch effect to integrate); upstream merging only (use sc-multi-count).",
+      "relative_path": "singlecell/scrna/sc-batch-integration/SKILL.md"
+    },
+    {
+      "name": "sc-cell-annotation",
+      "description": "Load when assigning cell-type labels to a clustered scRNA AnnData via marker dictionaries, CellTypist, PopV, KNNPredict, SingleR, scmap, SCSA, or a manual cluster-to-label map. Skip when ranking marker genes per cluster (use sc-markers); condition-vs-control DE (use sc-de).",
+      "relative_path": "singlecell/scrna/sc-cell-annotation/SKILL.md"
+    },
+    {
+      "name": "sc-cell-communication",
+      "description": "Load when computing cell-cell ligand-receptor communication on an annotated scRNA AnnData via builtin scorer, LIANA, CellPhoneDB, CellChat (R), or NicheNet (R). Skip when assigning cell-type labels (use sc-cell-annotation); transcription factor → target regulatory networks (use sc-grn).",
+      "relative_path": "singlecell/scrna/sc-cell-communication/SKILL.md"
+    },
+    {
+      "name": "sc-clustering",
+      "description": "Load when building the neighbour graph, embedding (UMAP/t-SNE/diffmap/PHATE), and clustering (Leiden/Louvain) on a normalised single-cell AnnData. Skip when QC/normalisation/HVG/PCA have not run yet (use sc-preprocessing); marker ranking after clustering (use sc-markers).",
+      "relative_path": "singlecell/scrna/sc-clustering/SKILL.md"
+    },
+    {
+      "name": "sc-count",
+      "description": "Load when turning scRNA FASTQ (or existing CellRanger/STARsolo/SimpleAF/kb-python output) into a downstream-ready AnnData. Skip when reads are already counted into AnnData (use sc-standardize-input); raw quality assessment only (use sc-fastq-qc).",
+      "relative_path": "singlecell/scrna/sc-count/SKILL.md"
+    },
+    {
+      "name": "sc-cytotrace",
+      "description": "Load when computing per-cell differentiation potency / stemness scores from gene-expression complexity on a scRNA AnnData via the CytoTRACE-simple method. Skip when ordering cells along a trajectory (use sc-pseudotime); marker-based cell-type labelling (use sc-cell-annotation).",
+      "relative_path": "singlecell/scrna/sc-cytotrace/SKILL.md"
+    },
+    {
+      "name": "sc-de",
+      "description": "Load when finding marker genes per cluster or comparing condition expression in single-cell RNA-seq. Skip when the data is bulk (use bulkrna-de); spatial (use spatial-de); cluster-only markers without conditions (use sc-markers).",
+      "relative_path": "singlecell/scrna/sc-de/SKILL.md"
+    },
+    {
+      "name": "sc-differential-abundance",
+      "description": "Load when testing whether cell-type / cluster proportions or neighbourhood densities differ between conditions in a multi-sample scRNA AnnData via Milo, scCODA, simple proportion screen, or R Monte-Carlo permutation. Skip when ranking marker genes (use sc-markers); per-cell DE (use sc-de).",
+      "relative_path": "singlecell/scrna/sc-differential-abundance/SKILL.md"
+    },
+    {
+      "name": "sc-doublet-detection",
+      "description": "Load when annotating putative doublets in single-cell RNA-seq using Scrublet, DoubletDetection, DoubletFinder, scDblFinder, or scds. Skip when ambient RNA is the contamination problem (use sc-ambient-removal); before counts exist (use sc-fastq-qc).",
+      "relative_path": "singlecell/scrna/sc-doublet-detection/SKILL.md"
+    },
+    {
+      "name": "sc-drug-response",
+      "description": "Load when scoring drug sensitivity per cluster on an annotated scRNA AnnData via simple-correlation against drug-target signatures or via CaDRReS-Sc pretrained models (GDSC / PRISM). Skip when the AnnData has no cluster labels yet (use sc-clustering); predicting genetic-perturbation effects (use sc-in-silico-perturbation).",
+      "relative_path": "singlecell/scrna/sc-drug-response/SKILL.md"
+    },
+    {
+      "name": "sc-enrichment",
+      "description": "Load when running bulk-style pathway enrichment (ORA / GSEA / GSEA-R / GSVA-R) on a per-group ranked DE / marker list against a gene-set library. Skip when computing per-cell pathway scores in-place (use sc-pathway-scoring); de-novo gene-program discovery (use sc-gene-programs).",
+      "relative_path": "singlecell/scrna/sc-enrichment/SKILL.md"
+    },
+    {
+      "name": "sc-fastq-qc",
+      "description": "Load when checking raw single-cell FASTQ read quality (Phred / GC / adapter / length) before counting. Skip when reads are already counted (use sc-qc); bulk FASTQ (use bulkrna-read-qc).",
+      "relative_path": "singlecell/scrna/sc-fastq-qc/SKILL.md"
+    },
+    {
+      "name": "sc-filter",
+      "description": "Load when removing low-quality cells and lowly-detected genes from a single-cell AnnData using QC-derived thresholds or tissue presets. Skip when the full normalize→HVG→PCA→cluster pipeline (use sc-preprocessing); reads are still raw FASTQ (use sc-fastq-qc).",
+      "relative_path": "singlecell/scrna/sc-filter/SKILL.md"
+    },
+    {
+      "name": "sc-gene-programs",
+      "description": "Load when extracting gene programs (NMF / cNMF factorisation) and per-cell program usage scores from a non-negative scRNA AnnData. Skip when ranking marker genes per cluster (use sc-markers); inferring TF → target regulons (use sc-grn).",
+      "relative_path": "singlecell/scrna/sc-gene-programs/SKILL.md"
+    },
+    {
+      "name": "sc-grn",
+      "description": "Load when inferring TF → target gene regulatory networks on a normalised scRNA AnnData via pySCENIC (GRNBoost2 + cisTarget + AUCell) or correlation-based GRN fallback (when arboreto is unavailable, in --demo, or with --allow-simplified-grn). Skip when computing ligand-receptor cell-cell signalling (use sc-cell-communication); predicting genetic-KO effects (use sc-in-silico-perturbation).",
+      "relative_path": "singlecell/scrna/sc-grn/SKILL.md"
+    },
+    {
+      "name": "sc-in-silico-perturbation",
+      "description": "Load when predicting in-silico gene knockout effects on a normalised scRNA AnnData via GRN-based propagation (Python) or scTenifoldKnk (R). Skip when you have a real Perturb-seq / CRISPR screen (use sc-perturb); predicting drug sensitivity (use sc-drug-response).",
+      "relative_path": "singlecell/scrna/sc-in-silico-perturbation/SKILL.md"
+    },
+    {
+      "name": "sc-markers",
+      "description": "Load when ranking cluster-level marker genes from a clustered single-cell AnnData via Scanpy Wilcoxon / t-test / logreg or COSG specificity. Skip when comparing condition-vs-control with replicates (use sc-de); assigning cell-type labels (use sc-cell-annotation).",
+      "relative_path": "singlecell/scrna/sc-markers/SKILL.md"
+    },
+    {
+      "name": "sc-metacell",
+      "description": "Load when aggregating single cells into metacells (sample-aware coarse-grained pseudo-cells) on a normalised scRNA AnnData via SEACells or KMeans on a low-D embedding. Skip when ranking marker genes per cluster (use sc-markers); trajectory pseudotime ordering (use sc-pseudotime).",
+      "relative_path": "singlecell/scrna/sc-metacell/SKILL.md"
+    },
+    {
+      "name": "sc-multi-count",
+      "description": "Load when merging multiple single-sample scRNA-seq count matrices (one per sample-from-sc-count) into a single downstream-ready AnnData with sample labels. Skip when input is one already-merged AnnData (use sc-standardize-input); FASTQ→counts on each sample (use sc-count).",
+      "relative_path": "singlecell/scrna/sc-multi-count/SKILL.md"
+    },
+    {
+      "name": "sc-pathway-scoring",
+      "description": "Load when computing per-cell pathway / gene-set scores on a normalised scRNA AnnData via AUCell (R or Python) or Scanpy score_genes. Skip when running condition-vs-control bulk-style enrichment on top of a DE table (use sc-enrichment); de-novo gene-program discovery (use sc-gene-programs).",
+      "relative_path": "singlecell/scrna/sc-pathway-scoring/SKILL.md"
+    },
+    {
+      "name": "sc-perturb-prep",
+      "description": "Load when attaching cell-barcode → sgRNA assignments from a mapping TSV/CSV onto a Perturb-seq expression AnnData, producing standardised perturbation / sgRNA / target-gene obs columns. Skip when the AnnData already has perturbation labels (use sc-perturb); raw guide-calling from FASTQ (use upstream demuxlet / cellranger guide pipelines).",
+      "relative_path": "singlecell/scrna/sc-perturb-prep/SKILL.md"
+    },
+    {
+      "name": "sc-perturb",
+      "description": "Load when classifying perturbed vs non-perturbed cells in a Perturb-seq / CRISPR-screen scRNA AnnData via the pertpy Mixscape workflow. Skip when guide labels are not yet attached to the expression object (use sc-perturb-prep); in-silico KO predictions on unperturbed data (use sc-in-silico-perturbation).",
+      "relative_path": "singlecell/scrna/sc-perturb/SKILL.md"
+    },
+    {
+      "name": "sc-preprocessing",
+      "description": "Load when normalising QC'd scRNA into a PCA-ready AnnData via scanpy / Seurat / SCTransform / Pearson residuals. Skip when QC thresholds are still undecided (use sc-qc); batch correction across samples (use sc-batch-integration).",
+      "relative_path": "singlecell/scrna/sc-preprocessing/SKILL.md"
+    },
+    {
+      "name": "sc-pseudotime",
+      "description": "Load when ordering cells along a developmental trajectory in a normalised scRNA AnnData via DPT, Palantir, VIA, CellRank, Slingshot (R), or Monocle3 (R). Skip when ranking marker genes per cluster (use sc-markers); RNA velocity vector fields (use sc-velocity).",
+      "relative_path": "singlecell/scrna/sc-pseudotime/SKILL.md"
+    },
+    {
+      "name": "sc-qc",
+      "description": "Load when computing per-cell QC metrics (n_genes, total counts, mt%, ribo%) on a single-cell AnnData before filtering. Skip when reads are still raw FASTQ (use sc-fastq-qc); you want to filter cells now (use sc-filter).",
+      "relative_path": "singlecell/scrna/sc-qc/SKILL.md"
+    },
+    {
+      "name": "sc-standardize-input",
+      "description": "Load when an external single-cell h5ad/h5/loom/mtx needs to be canonicalised onto the OmicsClaw AnnData contract before downstream scRNA skills run. Skip when data already came from sc-count (already canonical); bulk RNA-seq (use bulkrna-qc); spatial (use spatial-preprocess).",
+      "relative_path": "singlecell/scrna/sc-standardize-input/SKILL.md"
+    },
+    {
+      "name": "sc-velocity-prep",
+      "description": "Load when generating spliced / unspliced layers from Cell Ranger BAM, FASTQ, STARsolo output, or velocyto loom — the prerequisite for sc-velocity. Skip when AnnData already has spliced+unspliced layers (use sc-velocity); any non-velocity preprocessing (use sc-preprocessing).",
+      "relative_path": "singlecell/scrna/sc-velocity-prep/SKILL.md"
+    },
+    {
+      "name": "sc-velocity",
+      "description": "Load when computing RNA velocity vectors on a scRNA AnnData with spliced / unspliced layers via scVelo (stochastic / dynamical / steady-state); dynamical mode additionally exports latent time. Skip when input lacks spliced+unspliced layers (use sc-velocity-prep); trajectory pseudotime ordering (use sc-pseudotime).",
+      "relative_path": "singlecell/scrna/sc-velocity/SKILL.md"
+    },
+    {
+      "name": "spatial-annotate",
+      "description": "Load when assigning per-spot cell-type labels on a spatial AnnData via marker-gene scoring or scRNA-reference mapping (Tangram / scANVI / CellAssign). Skip when computing spot-level cell-type proportions for multi-cell-per-spot platforms (use spatial-deconv); tissue-domain detection (use spatial-domains).",
+      "relative_path": "spatial/spatial-annotate/SKILL.md"
+    },
+    {
+      "name": "spatial-cnv",
+      "description": "Load when inferring copy-number variation per spot on a preprocessed spatial AnnData with chromosome-annotated genes via infercnvpy (default — log-ratio sliding-window) or Numbat (R, allele-aware clone deconvolution). Skip when `var[\"chromosome\"]` / `var[\"start\"]` / `var[\"end\"]` gene-coord metadata is missing; no normal-reference subset can be defined.",
+      "relative_path": "spatial/spatial-cnv/SKILL.md"
+    },
+    {
+      "name": "spatial-communication",
+      "description": "Load when computing ligand-receptor communication on labelled spatial AnnData with LIANA, CellPhoneDB, FastCCC or CellChat. Skip unlabelled data (use spatial-annotate) and non-spatial scRNA analysis (use sc-cell-communication).",
+      "relative_path": "spatial/spatial-communication/SKILL.md"
+    },
+    {
+      "name": "spatial-condition",
+      "description": "Load when comparing conditions on spatial AnnData using biological-sample pseudobulk PyDESeq2 or Wilcoxon, with sample, condition and cluster labels. Skip one-condition per-cluster DE (use spatial-de) and experiments without independent replicates.",
+      "relative_path": "spatial/spatial-condition/SKILL.md"
+    },
+    {
+      "name": "spatial-de",
+      "description": "Load when ranking spatial cluster markers or comparing two spatial groups. Skip when the data is single-cell (use sc-de), bulk (use bulkrna-de), or for spatially variable expression (use spatial-genes).",
+      "relative_path": "spatial/spatial-de/SKILL.md"
+    },
+    {
+      "name": "spatial-deconv",
+      "description": "Load when deconvolving spot-level cell-type proportions on a Visium-style spatial AnnData using a labelled scRNA reference (FlashDeconv / Cell2location / RCTD / DestVI / Tangram / others). Skip when each spot is a single cell already (Xenium / MERFISH) (use spatial-annotate); tissue-domain detection (use spatial-domains).",
+      "relative_path": "spatial/spatial-deconv/SKILL.md"
+    },
+    {
+      "name": "spatial-domains",
+      "description": "Load when detecting tissue domains / niches on a preprocessed spatial AnnData via Leiden / Louvain (spatial-weighted) or graph-neural backends (SpaGCN / STAGATE / GraphST / BANKSY / CellCharter). Skip when ranking spatially variable genes (use spatial-genes); spot-level cell-type annotation (use spatial-annotate).",
+      "relative_path": "spatial/spatial-domains/SKILL.md"
+    },
+    {
+      "name": "spatial-enrichment",
+      "description": "Load when running pathway or gene-set enrichment per cluster on spatial AnnData with over-representation, preranked GSEA, or ssGSEA group-mean scores. Skip when ranking spatially variable genes (use spatial-genes) or comparing conditions (use spatial-condition).",
+      "relative_path": "spatial/spatial-enrichment/SKILL.md"
+    },
+    {
+      "name": "spatial-genes",
+      "description": "Load when ranking spatially variable genes with Moran's I, SpatialDE, SPARK-X, or FlashS. Skip when detecting tissue domains (use spatial-domains) or differential expression between groups (use spatial-de).",
+      "relative_path": "spatial/spatial-genes/SKILL.md"
+    },
+    {
+      "name": "spatial-integrate",
+      "description": "Load when removing batch effects from multi-batch spatial AnnData with PCA using Harmony, BBKNN, or Scanorama. Skip physical coordinate alignment (use spatial-register) and single-batch data (use spatial-domains).",
+      "relative_path": "spatial/spatial-integrate/SKILL.md"
+    },
+    {
+      "name": "spatial-microenvironment-subset",
+      "description": "Load when extracting a niche / microenvironment subset around a center cell-type by spatial radius from a labelled spatial AnnData, producing a smaller AnnData of centers + their within-radius neighbours. Skip when running global tissue-domain detection (use spatial-domains); cross-condition comparison (use spatial-condition).",
+      "relative_path": "spatial/spatial-microenvironment-subset/SKILL.md"
+    },
+    {
+      "name": "spatial-preprocess",
+      "description": "Load when running the foundational spatial transcriptomics QC + filtering + normalisation + HVG + PCA + neighbour-graph + Leiden pipeline on a Visium / Xenium / generic spatial AnnData. Skip when raw FASTQs need converting first (use spatial-raw-processing); tissue-domain detection on already-preprocessed data (use spatial-domains).",
+      "relative_path": "spatial/spatial-preprocess/SKILL.md"
+    },
+    {
+      "name": "spatial-raw-processing",
+      "description": "Load when converting spatial transcriptomics raw FASTQ pairs through ST-Pipeline into a `raw_counts.h5ad` ready for spatial-preprocess. Skip when input is already a count-matrix AnnData (use spatial-preprocess); non-spatial bulk / scRNA FASTQ (use bulkrna-read-qc).",
+      "relative_path": "spatial/spatial-raw-processing/SKILL.md"
+    },
+    {
+      "name": "spatial-register",
+      "description": "Load when aligning multiple spatial slices into a common coordinate frame with PASTE or STalign. Skip single-slice data; for expression-space batch correction use spatial-integrate.",
+      "relative_path": "spatial/spatial-register/SKILL.md"
+    },
+    {
+      "name": "spatial-statistics",
+      "description": "Load when running spatial autocorrelation / hotspot / co-occurrence / neighbourhood-enrichment / Ripley K stats on a clustered spatial AnnData via squidpy. Skip when ranking spatially variable genes (use spatial-genes); tissue domain detection (use spatial-domains).",
+      "relative_path": "spatial/spatial-statistics/SKILL.md"
+    },
+    {
+      "name": "spatial-trajectory",
+      "description": "Load when inferring pseudotime / lineage trajectories on a preprocessed spatial AnnData via DPT (default — diffusion pseudotime), CellRank (terminal-state + fate-probability), or Palantir (waypoint branch probabilities). Skip when the data has spliced/unspliced layers and you want velocity-driven dynamics (use spatial-velocity); non-spatial scRNA pseudotime (use sc-pseudotime).",
+      "relative_path": "spatial/spatial-trajectory/SKILL.md"
+    },
+    {
+      "name": "spatial-velocity",
+      "description": "Load when estimating RNA velocity on a spatial AnnData with `layers[\"spliced\"]` + `layers[\"unspliced\"]` via scVelo (stochastic / deterministic / dynamical) or veloVI (deep generative). Skip when input lacks the spliced/unspliced layers (must be quantified upstream by velocyto / kb-python / STARsolo); non-spatial scRNA velocity (use sc-velocity).",
+      "relative_path": "spatial/spatial-velocity/SKILL.md"
+    }
+  ],
+  "api_paths": [
+    "skills/singlecell/scatac/scatac-preprocessing/_api.py",
+    "skills/singlecell/scrna/sc-gene-programs/_api.py",
+    "skills/singlecell/scrna/sc-pathway-scoring/_api.py",
+    "skills/singlecell/scrna/sc-velocity/_api.py",
+    "skills/singlecell/scrna/sc-markers/_api.py",
+    "skills/singlecell/scrna/sc-ambient-removal/_api.py",
+    "skills/singlecell/scrna/sc-grn/_api.py",
+    "skills/singlecell/scrna/sc-batch-integration/_api.py",
+    "skills/singlecell/scrna/sc-filter/_api.py",
+    "skills/singlecell/scrna/sc-cell-annotation/_api.py",
+    "skills/singlecell/scrna/sc-differential-abundance/_api.py",
+    "skills/singlecell/scrna/sc-multi-count/_api.py",
+    "skills/singlecell/scrna/sc-doublet-detection/_api.py",
+    "skills/singlecell/scrna/sc-preprocessing/_api.py",
+    "skills/singlecell/scrna/sc-in-silico-perturbation/_api.py",
+    "skills/singlecell/scrna/sc-standardize-input/_api.py",
+    "skills/singlecell/scrna/sc-perturb/_api.py",
+    "skills/singlecell/scrna/sc-metacell/_api.py",
+    "skills/singlecell/scrna/sc-de/_api.py",
+    "skills/singlecell/scrna/sc-perturb-prep/_api.py",
+    "skills/singlecell/scrna/sc-enrichment/_api.py",
+    "skills/singlecell/scrna/sc-cytotrace/_api.py",
+    "skills/singlecell/scrna/sc-qc/_api.py",
+    "skills/singlecell/scrna/sc-cell-communication/_api.py",
+    "skills/singlecell/scrna/sc-drug-response/_api.py",
+    "skills/singlecell/scrna/sc-clustering/_api.py",
+    "skills/singlecell/scrna/sc-pseudotime/_api.py",
+    "skills/proteomics/proteomics-de/_api.py",
+    "skills/proteomics/proteomics-structural/_api.py",
+    "skills/proteomics/proteomics-identification/_api.py",
+    "skills/proteomics/proteomics-ms-qc/_api.py",
+    "skills/proteomics/proteomics-enrichment/_api.py",
+    "skills/proteomics/proteomics-data-import/_api.py",
+    "skills/proteomics/proteomics-ptm/_api.py",
+    "skills/proteomics/proteomics-quantification/_api.py",
+    "skills/metabolomics/metabolomics-de/_api.py",
+    "skills/metabolomics/metabolomics-peak-detection/_api.py",
+    "skills/metabolomics/metabolomics-statistics/_api.py",
+    "skills/metabolomics/metabolomics-pathway-enrichment/_api.py",
+    "skills/metabolomics/metabolomics-quantification/_api.py",
+    "skills/metabolomics/metabolomics-annotation/_api.py",
+    "skills/metabolomics/metabolomics-normalization/_api.py",
+    "skills/genomics/genomics-alignment/_api.py",
+    "skills/genomics/genomics-cnv-calling/_api.py",
+    "skills/genomics/genomics-phasing/_api.py",
+    "skills/genomics/genomics-assembly/_api.py",
+    "skills/genomics/genomics-epigenomics/_api.py",
+    "skills/genomics/genomics-variant-annotation/_api.py",
+    "skills/genomics/genomics-variant-calling/_api.py",
+    "skills/genomics/genomics-qc/_api.py",
+    "skills/genomics/genomics-sv-detection/_api.py",
+    "skills/genomics/genomics-vcf-operations/_api.py",
+    "skills/literature/_api.py",
+    "skills/bulkrna/bulkrna-qc/_api.py",
+    "skills/bulkrna/bulkrna-read-qc/_api.py",
+    "skills/bulkrna/bulkrna-trajblend/_api.py",
+    "skills/bulkrna/bulkrna-ppi-network/_api.py",
+    "skills/bulkrna/bulkrna-splicing/_api.py",
+    "skills/bulkrna/bulkrna-read-alignment/_api.py",
+    "skills/bulkrna/bulkrna-survival/_api.py",
+    "skills/bulkrna/bulkrna-de/_api.py",
+    "skills/bulkrna/bulkrna-enrichment/_api.py",
+    "skills/bulkrna/bulkrna-deconvolution/_api.py",
+    "skills/bulkrna/bulkrna-batch-correction/_api.py",
+    "skills/bulkrna/bulkrna-coexpression/_api.py",
+    "skills/bulkrna/bulkrna-geneid-mapping/_api.py",
+    "skills/bulkrna/run-derived/bulkrna-cosinor-rhythm/_api.py",
+    "skills/spatial/spatial-register/_api.py",
+    "skills/spatial/spatial-integrate/_api.py",
+    "skills/spatial/spatial-trajectory/_api.py",
+    "skills/spatial/spatial-annotate/_api.py",
+    "skills/spatial/spatial-cnv/_api.py",
+    "skills/spatial/spatial-microenvironment-subset/_api.py",
+    "skills/spatial/spatial-velocity/_api.py",
+    "skills/spatial/spatial-communication/_api.py",
+    "skills/spatial/spatial-statistics/_api.py",
+    "skills/spatial/spatial-preprocess/_api.py",
+    "skills/spatial/spatial-deconv/_api.py",
+    "skills/spatial/spatial-genes/_api.py",
+    "skills/spatial/spatial-enrichment/_api.py",
+    "skills/spatial/spatial-condition/_api.py",
+    "skills/spatial/spatial-de/_api.py",
+    "skills/spatial/spatial-domains/_api.py"
+  ],
+  "files": {
+    "omicsclaw/__init__.py": "b3662f6c6b91e6bb0e58ac392ef3f47dde2a4af018bbbbef6e6cb3a8ccc6880f",
+    "omicsclaw/version.py": "ee0d55265d4338da9c91f575bf3126c816cdd9ff68d90617fbfa9e39e70df8e5",
+    "omicsclaw/__main__.py": "aa6cf2d0af31e8b5b3e059ff8060cef7f90644a01787cb8bac8258bc266ffb82",
+    "omicsclaw/attachments/models.py": "18d55bd3e93144ff091f429167a4f2142570da939cec9de5e9e4e71d3ad8e9d5",
+    "omicsclaw/attachments/__init__.py": "fc7df154f0d4b744c88a831891f36d2d51550643a7fb3138500b310b73080e56",
+    "omicsclaw/attachments/rendering.py": "a775f55dbf8021a2576aa5ddc653447dc0b077bd6b1c7f32dd32e67abc28ad75",
+    "omicsclaw/attachments/schema.py": "31bd9f449f28b784e21636db2718a9fd908eac5d9aa9472513c5b6ff63891515",
+    "omicsclaw/attachments/store.py": "3a6b28e0f9f4794695b8efef9b088f17f3fd8de4cd66411224f2f02c79aa8d32",
+    "omicsclaw/hooks/chain.py": "c53cc6a68b0f81b34c563df902e695e8dee7eadb9ce07047e540ed8f452c17bc",
+    "omicsclaw/hooks/__init__.py": "0e3768b35655dc643113c00263333e55c4fd06f9906b2a8b25276599cfbc5156",
+    "omicsclaw/hooks/base.py": "c1e26e395f69dfb3fdaae9267c0b312a17788d5e30acec43f4daeb53ba8992fc",
+    "omicsclaw/hooks/audit.py": "472f4c7e73a3dc1904aa65313081e3c080fc496f0cbbd5a165acf6ef7602e7a6",
+    "omicsclaw/observability/otel.py": "206cc8a6d933aa527462abbe498b8198e7216ccb0d02ed9bef8b91427c980546",
+    "omicsclaw/observability/telemetry.py": "bf1b38da66e39754377b2d2d80368f7d381ef882734f7031cea88c4ac6f86793",
+    "omicsclaw/observability/contract.py": "10fca04f9e998402db0f8f5d7347ecc9ce60fa19faf35d019a3e9ab1b918bfcb",
+    "omicsclaw/observability/__init__.py": "6b7881ee3729a51951e299213da8498737a121479da352c7fedc56e9d619dd8b",
+    "omicsclaw/observability/console.py": "f5b32a2516b84a46e3551088c57c9f03051e9a61966a424fac160a27e6080fb0",
+    "omicsclaw/observability/hook.py": "df5218a01980aac3bd9b82dd1d6e15d78cde07bb4c22918106fe2501ef508cfe",
+    "omicsclaw/observability/provider.py": "130c4b18ce2444dcd6f149767008bdef894fe0bbe140e5783de4ae7b859972bd",
+    "omicsclaw/observability/serialize.py": "508b956e6fc114f2e774be287a691e85b07f9345995c8089bbac78acc562c4ef",
+    "omicsclaw/observability/config.py": "798a782f22a1c8ca5207866121a726b37b12764f2ede272dd37ca52caa2e3956",
+    "omicsclaw/observability/attributes.py": "9d21e01d2bd0336db6f1b260cef0a22eb849b62292f2199fab0b860aed069bbf",
+    "omicsclaw/observability/scope.py": "399701044c5a0f2020bf473a6c31b12ae471cd894d0b0ff57613d2f989c9b008",
+    "omicsclaw/permission/rules.py": "643d60373ee0985e601f172dd6a53479f3006b4369fa60fe9ee8d2be3cd15275",
+    "omicsclaw/permission/__init__.py": "7b48d5ffdfebcdf4dd585721db8e3982dc30c52532d5eba0b434a3c2e1f92bb5",
+    "omicsclaw/permission/gate.py": "0a5501f4182f14fde34da946a85712d30339e4e321eb9439244dd0d066c10290",
+    "omicsclaw/permission/danger.py": "f61970d907cb395b1f3bc48884e2a2edbbf4e7b64f9c7d5c58f3285a7d685bb4",
+    "omicsclaw/permission/modes.py": "1438f086b0611432da5f1208944d03978449d44aa2ee470f07e741b490211040",
+    "omicsclaw/context/progressive.py": "fb3406c3abdd4f039400a7355645530d13b7f2fa86244b9799ce82be4522346c",
+    "omicsclaw/context/sections.py": "9f3e743ac6bca3a3e037c6ec9342ac4ff3438bdefacf0c2ca07a6f8ff5a2c657",
+    "omicsclaw/context/compaction.py": "d9119c473183a9059fcf77dcfb295317338772fa5c5f425ef515f213c1f7d471",
+    "omicsclaw/context/__init__.py": "68c8db568de3937b4a3837e26bbacf35568a728faff7f24ead9ffc0bf988921c",
+    "omicsclaw/context/offload.py": "12a725f58e52b69a06b4c0f63a66f3959d00134dfd74e110f7b3db1c7be7fe89",
+    "omicsclaw/context/budget.py": "b1b32b0adf784cf98867fd877f009c78046b4766f784320f5a658d3a70b0e06c",
+    "omicsclaw/context/tokens.py": "c10640fb126c3ce5a263967165cb62b90652330ce98e017a87149e71e68ef183",
+    "omicsclaw/context/transcript.py": "91b9cfb2504cf6294a451e454eede642b6e2e93b7acc7f466403a7ec69c2e1e2",
+    "omicsclaw/context/summary.py": "3f9af1ecba0171819f75088b92f0df064d9349c1432dd2c3d39a9c1ea810bce5",
+    "omicsclaw/context/prompt.py": "bb4616cf3b84d5144e8900b3a86533688e2fd76a39f80d409dcadb72e3b5d0a6",
+    "omicsclaw/schema/message.py": "f359706a6507079e2dd7c626c7e6d9938eb5879e1cece9ba44ec909026d1ff66",
+    "omicsclaw/schema/__init__.py": "c1896b2f3ec100dc77bf50a9cfc3fbac912bbff2c65a74528df8bfb352401c2d",
+    "omicsclaw/schema/stream.py": "70a6470e52b9b03c9d9aefd656db73a42af22be55a80f2f7474f48048758a9c7",
+    "omicsclaw/engine/executor.py": "6ed8c93ee8e203a50fcd7e9cc6ed7f62058139b3e2d57a5208d7a2a564773b3b",
+    "omicsclaw/engine/retry.py": "6a0f82099afba9eae0ef21633d0eacb24935ffdc9e4d227d55571cd3a50ac6e4",
+    "omicsclaw/engine/__init__.py": "5e6308a54f263efae4b6d801b19fe4cd29b809d8961f3abff83d483c008c46e1",
+    "omicsclaw/engine/types.py": "8411483a74b62b0c249532902841c7653d05843fc7e13944e69ec6e712d27a45",
+    "omicsclaw/engine/config.py": "df6fdfc64e293eee0de6749a421c7b9e69eaebb54a15bd76bb406dec91643baa",
+    "omicsclaw/engine/prompt.py": "9168122d155b89127a6e441697d533d1863510e34579fa02bda47aaf8b429878",
+    "omicsclaw/engine/augmentor.py": "901a9900364ff50d20d883fe0474e01ac32d71121e4ac6a1caed6d94f0f2423f",
+    "omicsclaw/engine/conversation.py": "752c03eb7405b02677bd63d4d5ad9018d1ff1e93737405c9492f2b76f2d7257b",
+    "omicsclaw/engine/compactor.py": "48868a9bca69ecdbbee2274ae35d83c4936cab3077128f453c3b9973e40a3b03",
+    "omicsclaw/engine/loop.py": "8d3cac14c87bc83435cb1458e798157f633a78d4843a56f2f5c9ad57dc6daa19",
+    "omicsclaw/memory/database.py": "3aef0f59ca414882a46905e289a8d4a8ce7c9b779f54a60b6ef1476f97c0d8a3",
+    "omicsclaw/memory/record.py": "809af9f04d4aeb474977c26d481b9e8809eb3060a92a2085be09932c04886a8f",
+    "omicsclaw/memory/sessions.py": "47b9e25b21e5ac331592d1a356e7a4d85bd85722c0e441ae06d18933318a6b23",
+    "omicsclaw/memory/extractor.py": "275e0cae182911c033045cb0d3922bc393e2d75560d3a55fd9bdc4a1b91c38cb",
+    "omicsclaw/memory/__init__.py": "5123f536517b3b6f60bdedf105bf91fbb1b0f2dadb4c279dbb31e499a9c673a8",
+    "omicsclaw/memory/offload.py": "fee8ad4aa57f5cc517e9212273e4bec72b5c2591d659a40346a500cb18da9bd1",
+    "omicsclaw/memory/longterm.py": "236895c09e4f910965a9b6492a17b39ecd7d4841fc4643c53648ecdfd91c3fbc",
+    "omicsclaw/memory/store.py": "6424b49aaad8ea461b7fb2b062490e407648e5a0b9f6e125746388a76cc8efa9",
+    "omicsclaw/memory/compaction_log.py": "805151632aeed8d8e446c7fdaf3cbcda1a62bfcb7463842cc0c50d0d6804ea63",
+    "omicsclaw/memory/precis.py": "828fc3a726f52237bb010e80671719e7f35cec889d3e405702e178947d1925ce",
+    "omicsclaw/tools/__init__.py": "8efa412849621bc12288df69398235e0eacff5af584c7fec7a28f8c7a4519b40",
+    "omicsclaw/tools/_html.py": "19d47ac50a711d066e70b1adce9cfc65cbdb1974a5e5ca2ca6f7eecc9961b6ce",
+    "omicsclaw/tools/_workspace.py": "a7ef6e01cc469eac1062d8959e949ec6a52babb047c8fa646fa135bae1a5153d",
+    "omicsclaw/tools/function_tool.py": "7f1480def054257a9553c207bf2c74681b891bd60658761f71c985a7b1474032",
+    "omicsclaw/tools/base.py": "e84cfdda4ff0b69630d33f54142cf92413e1459e80887f59322b6b0e9dc38152",
+    "omicsclaw/tools/mcp_tool.py": "247c731fc3d3e82f2ba50f417326349a2ed5203df74df333a2f9ecd1703159e1",
+    "omicsclaw/tools/context.py": "78cbe2436f5fee606aad88bb524cd158adef11d1718823e182a6173f3ba61d58",
+    "omicsclaw/tools/registry.py": "486fab8313a5576767e1b8b4f701db894c51a1363903607414b30f23158ad749",
+    "omicsclaw/tools/_websafety.py": "8199997e9b6136eb159f2728960fd34bff48c80d51397005687a60cc2b9f003d",
+    "omicsclaw/tools/_pathlock.py": "852fbd4b3fd5a07630b2ab78a5e595c43b7055e92e6deac6629cd4d59cd723b0",
+    "omicsclaw/tools/preview.py": "67d476802dc3725e2213ab8755a1c8493f2d423670a2d6e45d943d2dc458bf65",
+    "omicsclaw/tools/builtin/__init__.py": "a4d47afb99d8b2d949a46b0d92940f12e9fef189be1889c2d8bbaa49623acceb",
+    "omicsclaw/tools/builtin/web_search.py": "39f4bba2c679b97e9e08429a7fedcd2f182b1d6dee6ed0a776e4ded15d77e6c8",
+    "omicsclaw/tools/builtin/write.py": "728d471a9e8487a00af80815a5f01f89e1c1fa9d6b1baa42f33e5dfbe56045f9",
+    "omicsclaw/tools/builtin/read.py": "4ac2c4a17ab314bdc7f9770083589fd5421aafafb85157f0d00a9c5235f3cf85",
+    "omicsclaw/tools/builtin/bash.py": "74257587aaeef191b0f8e53d8bc8500f537810a3834d32b5aa26cc991a9e20fd",
+    "omicsclaw/tools/builtin/edit.py": "e33628679398daca9647e0f4b8382332207e61dc1bb373f741a25ad04ae76c06",
+    "omicsclaw/tools/builtin/web_fetch.py": "beef3ee92d72bb03ddb569e0b735c6bb8a65d7be42d49bd2294fbaf853321893",
+    "omicsclaw/provider/_model_limits.py": "eb9b470bbbbac5ccb24fe736ad84d8422282a429ef5ffab0a8a37849a767cebd",
+    "omicsclaw/provider/anthropic_provider.py": "ed7d6cf044780a5825d7b1d892e2915bff96d1de54bb19cdb7ca00b96860fe91",
+    "omicsclaw/provider/__init__.py": "a66b11743eab060f5925847b3c3dbc166308b43025789f9c0000c434a9061461",
+    "omicsclaw/provider/_deadline.py": "faea8db8c0c91c1a5a0574b08025077af91aae9dcaad8a16e14159c0aac44509",
+    "omicsclaw/provider/base.py": "816c7f0a94338fea91f2da020127279f0d3b9260776359f683a8c3b2e238165a",
+    "omicsclaw/provider/config.py": "13f3c7759541208da895e14813cfac0f0d545cc72284898ed3c892c65134f23e",
+    "omicsclaw/provider/_accumulator.py": "3471a8a6324009530d0f1cddeaaa54180825810373a595d27af811ac56cb4e29",
+    "omicsclaw/provider/openai_provider.py": "353d060dfbc2f4b1b62e62236cfa18ffc00870a5ab3afe93bd35049b20d81d86",
+    "omicsclaw/provider/factory.py": "78779fa450f7998e336969211143a5a6b02d3228b0ef67c21525ce4ebd94bcda",
+    "omicsclaw/sandbox/__init__.py": "4e1db63b8a71405c00715e174e84e39c59a5bdf3c22ebc1d0ae6d6455b59680d",
+    "omicsclaw/sandbox/environment.py": "696bf4c0711b94752a14ab5293d9737b923e10befb776fa95ee3079e015f0d73",
+    "omicsclaw/sandbox/container.py": "1560a61e9bfdc2b45c6c9df3272139490349b6e9f284a87e0d919893159e57c4",
+    "omicsclaw/sandbox/config.py": "09c72d945d88f3eadd744211342c2c53d8581204ef31c8250ddbe98b2e55e38e",
+    "omicsclaw/sandbox/manager.py": "5bc2d21f644e5fed730c847d61990b962ad8c31f12a42609a2a56562a4eece98",
+    "omicsclaw/sandbox/daemon.py": "ccfedcc5bd7e8f7b735784cc02a398b3acef250b9d02014462f9dc6273f112e0",
+    "omicsclaw/sandbox/runner.py": "c0474157ae3746a3e625d3cb5a557b6a58098f286f00f1e133653a3b722098fb",
+    "omicsclaw/entry/render.py": "95c5e45ffe7227eb8cb0758412c47e1f5cd941cde1708963ada0cb08bb86ec33",
+    "omicsclaw/entry/review.py": "6664077eb1f3181a400acfe6e923b505f8600b5160c6e65c44c69bdf3b2ad7d8",
+    "omicsclaw/entry/memory.py": "bf8fcd994352d3b34fa83540642ec8260eecdddfaa64504a9f7501a1962c3802",
+    "omicsclaw/entry/planning.py": "33c4e163b84b4285955253cacebf8273204168d5af60333f06227ef57221d151",
+    "omicsclaw/entry/display.py": "e1df866a344fd24d8abd635ce0ad4ee22348f58db741dc9c49409be472666271",
+    "omicsclaw/entry/ingress.py": "f279de9da6be186efc102aaf7894e8a33c6d48fdb6667e03db943fdaabd9804d",
+    "omicsclaw/entry/compaction.py": "2bdddcba5fefcadee763637a7d1000936ac9b2acd4f162c0531bc1750b9b68b8",
+    "omicsclaw/entry/__init__.py": "1141b242c6e10d32885161cd740b5f21690527d65334f7c5817ead3172994bd3",
+    "omicsclaw/entry/turn.py": "ef438236f9239fe3f6de17419013372d0bad75bd876472011fbc67e55b43a2c7",
+    "omicsclaw/entry/assembly.py": "7de1ff74fd06673efdbf42ba218bd554d5c353a84823f19904339b6981c60c2f",
+    "omicsclaw/entry/stream.py": "c8c60f083c9fc11f909c5d5de34e01cdd5910df833ec99eb041239aabd2f0a5b",
+    "omicsclaw/entry/events.py": "42db257342be86da98c30fece76a939fd98dead0cb60555ea3d9320ec2512107",
+    "omicsclaw/entry/project.py": "e1d0d0c4f6fd8bc6eae8aa27a779053939fdd065ee6d7c6660bad31e7780182a",
+    "omicsclaw/entry/skill_env.py": "988c3dd4498ef1c60dad8cb5b08c878be5fd12b2030b38373a6c9137307b1479",
+    "omicsclaw/entry/config.py": "53b80823b9437cbe93f567f80f26aa4e62811590394f76244538410c460ebc45",
+    "omicsclaw/entry/approval.py": "8a061ca0f41779b57e54ee11c1ca44de5528d9acd6d02834cae13d08b52d7f34",
+    "omicsclaw/entry/subagent.py": "934e4ef5f3ebc451b0c6901a618aa2b7d1e66c55da2670eed0aa7dfbe47be7f2",
+    "omicsclaw/entry/sandbox.py": "400086157ca222c8ed1774606d87117ac0e5a0e6ff187803d81e57b3ea8b903e",
+    "omicsclaw/entry/session.py": "d3c62766119dc5aeae36ce92295b717e0f4795b7356c709ae82a26d1b6baaddb",
+    "omicsclaw/entry/desktop/providers.py": "80e5e9dcd9ac7c3ae8e1d758047c756b1da5fa1e7b9a6d2d30530f4f2acd1f4d",
+    "omicsclaw/entry/desktop/doctor.py": "c6f4ee93aaffc4bfce048248bd2a7e9d71cd7168e12bb9ff7f74ea856c684035",
+    "omicsclaw/entry/desktop/turn_submission.py": "318a05e7ae612e041c633d8222c88becdf64e114acafa51ec9933c502b8cf327",
+    "omicsclaw/entry/desktop/files.py": "669a2e635e1d72efbc6ad30ef511023e127b509a9488c9770751db7237fa54c7",
+    "omicsclaw/entry/desktop/server.py": "1f429dadcd4784c1b8e49e7a56de356ddb24e9916e072cbee17ff55bce89bc97",
+    "omicsclaw/entry/desktop/turn_observation.py": "9d76b2d30ed8058b50b501881d85340b6fd0122ac31f44492f479eb7b936408a",
+    "omicsclaw/entry/desktop/catalog.py": "04a118f2c8a4109f1a30b511d73004aedd4627558b231c1e2ee70dbd65b6f56e",
+    "omicsclaw/entry/desktop/title.py": "21665e4eb08849c3b2ec14350870474795c31f9b7a8a16f19daa118dfa11ca15",
+    "omicsclaw/entry/desktop/__init__.py": "ce2eb5fd703205842ed1f2a766313821def008668c43a507869079b00329db18",
+    "omicsclaw/entry/desktop/_chat_sse.py": "2c3e94e85e084484f9e6ef099ddb2bc51be22aeb87f2fb969bc3e8103b1e83b2",
+    "omicsclaw/entry/desktop/wire_contract.py": "6ad1642fd379873e24ca7dd093680573a508ec3d6325b7a2329339c455212388",
+    "omicsclaw/entry/desktop/interactions.py": "37ac182977bb97a092a6e27b681ac0013e3863fa630bacf3e5c3992334e8abde",
+    "omicsclaw/entry/channel/delivery.py": "8544e6f97756dee372645f1dfceadca5bbbeb4ff2613910140d61f02637a9833",
+    "omicsclaw/entry/channel/runtime.py": "4dc790dcc7d233a8c32a883b6545a9f125d28c8916c09f53199a00d28783f743",
+    "omicsclaw/entry/channel/feishu_delivery.py": "ae7b2355cbc6a3e6ba8a5a54d276e13b447c5c133c76cd741876a19b1596bc2e",
+    "omicsclaw/entry/channel/discord_delivery.py": "abf691bf75c4e32faf56d46392e3fe388cda95f5b7d3e8cae686f3dfcb160f47",
+    "omicsclaw/entry/channel/dingtalk_delivery.py": "584071887ebdb2f17b9b2021e9cfc54bcfbb2026ed115e9a38901742accaa3bc",
+    "omicsclaw/entry/channel/qq.py": "01774d648a6feb44682bae81d56d84eb556550adb7d7374b57c11dffddbafd93",
+    "omicsclaw/entry/channel/capabilities.py": "91169c4f3babde65cf38fcb87f4eb8270f439faef0d83e5a9d22944b9b190ce1",
+    "omicsclaw/entry/channel/slack_delivery.py": "023b39c5cdad9806ce8fa046197c8c302389ba66ff184b2a2b5615112b9615c6",
+    "omicsclaw/entry/channel/reply_target.py": "8387e671e2f61ec0104cdfd9e4014447feb9107e71911220620fcb8ddd05f4aa",
+    "omicsclaw/entry/channel/__init__.py": "6bd1f869343467f51b41550cab73d3491ece4994b679e59cb6775e6e8a8fd94b",
+    "omicsclaw/entry/channel/feishu.py": "e9943424aac51369f6e90acbff17afea149d0e5f214a456a5a76fb1380e9cce9",
+    "omicsclaw/entry/channel/base.py": "6ae76f804878ae3554a3bed4468dbd099e773ce34597cf510310180e67d29b73",
+    "omicsclaw/entry/channel/telegram.py": "4eff30da2f8bc6d99f28cfcfd7f85f00bcfcebeb38474036158c17534eeb0b75",
+    "omicsclaw/entry/channel/qq_delivery.py": "49814feb773bca1b2afe5982b2d206153ec914ef3a5ad29983f405c09b92b4bf",
+    "omicsclaw/entry/channel/email.py": "8434df33c257a0795aea0b7928d83e039250ef57e331c7d10078b7ccf7e7ac67",
+    "omicsclaw/entry/channel/slack.py": "12f82b958d53fda6b1586a5e3dba81e61143da250715e821c83b9ee10a9aaaaa",
+    "omicsclaw/entry/channel/config.py": "83d257421d541a0b55326460eee2a2d2633ebe98c33f5ba237dcc30b4b15972e",
+    "omicsclaw/entry/channel/discord.py": "fbe6109ceef2782a4d5ffe456fbabf63746ee2107b35aae732dc6bae11c163e0",
+    "omicsclaw/entry/channel/manager.py": "04ef53196bd139ad8b7a8da95b8abd591c98485208e36899fb4402f13e7dcc4c",
+    "omicsclaw/entry/channel/telegram_delivery.py": "6af8fc44fd21a5ce73a07e382cecf3c27ecf4db4a05175a726f2ffce619548a9",
+    "omicsclaw/entry/channel/dingtalk.py": "4effc498cb63cd66ee4e821faa1e5345d0d8716c7fcf6c97ad506925dce49fc4",
+    "omicsclaw/entry/channel/email_delivery.py": "4a954f5e9a0009a9ec390e636de76cbba4e02223d1f5f2ca5e8f93fc82cdbea6",
+    "omicsclaw/entry/channel/binding.py": "612c2fd6dd46ce1d8fa49f498fdd144e3526684adffea94a191a8c17dec130a2",
+    "omicsclaw/entry/channel/commands/__init__.py": "bc2c9972749938721c26b146e30353de863a03fbdd2f3d3888316afa775bbfa6",
+    "omicsclaw/entry/channel/commands/builtins.py": "ebaa56db3fa6cdfacb60767239afaea03c58c148bb2e4f55eb909f63c6f66674",
+    "omicsclaw/entry/channel/commands/_registry.py": "744495e2f63793cfcf7fe11087948729d297c3231f1d26bb9e1a1e31f78825dc",
+    "omicsclaw/entry/cli/_transcript.py": "36fc44975b09a040014a0fc8eb5604c00a73d158a73fc2ec4e79a59bcb8d58c4",
+    "omicsclaw/entry/cli/_shell.py": "66c591a03b89df02cdaa0ec8374c5f874e972680856247338699db1493cdb7cd",
+    "omicsclaw/entry/cli/_slash_command_support.py": "7c1af9b75ff309ea5120c4ba15839952d7c22303b4a97ce5ba345d000d6c3720",
+    "omicsclaw/entry/cli/_reasoning.py": "4ad8611567fa40ae5f055dbabb3118da58e07f2cfeed5d474e87b00a42f8e21d",
+    "omicsclaw/entry/cli/_configure.py": "c61a217b7ed6d48e9c073a3ca9d864df85943241da7db8cf576db4e4a2016be6",
+    "omicsclaw/entry/cli/__init__.py": "935eec8a5b01c36c1f85b9563e93a7d60de924f546d4a78d634b57f3b0b509a3",
+    "omicsclaw/entry/cli/_markdown.py": "45f3c302b943ba3f3cdfecace7d29a21bf0225f4a792eefd8737fb29c41aaff6",
+    "omicsclaw/entry/cli/_session_state.py": "f32ab9a2b5f7a8e897da8e16c787c4d0417bd882bb8065d3f42a2480af84928d",
+    "omicsclaw/entry/cli/_repl.py": "c00a182bb84107694718c7aafcf990b1a23c823b0fd76cd3a4e81a61a388f078",
+    "omicsclaw/entry/cli/_auto.py": "bb06fa8d75e3373ac7e993e67ac57466d091f98896610831a9184d97db04bc03",
+    "omicsclaw/entry/cli/_input.py": "75eaf1d189011d30d8f8839723c3d63129b9fdc33c58878c78b87e84172b8fe4",
+    "omicsclaw/entry/cli/_screen.py": "b405106ab0b09b77837fd16c6da7c46eb8a6bb91b8b2b93a040efe42c411cf54",
+    "omicsclaw/entry/cli/_constants.py": "495273f57421da19dbbb15f5e3b4db03db8d20064f29fccf21f8fb661cca2ed9",
+    "omicsclaw/entry/cli/_activity.py": "7b4aba09c0f322c217f7aabe5d64105ed9a57f521b910c473c3eef3a49f78027",
+    "omicsclaw/skills/loader.py": "e32e91c1c1feebac0ad3f7325e28953475998a21fbe9985c94d7bd3978684eb1",
+    "omicsclaw/skills/use_skill.py": "1d17624762239a9abe9ed5442dfbe221cccf1ecb6efeb85d0b2da7bfe17a925f",
+    "omicsclaw/skills/index.py": "49fae0dacfc396d1d9249c65e1580e9558a94b1bd1393464ab22b7cae7152253",
+    "omicsclaw/skills/__init__.py": "dd0f8b65b82cb550cbd24caf3e2432a64480f09c9ed2044cf2c5cd1f16f808ee",
+    "omicsclaw/skills/skill.py": "894ce66df6de2694ae09c5352a2bac48c974c1a593862f633770c3884b722506",
+    "omicsclaw/skills/frontmatter.py": "e1e2ec948f3a17eb77ecc1b4fa6b022378f90e7442db2c688557a606b59b15a3",
+    "omicsclaw/evals/report.py": "f64aecc4eb9c67bdaec35b20f30e1bbbec759a2e6128ca6daa8fc0d537dd9840",
+    "omicsclaw/evals/hermetic.py": "912728cce7d1232edf78a34d4521dc8ea182171f727606784b2f07a492e5cc91",
+    "omicsclaw/evals/live.py": "b64c57f021da6c9f7dc3e132d7a497e50fcf980281457250075c500c59f5b846",
+    "omicsclaw/evals/__init__.py": "afadaf0b5d6eac0608bb549eae7a429015a217e21cb9341595bca573d3c59831",
+    "omicsclaw/evals/ledger.py": "54b4c5202e813b464497de7fddbca35acbda0a9880b1bbc98f37a27d8567bfae",
+    "omicsclaw/evals/assertions.py": "76266e6d8e55919785be062575ccca6eed1e94f35cc4c3863937ad45be113335",
+    "omicsclaw/evals/provider.py": "d80439d81f762e2e801f6baaae6d3fc9df55c33dd0842ebc9e06c472eb6e66d6",
+    "omicsclaw/evals/stubs.py": "a4f439e4698cfd1d36fab2d27b85d98bc1181a9903c4863d8e1e51e4dedd4bbb",
+    "omicsclaw/evals/case.py": "b08e13f6cbf90ff74bc8ab50a002e46a6c6ef365e2260ccc40573eeacc9d3027",
+    "omicsclaw/evals/runner.py": "6e13c499cd07f0c6767ca5bb19a0b053dd80d1e56638c201704565921f8e2b37",
+    "omicsclaw/launch/_surfaces.py": "5bf3f1b288ef774eaa1b322890ca73dc49c232063c5cbad2f753fa5a2138696f",
+    "omicsclaw/launch/_dotenv.py": "a616fc8e2ba8063520788f61564e35f93f635143949113aa0cccc6571caf9593",
+    "omicsclaw/launch/__init__.py": "0993dcf74db12137cc6c89e6932eee2ac317c41f345b42323aeeb191f38812aa",
+    "omicsclaw/launch/__main__.py": "a6b1b011e2bf0f1bec59ab27dab1f100cdb23e81a8846b86557109986c71451e",
+    "omicsclaw/launch/_grammar.py": "c041c13f119d0a9bf0162c3129db985c2181ef8b66b951edd2a1ef51f32220ee",
+    "omicsclaw/mcp/stdio.py": "745bb9a0aaa91fdd33a6fc9a803c3c7760f43f7bd4165a0b85ec5275718981f9",
+    "omicsclaw/mcp/transport.py": "39faee4ba6827f3e5e6511d39496049807681ff4f9d851d3484393698a81f6c4",
+    "omicsclaw/mcp/client.py": "14043bebebf057a1e8726cd0b10b3c525b74c5312cab13429bf36609bfed0b65",
+    "omicsclaw/mcp/streamable_http.py": "2dd4dce2283f2b50b1cd968f922841f8b73a53f97df64141fb335eaa0d59a058",
+    "omicsclaw/mcp/__init__.py": "645379259b2bef8656eae506a0a891b420a0961132be3cceb28ab2bb0ddf0f67",
+    "omicsclaw/mcp/config.py": "049f4b86af38205b813190ce1812e15980b836f224d27fa0982dbf7a833502fd",
+    "omicsclaw/mcp/manager.py": "17b446ee7c058f2a51125109678a7e6538853ccd8546100349199be3a6a3857c",
+    "omicsclaw/skillenv/report.py": "29f7f4755faa12e3b5af24dffc1e448fd1c24dbc99f4a7619785ebad3f349158",
+    "omicsclaw/skillenv/sources.py": "5e2a0165ea6e745cab9846978034d16bf0b1b98e177ac1b8deff085d799fa0f4",
+    "omicsclaw/skillenv/__init__.py": "fec3cde1f6bdd76d9e98c3d719e2bad5900b192d0e94eef24c5898ba314e03cf",
+    "omicsclaw/skillenv/tool.py": "fa35831499fc0a2c08dec7b96e15a9f7af0332b0aadbb80c3a9010c778cb645e",
+    "omicsclaw/skillenv/registry.py": "f5cdb00e1f83ebc33a7a5dc9d6bc393cc9acd8a581522144bd0999408828267b",
+    "omicsclaw/skillenv/overlay.py": "c4a458deb5a4247230f222ed01833ffd2accfa6344a014ba90743e5eb2273406",
+    "omicsclaw/skillenv/probe.py": "2ae6bbc483eacc316ee2fafe5a73562f823451c1f06e7ed067e3c80792173200",
+    "omicsclaw/common/workspace.py": "5ff01ca9950080921f94a17cfe0853b2888d066e0245cc469fecab723350556e",
+    "omicsclaw/common/report.py": "a798aed4df9989592f745bdb6fe2a5b313205adb071e24cb8e7a3d7ea3aa0e6c",
+    "omicsclaw/common/manifest.py": "71eafd7a95643c8d2ef7199d6cc8338d2f8a9b157ea883c5972c9100775c42f2",
+    "omicsclaw/common/run_paths.py": "ede75923a553898b43404aa83640678e3c78c528ad623c34771f667f635f8c6f",
+    "omicsclaw/common/__init__.py": "e8e8da598ea33b748cfcaff36029c86a8bb3f19f318df62710d1893e9e8fe709",
+    "omicsclaw/common/windows_directory_guard.py": "f07b05b746a57752f2ff0be32f144d51dcd9155897bed7ef2f3cd2d54588701e",
+    "omicsclaw/common/output_claim.py": "21ed9ea30668d8f9e4f374975abd42600463092b54c25f43241c022e53d5e736",
+    "omicsclaw/common/user_guidance.py": "3cced87b173fb6b11b941a0433fd524185963e4e328af7970bcef05749aa31a1",
+    "omicsclaw/common/checksums.py": "3f3517c8a736052ead67792dcc0588df02779c117d83ccde49b9bd37c1552d6d",
+    "omicsclaw/common/runtime_env.py": "0445cc6b531a431fa81418b9434eee97eb494c5c58760d770ffa1ea1a88e74eb",
+    "omicsclaw/common/session.py": "ff0dd85aad4c8736ed76e28595e65e9a225c694d2aea19bd94707360512030f1",
+    "omicsclaw/subagent/definition.py": "185f36c649338717604672d16c3b8f5d18bb8dc34e35d0b4a4ac7d65771322b4",
+    "omicsclaw/subagent/loader.py": "0612c745eefac7f7c25d6225ed8170ff6f9a70975aeaf639347f64bc24a92b50",
+    "omicsclaw/subagent/task_tool.py": "1a83f0490fd713e93964b25f4c7004dcac88111aa1ab9261a88b936ae8b656b8",
+    "omicsclaw/subagent/__init__.py": "2a417d96678db420176cfca9bf1a6e99eebf86b36b425ff965ec4e8e9a138916",
+    "omicsclaw/subagent/registry.py": "55b7613589b9ee2237a334a342ebaa52934137ab49da869fbf65d5bb246643ff",
+    "omicsclaw/subagent/prompt.py": "a3b975922884f44ced56892f25ad159552b370eda6e496db52665b58502cd9e3",
+    "omicsclaw/subagent/delegate.py": "cbd3a6f64ef20e3cadf30547cacbca244caa27138df6f828237cb53682662230",
+    "omicsclaw/subagent/frontmatter.py": "c465b89ac65af1e1393ef673eaa7f6b22b2c0d21e3df069e9bb2bec22f383c92",
+    "omicsclaw/planning/plan.py": "902e0e14ad647cdaf02943c642b37d5e39ffdc55f5f830bb94bdf0b943caf8c2",
+    "omicsclaw/planning/injector.py": "fa278c1568dddc96071aab8c36818ca770d75c41ecfe91c44d39233d762466cd",
+    "omicsclaw/planning/archive.py": "06a4f66fb205981cc7c34ae3619e0ae015fa39676ea6640e764143fa22209392",
+    "omicsclaw/planning/render.py": "f35bc7f1398187179b8b5309b51c278e29fa99c8ff22c61b19718af197fbe647",
+    "omicsclaw/planning/rules.py": "3249867281e5552763bf3cf9e57335f5aadec3c888eb731e36e42c3295419805",
+    "omicsclaw/planning/guidance.py": "780dc9ab0afe28b77c3b5303f9b38d348c097f4f4e4d708325e509a55fff0118",
+    "omicsclaw/planning/__init__.py": "d8f1d72d0d9214d11ffe56b06faafda53f0f49106b90f813d833bc1698fb8c5b",
+    "omicsclaw/planning/tool.py": "7c0f401197ce8fe2ffa0fa1fdcf3a83c56a78ad5eeed0d794aa1a9cca9d9112d",
+    "omicsclaw/planning/book.py": "27e68e3be308554111e49d380a8be64ed4e7a184a90abe56f2a1ec9ccad11d28",
+    "skills/_sdk/notebook/_layout.py": "1a15060ba108789aaf09db484b849392e07daa18aa545e2a1366530441e42943",
+    "skills/_sdk/notebook/_runners.py": "036d104a72707ebb488af1706dbccd192762daf9a5b66b81a5460a563dfd2ba5",
+    "skills/_sdk/notebook/_hashing.py": "12759a26324f653c96afc523ce02695338529ab1ad010841d8385ebd823680de",
+    "skills/_sdk/notebook/_skills.py": "2bd03e4f8bac58a033b0398f50a342f0a66fde76ce62c012261722e697d445ff",
+    "skills/_sdk/notebook/_io.py": "7ad021b59053b7e568315bcecf919f2131c6f64516fc54109e9da1578c87f68d",
+    "skills/_sdk/notebook/contract.py": "dd01499747d1b66fac5c4af1368105c7c94e22f3df42e441bed99ff3e66b7dde",
+    "skills/_sdk/notebook/_ledger.py": "0625280d1f848268a16ebbb6551209f16b7bdd9b8e193d177c0defc82ad5d93a",
+    "skills/_sdk/notebook/run.py": "9ec99a8e5c250389c63b01e29d215bac30886f630242421d0f75e0f79282b8aa",
+    "skills/_sdk/notebook/_manifest.py": "5b878cae17a046ea7de4b30683c48ca342f863e296d1c97b288bc88648f6e97a",
+    "skills/_sdk/notebook/__init__.py": "1ef52aa74f9708e9a0ba99c517b6193c0b7fa379c757dfa12319d084242bddc9",
+    "skills/_sdk/notebook/_lock.py": "e88441d26c492c3f5a30fc575e920197fbfda511941284dcae87706dc2aec285",
+    "skills/_sdk/notebook/_brief.py": "da606c5f64599f55f19e3f94af9cbbf194ad8704ee74443f2dbfc4647695f812",
+    "skills/_sdk/notebook/_reference.py": "27a528964de8469a32602e58512d329b6c555139027a38cd5854d721c150241d",
+    "skills/_sdk/notebook/_executor.py": "d328a4ab01508c825fa85ab8c4dc71fde11d5b80d3b5d9fdcfc5892967bdbe6e",
+    "skills/_sdk/notebook/__main__.py": "fb9db0a9c376205a361efcee2ef1c707fd037a881cd8821e285b830e44c95e84",
+    "skills/_sdk/notebook/checks.py": "cc7591852553cc512a4da52de968d54f782cc34fdf1cb449b5650b3e21f921f5",
+    "skills/_sdk/notebook/_apidoc.py": "54a48ebf3017626221ff114aa37bc408d4e8e23431cde1287791f3f96e52e7ea",
+    "skills/_sdk/notebook/_percent.py": "e0f221adc6d43732a710526deaf0a7f585ce6edee4a08cef9e0b41205ebb0d15",
+    "skills/_sdk/notebook/_acceptance.py": "1ebb70f2d88d9bbe12d8232d2b4675d54334218055710ce490d4a55ddb8576b4",
+    "skills/_sdk/notebook/_watchdog.py": "ed33bfd4323e1570f5cda167760cd1e6b535c29b0a6688243e10925f7c70e38a",
+    "skills/_sdk/notebook/_demos.py": "8fc2deee62ca491aefa7c729254479590096152195e4c50a1f5e04c8f0f9b449",
+    "OMICSCLAW.md": "8bb1791714abe67673b336486863e0999216b3bd225805fcfc53c81993c22944",
+    "README.md": "1e922fba57864fc56d7b42c28bceceaac261df0232882f01d4d5d2fa608c2a16",
+    "docs/plans/0076-remaining-modalities-migration.md": "201dca97fd506490af893551611fbf0244d38b6e3dac138d8ec05804b708c057"
+  }
+}

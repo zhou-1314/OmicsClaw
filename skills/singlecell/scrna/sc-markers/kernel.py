@@ -1,6 +1,6 @@
 """Lightweight kernel helpers for sc-markers (cluster marker ranking & specificity filtering)."""
 from __future__ import annotations
-__all__ = ['find_markers', 'top_markers', 'cluster_marker_summary']
+__all__ = ['find_markers', 'top_markers', 'cluster_marker_summary', 'check_homogeneous_null']
 
 def find_markers(adata, *, groupby: str='leiden', method: str='wilcoxon', min_in_group_fraction: float=0.25, min_fold_change: float=0.25, max_out_group_fraction: float=0.5) -> pd.DataFrame:
     """Rank cluster marker genes on log-normalized expression and apply specificity filters."""
@@ -26,3 +26,13 @@ def cluster_marker_summary(markers_df: pd.DataFrame, *, fdr: float=0.05) -> pd.D
     if sig.empty:
         sig = markers_df
     return sig.groupby('group', observed=True).agg(n_markers=('names', 'count'), top_gene=('names', 'first'), max_lfc=('logfoldchanges', 'max') if 'logfoldchanges' in sig.columns else ('scores', 'max')).reset_index()
+
+def check_homogeneous_null(markers_df: pd.DataFrame, *, fdr: float=0.05, min_lfc: float=1.0, min_pct_gap: float=0.25) -> dict:
+    """Evaluate whether cluster markers reflect genuine heterogeneity or single-cluster over-clustering noise."""
+    if markers_df.empty or 'pvals_adj' not in markers_df.columns:
+        return {'is_homogeneous': True, 'n_genuine_markers': 0, 'recommendation': 'abstain_single_cluster'}
+    cond = (markers_df['pvals_adj'] < fdr) & (markers_df['logfoldchanges'].abs() >= min_lfc)
+    if {'pct_nz_group', 'pct_nz_reference'}.issubset(markers_df.columns):
+        cond = cond & ((markers_df['pct_nz_group'] - markers_df['pct_nz_reference']).abs() >= min_pct_gap)
+    n_gen = int(cond.sum())
+    return {'is_homogeneous': n_gen == 0, 'n_genuine_markers': n_gen, 'recommendation': 'abstain_single_cluster' if n_gen == 0 else 'report_subpopulations'}

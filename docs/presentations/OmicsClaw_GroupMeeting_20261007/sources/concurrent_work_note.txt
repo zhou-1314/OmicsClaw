@@ -1,0 +1,3 @@
+制作期间的并行变更注记（2026-10-07）
+
+架构、接口数量与文件哈希冻结于开工时的干净快照 43e9c034b1f04773aa2121d9aab0944beec3ec57。后续复核发现工作树正在进行空间迁移 S2–S6，CHANGELOG 首项及 docs/plans/0075-spatial-skill-migration.md 明确整批验收与独立审核未完成。第30页补充此在制状态：空间 S1 已验收；后续16个技能继续实施；S6 spatial-raw-processing 保留 CLI_ONLY，合成示例通过不代表真实 FASTQ 已验收。其他会话的源码修改未被本次任务改动或并入已验收计数。

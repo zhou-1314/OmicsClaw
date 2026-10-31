@@ -630,7 +630,7 @@ REVIEW_CHECKS = (
     "2. The validate step checks the outputs the REPORT relies on.",
     "3. The REPORT (M<NN>_<slug>_REPORT.md): every number matches a table or log in results/<NN_slug>/; every "
     "figure it cites exists and is not listed under orphan_outputs; claims stay within what the steps "
-    "computed; it carries the disclaimer.",
+    "computed.",
     "4. The replay in the manifest succeeded and covers the current step files.",
     "Your first line is the verdict, exactly `VERDICT: APPROVE` or `VERDICT: REVISE`. Then list the findings, "
     "most serious first. Choose REVISE when any finding would change a number, a figure or a conclusion.",

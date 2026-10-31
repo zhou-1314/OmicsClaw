@@ -71,6 +71,8 @@ def test_write_output_readme_surfaces_method_params_and_entrypoints(tmp_path):
     assert "reproducibility/replay.sh" in text
     assert "`figures/`" in text
     assert "Identify tissue domains" in text
+    assert "research and educational tool" not in text
+    assert "## Notes" not in text
 
 
 def test_write_output_readme_does_not_advertise_hardlinked_report(tmp_path):

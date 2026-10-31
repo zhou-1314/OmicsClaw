@@ -1,0 +1,495 @@
+{
+  "schema": "ppt-master.pptx-postflight-report.v1",
+  "status": "passed",
+  "output": {
+    "path": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/presentations/OmicsClaw_GroupMeeting_20261008_Harness/exports/OmicsClaw_GroupMeeting_20261008_Harness_20261008_030831.pptx",
+    "bytes": 216794
+  },
+  "source": {
+    "svg_slide_count": 45,
+    "layout_definition_count": 0,
+    "fingerprint": {
+      "algorithm": "sha256",
+      "digest": "fe872ead0a9dc03b696b9a875a34f2e3fcb4e408fa7e29300768315a44662338",
+      "file_count": 45,
+      "files": [
+        {
+          "file": "01_cover.svg",
+          "sha256": "a9aef383a69556dc7b6eeed8db3c0e8653f6a2ba3ad207c5d6f2b1d2cfdd1fc3"
+        },
+        {
+          "file": "02_problem.svg",
+          "sha256": "206fad3d6f57873a2f898bebc039fbc662152d44db4d70f78007db5efd750132"
+        },
+        {
+          "file": "03_scope.svg",
+          "sha256": "776e519f3459496ad6754713dfe97c8fda337fca5b858283a17e6b7f09ade255"
+        },
+        {
+          "file": "04_map.svg",
+          "sha256": "ccce9770d97218304ee008233963d287f249ee997ddf982032100904f4f3ea94"
+        },
+        {
+          "file": "05_request.svg",
+          "sha256": "6fcbf99c2d5e42c539ea1b3b156bd912e4d98f6675731765e485923f0d9e8166"
+        },
+        {
+          "file": "06_schema.svg",
+          "sha256": "a17434ec003376f7f5de2ab0208b0d1c27fec9ecb03c27b00cb1389a2ca47c72"
+        },
+        {
+          "file": "07_provider.svg",
+          "sha256": "c7ace2e9906ba6d186cef0f83701a74598b0ae48b44e4da2be97e7395b734d36"
+        },
+        {
+          "file": "08_engine.svg",
+          "sha256": "61d0d2ab7632f2d52eab4ae2022aef306ae0c2236a235ef51f07863e393a2fb2"
+        },
+        {
+          "file": "09_thinking.svg",
+          "sha256": "3aeafe60d3b56034230ee2a373e83cd81a7c250149d514afa4c90a744f25fb0c"
+        },
+        {
+          "file": "10_tools.svg",
+          "sha256": "6b4a769fa2d686e9db4b5ccaed58c05c5743fd644f139480d9aaf49ea578ac18"
+        },
+        {
+          "file": "11_primitives.svg",
+          "sha256": "c7fdd2e9aff2f797893308fddf741b1d98ee05a9f8ae3be85d00521d790cd727"
+        },
+        {
+          "file": "12_edit.svg",
+          "sha256": "05c4d366aa35a0ecc08be05ec7b7dfe2d8093b3be3f48d04f836fea0491957df"
+        },
+        {
+          "file": "13_parallel.svg",
+          "sha256": "7c2de2322698e1b25d4c1c086005cc8b21c65753f9aab113f21be971ff0e994e"
+        },
+        {
+          "file": "14_prompt.svg",
+          "sha256": "da1ac0fbe19ed08a793b2ae9ccc7da8be3802698a8db480820cee0a78084591b"
+        },
+        {
+          "file": "15_skills.svg",
+          "sha256": "4a6818ccf57cb753dbac207c61c2cacc9d60666829a3695b868a29dc0fd20e57"
+        },
+        {
+          "file": "16_context.svg",
+          "sha256": "9b0f4ade4c8b7a735a133c5b1932daddf1d0866ec457706455a52ba76481bf64"
+        },
+        {
+          "file": "17_memory_plan.svg",
+          "sha256": "7a71835a587a17e8b7c20ab160d7f18257d3cde310812409fef6617b26f17fc5"
+        },
+        {
+          "file": "18_reminders.svg",
+          "sha256": "2dff46d10f97974043b4e063f85de83ab00471d571acb09a5d581aa30315f4a8"
+        },
+        {
+          "file": "19_recovery.svg",
+          "sha256": "d600d0a9fb7b486335d8dbc845967101a12ea89d11092d61bd12f5fb0985b87e"
+        },
+        {
+          "file": "20_entry.svg",
+          "sha256": "3f976d22e3982522c0b67f458511b440ac1d90daef1bf3f72643d803cc697c96"
+        },
+        {
+          "file": "21_surfaces.svg",
+          "sha256": "02142c14ca9892c2cdf5c2456519784cc2b4d7dbb9af2a1b212ba817e187c5f4"
+        },
+        {
+          "file": "22_permission.svg",
+          "sha256": "65ce8ee15a9ff2bbb113f4b0ef68bb1c7b15dd4d9fe9928d02e929fd3a7dace8"
+        },
+        {
+          "file": "23_sandbox.svg",
+          "sha256": "f956a8f54e2d840473c40811698df944e4f9b0635b4e12d8a2ab5d6db84d4763"
+        },
+        {
+          "file": "24_skillenv.svg",
+          "sha256": "3ce10fa6b6776bdb5167d82216747176cbe05e33fc6c6f69c7b9424f7da7cf0a"
+        },
+        {
+          "file": "25_extensions.svg",
+          "sha256": "10a3e7ce6f7ea0de947731e1986f6a1712d0c34f87b60ee46de20ed4bd3e3d9c"
+        },
+        {
+          "file": "26_observe.svg",
+          "sha256": "b1be82e83f0dbeb6e3efc244232d5110fbb79e9a11a5b6a590e14519ebd24566"
+        },
+        {
+          "file": "27_eval.svg",
+          "sha256": "e160909ab911ec8d94ad2fd4e84067ef5256fc38963062ad6b7a1b3a7e5c5b92"
+        },
+        {
+          "file": "28_boundary.svg",
+          "sha256": "d43e168f7b6f3f74e21728e302ef9056c53bedd20d4f6b6e07e99525f636726d"
+        },
+        {
+          "file": "29_api_cli.svg",
+          "sha256": "248722c7dd30a51df8cc9bdfeb95e1a701ee398b349e5f659710d9b4f7edbe03"
+        },
+        {
+          "file": "30_modules.svg",
+          "sha256": "02ae5debb5769dda2bd03e1c70296b92e1f1457fdd1934fac2fdd72223661beb"
+        },
+        {
+          "file": "31_replay.svg",
+          "sha256": "73ad8df9ff7e0667a72fddcb24df295434895826ecac6d886410fc4263362a43"
+        },
+        {
+          "file": "32_review.svg",
+          "sha256": "3b84e6296e595d96ec3759bedddfd379fbf5e7c0fd27f5b211b61a047da3e5a0"
+        },
+        {
+          "file": "33_python_r.svg",
+          "sha256": "2f2f96337153ba3e47c001a7b7b72a2b73b6da0d1110159d0b3326859e9144c4"
+        },
+        {
+          "file": "34_deploy.svg",
+          "sha256": "74be5d565ae1e64670caca45023c5311f1cecadebc0b1d38e52718b6e182f716"
+        },
+        {
+          "file": "35_case.svg",
+          "sha256": "a778fef1bf99c12f07d0ff035c3230f75d219fb648a08d8ea5528185b6f37164"
+        },
+        {
+          "file": "36_reliability.svg",
+          "sha256": "24c9744ea9736baee0f54957247e3ac0239d061e088e35d0891c5bfc6a9dfa62"
+        },
+        {
+          "file": "37_validation.svg",
+          "sha256": "f96c144e4b5857add16d615d602fae43bbd7b90ca5714c54acdad86d043b86a3"
+        },
+        {
+          "file": "38_progress.svg",
+          "sha256": "5ce6db37b24e75a731a8b97b42a02ed356c71e470a4e712f56fffb136856db6c"
+        },
+        {
+          "file": "39_next.svg",
+          "sha256": "b5b93636da576884ada67200a2a34ad54f5071cd138504e3a8a59c2c92ffa7a1"
+        },
+        {
+          "file": "40_discussion.svg",
+          "sha256": "6d8d484031d735d0a83d0d1daa5f8e10fa190ac280dfa0e6ba26a54fd7bd0b9c"
+        },
+        {
+          "file": "41_components.svg",
+          "sha256": "c6112223dfedabfd1bfecc295cfc5ccff3f4f3c969eb172f4d2990642e0b2182"
+        },
+        {
+          "file": "42_domains.svg",
+          "sha256": "2f016d73d07ee723451aa4702550031cf9133dcbf321fe3e965ec300b51aaa36"
+        },
+        {
+          "file": "43_commands.svg",
+          "sha256": "90ddd6b671fa1dbf9147d7f5308e3ff080032db2083deb5070ff7972a81b5e50"
+        },
+        {
+          "file": "44_mapping.svg",
+          "sha256": "8bae91e27b438f3756be6ff8f28d766ab59100f76d55b9a496d3bf3511040e1d"
+        },
+        {
+          "file": "45_sources.svg",
+          "sha256": "184c173f4ddf4a1ec522206b2bf9779e210454bf6cc54624dc3f660ac29955d6"
+        }
+      ]
+    },
+    "authoring_roundtrip": null
+  },
+  "package": {
+    "zip_integrity": "passed",
+    "corrupt_member": null,
+    "slides": 45,
+    "notes": 45,
+    "masters": 1,
+    "layouts": 1
+  },
+  "checks": {
+    "zip_integrity": "passed",
+    "slide_count": "passed",
+    "internal_relationships": "enforced-at-build",
+    "structured_package": "not-applicable",
+    "transitions": "enforced-at-build",
+    "animations": "enforced-at-build",
+    "project_svg_contract": "enforced-at-build",
+    "compatibility_normalization": "not-applicable",
+    "authoring_roundtrip": "not-applicable",
+    "quality_gate": "passed",
+    "quality_warnings": "passed",
+    "template_tokens": "passed",
+    "external_images": "passed",
+    "font_portability": "passed"
+  },
+  "quality": {
+    "status": "loaded",
+    "path": "docs/presentations/OmicsClaw_GroupMeeting_20261008_Harness/validation/svg_quality_report.json",
+    "schema": "ppt-master.svg-quality-report.v1",
+    "stage": "final",
+    "source_match": "passed",
+    "source_fingerprint": {
+      "algorithm": "sha256",
+      "digest": "fe872ead0a9dc03b696b9a875a34f2e3fcb4e408fa7e29300768315a44662338",
+      "file_count": 45,
+      "files": [
+        {
+          "file": "01_cover.svg",
+          "sha256": "a9aef383a69556dc7b6eeed8db3c0e8653f6a2ba3ad207c5d6f2b1d2cfdd1fc3"
+        },
+        {
+          "file": "02_problem.svg",
+          "sha256": "206fad3d6f57873a2f898bebc039fbc662152d44db4d70f78007db5efd750132"
+        },
+        {
+          "file": "03_scope.svg",
+          "sha256": "776e519f3459496ad6754713dfe97c8fda337fca5b858283a17e6b7f09ade255"
+        },
+        {
+          "file": "04_map.svg",
+          "sha256": "ccce9770d97218304ee008233963d287f249ee997ddf982032100904f4f3ea94"
+        },
+        {
+          "file": "05_request.svg",
+          "sha256": "6fcbf99c2d5e42c539ea1b3b156bd912e4d98f6675731765e485923f0d9e8166"
+        },
+        {
+          "file": "06_schema.svg",
+          "sha256": "a17434ec003376f7f5de2ab0208b0d1c27fec9ecb03c27b00cb1389a2ca47c72"
+        },
+        {
+          "file": "07_provider.svg",
+          "sha256": "c7ace2e9906ba6d186cef0f83701a74598b0ae48b44e4da2be97e7395b734d36"
+        },
+        {
+          "file": "08_engine.svg",
+          "sha256": "61d0d2ab7632f2d52eab4ae2022aef306ae0c2236a235ef51f07863e393a2fb2"
+        },
+        {
+          "file": "09_thinking.svg",
+          "sha256": "3aeafe60d3b56034230ee2a373e83cd81a7c250149d514afa4c90a744f25fb0c"
+        },
+        {
+          "file": "10_tools.svg",
+          "sha256": "6b4a769fa2d686e9db4b5ccaed58c05c5743fd644f139480d9aaf49ea578ac18"
+        },
+        {
+          "file": "11_primitives.svg",
+          "sha256": "c7fdd2e9aff2f797893308fddf741b1d98ee05a9f8ae3be85d00521d790cd727"
+        },
+        {
+          "file": "12_edit.svg",
+          "sha256": "05c4d366aa35a0ecc08be05ec7b7dfe2d8093b3be3f48d04f836fea0491957df"
+        },
+        {
+          "file": "13_parallel.svg",
+          "sha256": "7c2de2322698e1b25d4c1c086005cc8b21c65753f9aab113f21be971ff0e994e"
+        },
+        {
+          "file": "14_prompt.svg",
+          "sha256": "da1ac0fbe19ed08a793b2ae9ccc7da8be3802698a8db480820cee0a78084591b"
+        },
+        {
+          "file": "15_skills.svg",
+          "sha256": "4a6818ccf57cb753dbac207c61c2cacc9d60666829a3695b868a29dc0fd20e57"
+        },
+        {
+          "file": "16_context.svg",
+          "sha256": "9b0f4ade4c8b7a735a133c5b1932daddf1d0866ec457706455a52ba76481bf64"
+        },
+        {
+          "file": "17_memory_plan.svg",
+          "sha256": "7a71835a587a17e8b7c20ab160d7f18257d3cde310812409fef6617b26f17fc5"
+        },
+        {
+          "file": "18_reminders.svg",
+          "sha256": "2dff46d10f97974043b4e063f85de83ab00471d571acb09a5d581aa30315f4a8"
+        },
+        {
+          "file": "19_recovery.svg",
+          "sha256": "d600d0a9fb7b486335d8dbc845967101a12ea89d11092d61bd12f5fb0985b87e"
+        },
+        {
+          "file": "20_entry.svg",
+          "sha256": "3f976d22e3982522c0b67f458511b440ac1d90daef1bf3f72643d803cc697c96"
+        },
+        {
+          "file": "21_surfaces.svg",
+          "sha256": "02142c14ca9892c2cdf5c2456519784cc2b4d7dbb9af2a1b212ba817e187c5f4"
+        },
+        {
+          "file": "22_permission.svg",
+          "sha256": "65ce8ee15a9ff2bbb113f4b0ef68bb1c7b15dd4d9fe9928d02e929fd3a7dace8"
+        },
+        {
+          "file": "23_sandbox.svg",
+          "sha256": "f956a8f54e2d840473c40811698df944e4f9b0635b4e12d8a2ab5d6db84d4763"
+        },
+        {
+          "file": "24_skillenv.svg",
+          "sha256": "3ce10fa6b6776bdb5167d82216747176cbe05e33fc6c6f69c7b9424f7da7cf0a"
+        },
+        {
+          "file": "25_extensions.svg",
+          "sha256": "10a3e7ce6f7ea0de947731e1986f6a1712d0c34f87b60ee46de20ed4bd3e3d9c"
+        },
+        {
+          "file": "26_observe.svg",
+          "sha256": "b1be82e83f0dbeb6e3efc244232d5110fbb79e9a11a5b6a590e14519ebd24566"
+        },
+        {
+          "file": "27_eval.svg",
+          "sha256": "e160909ab911ec8d94ad2fd4e84067ef5256fc38963062ad6b7a1b3a7e5c5b92"
+        },
+        {
+          "file": "28_boundary.svg",
+          "sha256": "d43e168f7b6f3f74e21728e302ef9056c53bedd20d4f6b6e07e99525f636726d"
+        },
+        {
+          "file": "29_api_cli.svg",
+          "sha256": "248722c7dd30a51df8cc9bdfeb95e1a701ee398b349e5f659710d9b4f7edbe03"
+        },
+        {
+          "file": "30_modules.svg",
+          "sha256": "02ae5debb5769dda2bd03e1c70296b92e1f1457fdd1934fac2fdd72223661beb"
+        },
+        {
+          "file": "31_replay.svg",
+          "sha256": "73ad8df9ff7e0667a72fddcb24df295434895826ecac6d886410fc4263362a43"
+        },
+        {
+          "file": "32_review.svg",
+          "sha256": "3b84e6296e595d96ec3759bedddfd379fbf5e7c0fd27f5b211b61a047da3e5a0"
+        },
+        {
+          "file": "33_python_r.svg",
+          "sha256": "2f2f96337153ba3e47c001a7b7b72a2b73b6da0d1110159d0b3326859e9144c4"
+        },
+        {
+          "file": "34_deploy.svg",
+          "sha256": "74be5d565ae1e64670caca45023c5311f1cecadebc0b1d38e52718b6e182f716"
+        },
+        {
+          "file": "35_case.svg",
+          "sha256": "a778fef1bf99c12f07d0ff035c3230f75d219fb648a08d8ea5528185b6f37164"
+        },
+        {
+          "file": "36_reliability.svg",
+          "sha256": "24c9744ea9736baee0f54957247e3ac0239d061e088e35d0891c5bfc6a9dfa62"
+        },
+        {
+          "file": "37_validation.svg",
+          "sha256": "f96c144e4b5857add16d615d602fae43bbd7b90ca5714c54acdad86d043b86a3"
+        },
+        {
+          "file": "38_progress.svg",
+          "sha256": "5ce6db37b24e75a731a8b97b42a02ed356c71e470a4e712f56fffb136856db6c"
+        },
+        {
+          "file": "39_next.svg",
+          "sha256": "b5b93636da576884ada67200a2a34ad54f5071cd138504e3a8a59c2c92ffa7a1"
+        },
+        {
+          "file": "40_discussion.svg",
+          "sha256": "6d8d484031d735d0a83d0d1daa5f8e10fa190ac280dfa0e6ba26a54fd7bd0b9c"
+        },
+        {
+          "file": "41_components.svg",
+          "sha256": "c6112223dfedabfd1bfecc295cfc5ccff3f4f3c969eb172f4d2990642e0b2182"
+        },
+        {
+          "file": "42_domains.svg",
+          "sha256": "2f016d73d07ee723451aa4702550031cf9133dcbf321fe3e965ec300b51aaa36"
+        },
+        {
+          "file": "43_commands.svg",
+          "sha256": "90ddd6b671fa1dbf9147d7f5308e3ff080032db2083deb5070ff7972a81b5e50"
+        },
+        {
+          "file": "44_mapping.svg",
+          "sha256": "8bae91e27b438f3756be6ff8f28d766ab59100f76d55b9a496d3bf3511040e1d"
+        },
+        {
+          "file": "45_sources.svg",
+          "sha256": "184c173f4ddf4a1ec522206b2bf9779e210454bf6cc54624dc3f660ac29955d6"
+        }
+      ]
+    },
+    "summary": {
+      "total": 45,
+      "passed": 45,
+      "warnings": 0,
+      "errors": 0
+    },
+    "categories": {
+      "blocking": {
+        "count": 0,
+        "issues": []
+      },
+      "introduced": {
+        "count": 0,
+        "issues": []
+      },
+      "inherited": {
+        "count": 0,
+        "issues": []
+      },
+      "source-import": {
+        "count": 0,
+        "summary": {
+          "warning_count": 0,
+          "by_code": {}
+        }
+      }
+    }
+  },
+  "resources": {
+    "unresolved_template_tokens": [],
+    "fonts": {
+      "stacks": [
+        "Microsoft YaHei, Arial",
+        "Microsoft YaHei, Consolas"
+      ],
+      "generic_only_stacks": [],
+      "unsafe_exported_faces": []
+    },
+    "images": {
+      "data_uri": 0,
+      "local": 0,
+      "external": 0,
+      "external_references": []
+    }
+  },
+  "export_policy": {
+    "project_svg_contract": "strict",
+    "dangerous_normalization_count": 0
+  },
+  "deck_motion": {
+    "transition": {
+      "effect": "fade",
+      "effect_options": {},
+      "duration": 0.4,
+      "auto_advance": null,
+      "sound": null
+    },
+    "animation": {
+      "effect": "none",
+      "effect_request": null,
+      "duration": 0.4,
+      "stagger": 0.5,
+      "trigger": "after-previous"
+    },
+    "cli_overrides": {
+      "transition": false,
+      "transition_duration": false,
+      "auto_advance": false,
+      "transition_sound": false,
+      "animation": false,
+      "animation_duration": false,
+      "animation_stagger": false,
+      "animation_trigger": false
+    },
+    "narration_timings": false
+  },
+  "backup_path": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/presentations/OmicsClaw_GroupMeeting_20261008_Harness/backup/20261008_030831/svg_output",
+  "conversion_trace_path": null
+}

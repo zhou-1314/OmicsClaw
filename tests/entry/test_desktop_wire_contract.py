@@ -141,8 +141,8 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/jobs/{job_id}/approval/{call_id}",
         "/artifacts",
         "/artifacts/{artifact_id}",
-       "/remote/hosts",
-       "/remote/hosts/{alias}",
+        "/remote/hosts",
+        "/remote/hosts/{alias}",
         "/remote/hosts/aliases",
         "/remote/hosts/{alias}/files/tree",
         "/remote/hosts/{alias}/files/serve",
@@ -159,8 +159,13 @@ def test_served_paths_names_the_routes_the_app_mounts():
         "/notebooks/{notebook_id}/live-state",
         "/notebooks/{notebook_id}/live-app",
         "/notebooks/{notebook_id}/live-app/state",
+        "/notebooks/{notebook_id}/slice",
         "/compute/status",
-   )
+        "/connectors",
+        "/connectors/{name}",
+        "/connectors/{name}/check",
+        "/permissions/rules",
+    )
 
 
 # ---- ``/health`` against the client's own validator ---------------------
@@ -419,7 +424,6 @@ def test_building_the_http_app_needs_fastapi_and_says_so():
             create_desktop_app(object())  # type: ignore[arg-type]
     else:  # pragma: no cover - not this machine
         pytest.skip("fastapi is installed here; see test_desktop_http.py")
-
 
 
 def test_source_build_identity_includes_untracked_runtime_files(tmp_path):

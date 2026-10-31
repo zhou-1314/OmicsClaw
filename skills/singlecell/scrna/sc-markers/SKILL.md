@@ -87,6 +87,7 @@ Calling `use_skill("sc-markers")` automatically loads `kernel.py` helpers into t
 - `find_markers(adata, groupby="leiden", method="wilcoxon", min_in_group_fraction=0.25, min_fold_change=0.25, max_out_group_fraction=0.5)`
 - `top_markers(markers_df, n_top=10)`
 - `cluster_marker_summary(markers_df, fdr=0.05)`
+- `check_homogeneous_null(markers_df, fdr=0.05, min_lfc=1.0, min_pct_gap=0.25)` — guards against Double Dipping on homogeneous single-cluster populations.
 
 ## 3. Output Format & Verification Contract
 

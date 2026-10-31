@@ -14,7 +14,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from collections.abc import Callable
@@ -52,6 +52,7 @@ from omicsclaw.mcp import (
     StatusListener,
     load_mcp_config,
 )
+from omicsclaw.connectors.registry import merge_builtin_connectors
 from omicsclaw.memory.artifacts import (
     ArtifactRecord,
     ArtifactStore,
@@ -637,6 +638,49 @@ class WorkspaceKernelBinding:
         self._notebooks = None
         self._notebooks_db = None
 
+    def _persist_sidecar_to_workspace(
+        self,
+        skill_name: str,
+        kernel_path: Path,
+        src: str,
+    ) -> None:
+        """Persist a loaded sidecar's kernel.py and metadata into workspace provenance."""
+        import hashlib
+
+        try:
+            sidecar_dir = self._root / "provenance" / "sidecars" / skill_name
+            sidecar_dir.mkdir(parents=True, exist_ok=True)
+            (sidecar_dir / "kernel.py").write_text(src, encoding="utf-8")
+            sha = hashlib.sha256(src.encode("utf-8")).hexdigest()
+            entry = {
+                "skill": skill_name,
+                "kernel_path": str(kernel_path.resolve()),
+                "staged_path": f"provenance/sidecars/{skill_name}/kernel.py",
+                "kernel_sha256": sha,
+            }
+            for prov_dir in (
+                self._root / "provenance",
+                self._root / ".omicsclaw" / "provenance",
+            ):
+                prov_dir.mkdir(parents=True, exist_ok=True)
+                manifest_file = prov_dir / "skills_loaded.json"
+                items: list[dict[str, str]] = []
+                if manifest_file.is_file():
+                    try:
+                        raw = json.loads(manifest_file.read_text(encoding="utf-8"))
+                        if isinstance(raw, list):
+                            items = [x for x in raw if isinstance(x, dict)]
+                    except Exception:  # noqa: BLE001
+                        items = []
+                items = [x for x in items if x.get("skill") != skill_name]
+                items.append(entry)
+                manifest_file.write_text(
+                    json.dumps(items, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+        except OSError:
+            pass
+
     def register_skill_sidecar(
         self,
         session_id: str,
@@ -658,7 +702,9 @@ class WorkspaceKernelBinding:
         if not exports:
             return ()
         sid = str(session_id or "").strip() or "default"
-        self._session_sidecars.setdefault(sid, {})[skill_name] = (kernel_path, src)
+        resolved_kp = kernel_path.resolve()
+        self._session_sidecars.setdefault(sid, {})[skill_name] = (resolved_kp, src)
+        self._persist_sidecar_to_workspace(skill_name, resolved_kp, src)
         return exports
 
     async def annotate_skill(self, skill: Skill, _body: str) -> str:
@@ -710,6 +756,7 @@ class WorkspaceKernelBinding:
         kid = id(kernel)
         done = self._injected_sidecars.setdefault(kid, set())
         for sname, (kpath, src) in merged.items():
+            self._persist_sidecar_to_workspace(sname, kpath, src)
             if sname in done:
                 continue
             code = build_sidecar_bootstrap_code(sname, kpath, src, skills_root=self._skills_root)
@@ -849,7 +896,22 @@ class WorkspaceKernelBinding:
             col = str(args.get("collection", "cells"))
             snap = await self.notebooks.snapshot(nid)
             return json.dumps({"collection": col, "items": snap.get(col, []), "nextCursor": None}, ensure_ascii=False, default=str)
+        if action in {"replay", "export_and_replay"}:
+            receipt = await self.notebooks.replay(
+                nid,
+                self._root,
+                artifact_store=self._ensure_store(),
+                module=str(args.get("module") or "") or None,
+            )
+            return json.dumps(receipt, ensure_ascii=False, default=str)
         if action == "receipt":
+            receipt_file = self._root / "provenance" / "replay_receipt.json"
+            if receipt_file.is_file():
+                try:
+                    payload = json.loads(receipt_file.read_text(encoding="utf-8"))
+                    return json.dumps({"found": True, "receipt": payload}, ensure_ascii=False)
+                except ValueError:
+                    pass
             return json.dumps({"found": False, "receipt": None}, ensure_ascii=False)
         return json.dumps({"ok": True, "action": action, "notebook_id": nid, "arguments": args}, ensure_ascii=False)
 
@@ -934,7 +996,12 @@ class WorkspaceKernelBinding:
         cell_id = cell_id or execution_id
         chunks: list[str] = []
         store = self._notebook_store
-        cell_prov = {"source": "persistent_kernel", **({"description": description} if description else {})}
+        cell_prov = {
+            "source": "persistent_kernel",
+            "code": code,
+            "language": language,
+            **({"description": description} if description else {}),
+        }
         if store is not None:
             base_cell = NotebookCell(
                 notebook_id=notebook_id,
@@ -1001,7 +1068,7 @@ class WorkspaceKernelBinding:
                     status="interrupted",
                     output=output,
                     provenance={
-                        "source": "persistent_kernel",
+                        **cell_prov,
                         "execution_id": execution_id,
                     },
                     trust_label="kernel_output_data",
@@ -1015,7 +1082,7 @@ class WorkspaceKernelBinding:
                         status="interrupted",
                         output=output,
                         provenance={
-                            "source": "persistent_kernel",
+                            **cell_prov,
                             "execution_id": execution_id,
                         },
                         trust_label="kernel_output_data",
@@ -1037,7 +1104,7 @@ class WorkspaceKernelBinding:
                     status="failed",
                     output=output,
                     provenance={
-                        "source": "persistent_kernel",
+                        **cell_prov,
                         "execution_id": execution_id,
                     },
                     trust_label="kernel_output_data",
@@ -1051,7 +1118,7 @@ class WorkspaceKernelBinding:
                         status="failed",
                         output=output,
                         provenance={
-                            "source": "persistent_kernel",
+                            **cell_prov,
                             "execution_id": execution_id,
                         },
                         trust_label="kernel_output_data",
@@ -1072,8 +1139,12 @@ class WorkspaceKernelBinding:
             "stdout": "".join(chunks),
             "stderr": result.stderr,
             "error": result.error,
-            "figures": [dataclasses.asdict(f) for f in result.figures],
+            "figures": [asdict(f) for f in result.figures],
             "files_written": getattr(result, "files_written", []),
+            "files_read": getattr(result, "files_read", []),
+            "skill_calls": getattr(result, "skill_calls", []),
+            "skills_loaded": getattr(result, "skills_loaded", []),
+            "object_versions": getattr(result, "object_versions", []),
         }
         if store is not None:
             await store.update_execution(
@@ -1081,7 +1152,7 @@ class WorkspaceKernelBinding:
                 status=status,
                 output=output,
                 provenance={
-                    "source": "persistent_kernel",
+                    **cell_prov,
                     "execution_id": execution_id,
                 },
                 trust_label="kernel_output_data",
@@ -2535,8 +2606,20 @@ async def open_app(
     :meth:`AgentApp.aclose`, which also stops the servers, removes the
     container and closes the memory database. Raises :exc:`ValueError` if
     :attr:`AppConfig.mcp_connect_timeout_s` is not positive.
+
+    The built-in connectors switched on in
+    ``<workspace>/.omicsclaw/connectors.json``
+    (:mod:`omicsclaw.connectors.registry`) are appended to the servers of
+    ``.mcp.json`` and connected the same way; a ``.mcp.json`` entry with
+    the same name wins over the built-in one.
     """
     servers = load_mcp_config(config.mcp_config_path())
+    merged = merge_builtin_connectors(servers, config.workspace)
+    servers = merged.config
+    if merged.added:
+        _log.info("built-in connectors enabled: %s", ", ".join(merged.added))
+    for name in merged.shadowed:
+        _log.info("built-in connector %s is overridden by .mcp.json", name)
     sandbox = await open_sandbox(config, on_change=on_sandbox_change)
     try:
         skills = build_skill_index(config)

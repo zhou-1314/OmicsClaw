@@ -1,0 +1,227 @@
+[
+  {
+    "number": 1,
+    "stem": "01_cover",
+    "old": "01_cover"
+  },
+  {
+    "number": 2,
+    "stem": "02_problem",
+    "old": "02_problem"
+  },
+  {
+    "number": 3,
+    "stem": "03_scope",
+    "old": "03_scope"
+  },
+  {
+    "number": 4,
+    "stem": "04_map",
+    "old": "04_map"
+  },
+  {
+    "number": 5,
+    "stem": "05_request",
+    "old": "05_request"
+  },
+  {
+    "number": 6,
+    "stem": "06_schema",
+    "old": "06_schema"
+  },
+  {
+    "number": 7,
+    "stem": "07_provider",
+    "old": "07_provider"
+  },
+  {
+    "number": 8,
+    "stem": "08_engine",
+    "old": "08_engine"
+  },
+  {
+    "number": 9,
+    "stem": "09_thinking",
+    "old": null
+  },
+  {
+    "number": 10,
+    "stem": "10_tools",
+    "old": "09_tools"
+  },
+  {
+    "number": 11,
+    "stem": "11_primitives",
+    "old": null
+  },
+  {
+    "number": 12,
+    "stem": "12_edit",
+    "old": null
+  },
+  {
+    "number": 13,
+    "stem": "13_parallel",
+    "old": null
+  },
+  {
+    "number": 14,
+    "stem": "14_prompt",
+    "old": null
+  },
+  {
+    "number": 15,
+    "stem": "15_skills",
+    "old": "12_skills"
+  },
+  {
+    "number": 16,
+    "stem": "16_context",
+    "old": "10_context"
+  },
+  {
+    "number": 17,
+    "stem": "17_memory_plan",
+    "old": "11_memory_plan"
+  },
+  {
+    "number": 18,
+    "stem": "18_reminders",
+    "old": null
+  },
+  {
+    "number": 19,
+    "stem": "19_recovery",
+    "old": null
+  },
+  {
+    "number": 20,
+    "stem": "20_entry",
+    "old": "24_entry"
+  },
+  {
+    "number": 21,
+    "stem": "21_surfaces",
+    "old": "25_surfaces"
+  },
+  {
+    "number": 22,
+    "stem": "22_permission",
+    "old": "19_permission"
+  },
+  {
+    "number": 23,
+    "stem": "23_sandbox",
+    "old": "20_sandbox"
+  },
+  {
+    "number": 24,
+    "stem": "24_skillenv",
+    "old": "21_skillenv"
+  },
+  {
+    "number": 25,
+    "stem": "25_extensions",
+    "old": "22_extensions"
+  },
+  {
+    "number": 26,
+    "stem": "26_observe",
+    "old": "23_observe"
+  },
+  {
+    "number": 27,
+    "stem": "27_eval",
+    "old": null
+  },
+  {
+    "number": 28,
+    "stem": "28_boundary",
+    "old": "13_boundary"
+  },
+  {
+    "number": 29,
+    "stem": "29_api_cli",
+    "old": "14_api_cli"
+  },
+  {
+    "number": 30,
+    "stem": "30_modules",
+    "old": "15_modules"
+  },
+  {
+    "number": 31,
+    "stem": "31_replay",
+    "old": "16_replay"
+  },
+  {
+    "number": 32,
+    "stem": "32_review",
+    "old": "17_review"
+  },
+  {
+    "number": 33,
+    "stem": "33_python_r",
+    "old": "18_python_r"
+  },
+  {
+    "number": 34,
+    "stem": "34_deploy",
+    "old": "26_deploy"
+  },
+  {
+    "number": 35,
+    "stem": "35_case",
+    "old": "27_case"
+  },
+  {
+    "number": 36,
+    "stem": "36_reliability",
+    "old": "28_reliability"
+  },
+  {
+    "number": 37,
+    "stem": "37_validation",
+    "old": "29_validation"
+  },
+  {
+    "number": 38,
+    "stem": "38_progress",
+    "old": "30_progress"
+  },
+  {
+    "number": 39,
+    "stem": "39_next",
+    "old": "31_next"
+  },
+  {
+    "number": 40,
+    "stem": "40_discussion",
+    "old": "32_discussion"
+  },
+  {
+    "number": 41,
+    "stem": "41_components",
+    "old": "33_components"
+  },
+  {
+    "number": 42,
+    "stem": "42_domains",
+    "old": "34_domains"
+  },
+  {
+    "number": 43,
+    "stem": "43_commands",
+    "old": "35_commands"
+  },
+  {
+    "number": 44,
+    "stem": "44_mapping",
+    "old": null
+  },
+  {
+    "number": 45,
+    "stem": "45_sources",
+    "old": "36_sources"
+  }
+]

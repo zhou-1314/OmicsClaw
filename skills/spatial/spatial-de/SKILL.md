@@ -78,6 +78,7 @@ de_df = stats_res.results_df.reset_index().rename(columns={"index": "gene"})
 Calling `use_skill("spatial-de")` automatically loads `kernel.py` helpers into the persistent Python kernel:
 - `spatial_de(adata, groupby="leiden", method="wilcoxon", layer=None)`
 - `de_summary(df, fdr=0.05)`
+- `spatial_pseudobulk(adata, sample_key='slide_id', condition_key='condition', domain_key=None, target_domain=None, layer='counts', min_spots=10)`
 
 ## 3. Output Format & Verification Contract
 

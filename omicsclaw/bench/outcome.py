@@ -186,6 +186,17 @@ class Evidence:
     commands: tuple[Command, ...] | None = ()
     notes: Mapping[str, Any] = field(default_factory=dict)
 
+    @property
+    def wall_s(self) -> float:
+        """Total interaction wall-clock seconds, if reported by the adapter."""
+        val = self.notes.get("wall_s", 0.0) if isinstance(self.notes, Mapping) else 0.0
+        return float(val) if isinstance(val, (int, float)) else 0.0
+
+    @property
+    def agent(self) -> Evidence:
+        """Self-alias for callers referencing ``evidence.agent.turns``."""
+        return self
+
 
 def classify(
     exit: ProcessExit, evidence: Evidence, missing: Sequence[str]

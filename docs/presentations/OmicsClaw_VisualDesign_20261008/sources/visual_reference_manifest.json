@@ -1,0 +1,110 @@
+[
+  {
+    "chapter": "01",
+    "name": "967047_img_002.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/_assets/967047_img_002.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/01 架构演进 从 Framework 到 Harness，Agent 到底需要怎样的底层支撑【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 2,
+    "source_sha256": "946778adc4838bc363192684bd5da8afa4d560bc5ef714726392d23a95233e5a"
+  },
+  {
+    "chapter": "01",
+    "name": "967047_img_003.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/_assets/967047_img_003.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/01 架构演进 从 Framework 到 Harness，Agent 到底需要怎样的底层支撑【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 3,
+    "source_sha256": "3f973f802a575d2c65b932a4ed50e045929be1f154c28988252684e941cb2632"
+  },
+  {
+    "chapter": "04",
+    "name": "967860_img_001.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/_assets/967860_img_001.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/04 大脑接入 抽象 Provider 接口，适配 Claude 与 OpenAI 兼容大模型【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 7,
+    "source_sha256": "7997846fa8d6383aea56a73213a9b46d4a8258fc51c065fca0e515f5124d5e84"
+  },
+  {
+    "chapter": "06",
+    "name": "970292_img_001.jpg",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/_assets/970292_img_001.jpg",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/06 大道至简 解密 OpenClaw 最简工具集法则与 YOLO 执行哲学【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 8,
+    "source_sha256": "7a55e8c3276bd2d37c7fe2d01dbb7920a861406007f8b979b5b6390097dd86fc"
+  },
+  {
+    "chapter": "10",
+    "name": "975209_img_001.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/_assets/975209_img_001.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/10 提示词组装 告别面条代码，动态加载 AGENTS.md 与外挂 Skills.md",
+    "usage": "adapted",
+    "page": 9,
+    "source_sha256": "606205b8ca270a4732cdb6546ca088365609795a519f509a20005d713f53bf72"
+  },
+  {
+    "chapter": "12",
+    "name": "977397_img_001.jpg",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/_assets/977397_img_001.jpg",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/12 突破内存 基于阶梯降级的 Context Compaction 策略.md",
+    "usage": "adapted",
+    "page": 11,
+    "source_sha256": "5c22977d6a1889f19f476e5a76fab9c9ae723b4debb7b1a6331e428bd40e307c"
+  },
+  {
+    "chapter": "13",
+    "name": "978775_img_001.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/_assets/978775_img_001.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/13 记忆沉淀 状态外部化，基于文件系统的持久化记忆与待办管理【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 12,
+    "source_sha256": "c330a8ee4d2cc3c1e5a64de117089ad9584c1859cbb0291badbc5fd4068410b6"
+  },
+  {
+    "chapter": "14",
+    "name": "978759_img_001.jpg",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/_assets/978759_img_001.jpg",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/14 错误自愈 上下文感知的 Error Recovery 提示模板注入机制【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 14,
+    "source_sha256": "4b0282076ef52ee748210bca4ef1d1fcaa30e0caffa2ec7cb3fde818b80240bf"
+  },
+  {
+    "chapter": "16",
+    "name": "979408_img_001.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/_assets/979408_img_001.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/16 防御纵深 利用 Middleware 实现高危命令拦截与飞书人工审批.md",
+    "usage": "adapted",
+    "page": 15,
+    "source_sha256": "37b677352537026b2d59c4a21291f3dbda188742a21f5e0c191ba353b23f9b16"
+  },
+  {
+    "chapter": "17",
+    "name": "979413_img_001.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/_assets/979413_img_001.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/17 任务委派 引入 Subagent 隔离复杂探索任务的上下文瓶颈.md",
+    "usage": "adapted",
+    "page": 18,
+    "source_sha256": "c31b5337df461944d8d8dcc6a67595299c5e255dec72cdac455d8678f32cd366"
+  },
+  {
+    "chapter": "19",
+    "name": "981479_img_001.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/_assets/981479_img_001.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/19 洞察黑盒 为 Agent 引入 Tracing 机制复盘失败决策路径.md",
+    "usage": "embedded-original",
+    "page": 19,
+    "source_sha256": "d6758424ca2efe854d61633309d159ecbcbadb14a8447d8f75dbf768debf976b"
+  },
+  {
+    "chapter": "20",
+    "name": "981494_img_002.png",
+    "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/_assets/981494_img_002.png",
+    "chapter_path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/20 科学度量 如何构建 Benchmark 自动化评估脚本，科学量化 Harness 引擎性能【公.众.号 密知圈】.md",
+    "usage": "adapted",
+    "page": 20,
+    "source_sha256": "0f598686b7de8da59bde6899260b487072dfa16e7d43ed6240e4f6c9c15c68de"
+  }
+]

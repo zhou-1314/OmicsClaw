@@ -340,6 +340,7 @@ Engine's problem, not this layer's.
 TIMEOUT_ENV_VARS = ("OMICSCLAW_LLM_TIMEOUT_SECONDS", "LLM_REQUEST_TIMEOUT_SECS")
 CONNECT_TIMEOUT_ENV_VARS = ("OMICSCLAW_LLM_CONNECT_TIMEOUT_SECONDS",)
 MAX_RETRIES_ENV_VARS = ("OMICSCLAW_LLM_MAX_RETRIES", "LLM_MAX_RETRIES")
+REASONING_EFFORT_ENV_VARS = ("OMICSCLAW_REASONING_EFFORT", "LLM_REASONING_EFFORT")
 """First name wins. The repo-namespaced spelling is listed first in each
 pair so this repo's own convention takes precedence over the harness's."""
 
@@ -425,6 +426,16 @@ class ProviderConfig:
         typo'd ``max_token=`` that quietly did nothing would surface much
         later as an unexplained cost or truncation.
         """
+        if "reasoning_effort" in overrides:
+            effort = overrides.pop("reasoning_effort")
+            merged_extra = dict(self.extra)
+            if isinstance(overrides.get("extra"), dict):
+                merged_extra.update(overrides["extra"])
+            if effort:
+                merged_extra["reasoning_effort"] = str(effort)
+            else:
+                merged_extra.pop("reasoning_effort", None)
+            overrides["extra"] = merged_extra
         unknown = sorted(set(overrides) - set(ProviderConfig.__dataclass_fields__))
         if unknown:
             known = ", ".join(sorted(ProviderConfig.__dataclass_fields__))
@@ -630,6 +641,10 @@ def resolve_config(
         # endpoints, so it stands in when nothing more specific exists.
         resolved_key = str(source.get("OPENAI_API_KEY", "") or "")
 
+    env_effort = _first_env(source, *REASONING_EFFORT_ENV_VARS)
+    initial_extra: Mapping[str, Any] = (
+        {"reasoning_effort": env_effort} if env_effort else _EMPTY_EXTRA
+    )
     config = ProviderConfig(
         provider=key,
         model=resolved_model,
@@ -640,6 +655,7 @@ def resolve_config(
             source, DEFAULT_CONNECT_TIMEOUT_SECONDS, *CONNECT_TIMEOUT_ENV_VARS
         ),
         max_retries=_env_int(source, DEFAULT_MAX_RETRIES, *MAX_RETRIES_ENV_VARS),
+        extra=initial_extra,
     )
     return config.with_overrides(**overrides) if overrides else config
 

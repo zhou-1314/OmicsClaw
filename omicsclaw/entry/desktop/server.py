@@ -27,7 +27,12 @@ Routes (see :data:`~omicsclaw.entry.desktop.wire_contract.SERVED_PATHS`):
 * ``GET``/``POST /remote/hosts`` and ``DELETE /remote/hosts/{alias}`` —
   the remote-execution host knowledge base
   (:mod:`~omicsclaw.entry.desktop.remote_hosts`), answering
-  ``503 remote_execution_disabled`` on a deployment with no plane bound.
+  ``503 remote_execution_disabled`` on a deployment with no plane bound;
+* ``GET /connectors``, ``PUT /connectors/{name}`` and
+  ``POST /connectors/{name}/check`` — built-in and user connectors, their
+  switches and a fresh health check
+  (:mod:`~omicsclaw.entry.desktop.connectors_service`);
+* ``GET /permissions/rules`` — the permission rule file, read-only.
 
 A ``/chat/stream`` message whose content is exactly ``/compact`` compacts
 the session's history instead of being sent to the model. A
@@ -98,6 +103,12 @@ from .chat_service import (
 
 from .artifacts import mount_artifacts_routes
 from .catalog import mcp_servers, skill_catalog, skill_detail
+from .connectors_service import (
+    check_connector,
+    connector_listing,
+    permission_rules_payload,
+    set_connector_enabled,
+)
 from .doctor import _sandbox_snapshot, doctor_report
 from .service import allow_sandbox_domain, revoke_sandbox_domain
 from .files import (
@@ -664,7 +675,39 @@ def create_desktop_app(
             return _unauthorized()
         from .service import compute_status_payload
 
-        return compute_status_payload(app)
+        session_id = request.query_params.get("session_id") or None
+        return compute_status_payload(app, session_id=session_id)
+
+    @api.get("/connectors")
+    async def connectors(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        return await asyncio.to_thread(connector_listing, app)
+
+    @api.put("/connectors/{name}")
+    async def put_connector(request: Request, name: str) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        try:
+            document = await _read_json(request, CONTROL_MAX_REQUEST_BYTES)
+            return await asyncio.to_thread(set_connector_enabled, app, name, document)
+        except DesktopIngressError as exc:
+            return _refused(exc)
+
+    @api.post("/connectors/{name}/check")
+    async def connector_check(request: Request, name: str) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        try:
+            return await check_connector(app, name)
+        except DesktopIngressError as exc:
+            return _refused(exc)
+
+    @api.get("/permissions/rules")
+    async def permission_rules(request: Request) -> Any:
+        if not _authorized(request):
+            return _unauthorized()
+        return await asyncio.to_thread(permission_rules_payload, app)
 
     from omicsclaw.memory.database import Database
 

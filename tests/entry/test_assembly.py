@@ -55,7 +55,6 @@ from omicsclaw.engine import (
 from omicsclaw.entry import assembly
 from omicsclaw.entry.assembly import (
     LOGGER_NAME,
-    SAFETY_RULES,
     SHUTDOWN_GRACE_S,
     AgentApp,
     build_app,
@@ -668,28 +667,10 @@ def test_the_safety_rules_reach_the_system_prompt(tmp_path):
 
     assert "## Safety rules" in system
     assert "never leaves this machine" in system
-    assert "disclaimer" in system
+    assert "disclaimer" not in system.lower()
     assert "write the value you chose and the reason for it" in system
     assert "Never invent gene associations" in system
     assert "Warn before overwriting" in system
-
-
-def test_the_disclaimer_is_the_one_skill_reports_write():
-    """The cost of holding the rules as a constant, charged here.
-
-    A constant cannot vanish from the prompt the way a scraped heading
-    can — it can only drift, and drift is what this assertion catches.
-    Two texts must carry the same sentence: skill reports write
-    ``skills._sdk.report.DISCLAIMER``, and a report the agent writes
-    itself follows ``SAFETY_RULES``. Whether the framework's own
-    ``omicsclaw.common.report.DISCLAIMER`` matches the ``_sdk`` one is
-    ``tests/sdk/test_result_contract.py``'s check. The skill-SDK boundary
-    forbids ``omicsclaw/**`` production code from importing
-    ``skills._sdk``; a test is not bound by it.
-    """
-    from omicsclaw.common.report import DISCLAIMER
-
-    assert DISCLAIMER in SAFETY_RULES
 
 
 def test_a_missing_contract_file_removes_its_section(tmp_path):

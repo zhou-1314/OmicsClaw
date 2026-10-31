@@ -329,8 +329,8 @@ Python 用户也可以用 `omicsclaw.skills.sidecar.load_skill` 加载 `kernel.p
 **Q：会话存在哪里？怎么继续？**
 `<workspace>/.omicsclaw/memory.db`。`/sessions` 查看，`/resume` 或 `oc cli --session <id>` 继续。
 
-**Q：每份报告里的免责声明是什么？**
-"OmicsClaw is a research and educational tool for multi-omics analysis. It is not a medical device and does not provide clinical diagnoses. Consult a domain expert before making decisions based on these results."——它同时写在 system prompt 的 safety 段与 `omicsclaw/common/report.py` 的 `DISCLAIMER` 中。
+**Q：分析结果还会自动附加免责声明吗？**
+不会。结果总结和输出目录说明不再自动附加固定免责声明。
 
 ---
 

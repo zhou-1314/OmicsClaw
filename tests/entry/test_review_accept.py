@@ -8,7 +8,6 @@ import shutil
 
 import pytest
 
-from omicsclaw.common.report import DISCLAIMER
 from omicsclaw.entry import AppConfig, build_app
 from omicsclaw.schema import Message, ToolCall
 from tests.entry.test_turn_runner import Scripted
@@ -102,7 +101,7 @@ def _replayed(project: _FakeProject, module: str = "01_m") -> str:
 def _report(project: _FakeProject, module: str, text: str | None = None) -> Path:
     nn, slug = module.split("_", 1)
     report = project.root / "results" / module / f"M{nn}_{slug}_REPORT.md"
-    content = text or f"# Module Report\n\nAll checks passed.\n\n{DISCLAIMER}\n"
+    content = text or "# Module Report\n\nAll checks passed.\n"
     report.write_text(content, encoding="utf-8")
     return report
 

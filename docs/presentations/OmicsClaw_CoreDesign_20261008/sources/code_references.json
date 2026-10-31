@@ -1,0 +1,163 @@
+[
+  {
+    "slide": 1,
+    "title": "OmicsClaw",
+    "path": "README.md",
+    "sha256": "1e922fba57864fc56d7b42c28bceceaac261df0232882f01d4d5d2fa608c2a16"
+  },
+  {
+    "slide": 2,
+    "title": "模型能决定下一步，执行更需要支撑",
+    "path": "sources/background_reference.md"
+  },
+  {
+    "slide": 3,
+    "title": "分析助手为什么需要运行时支撑",
+    "path": "OMICSCLAW.md",
+    "sha256": "8bb1791714abe67673b336486863e0999216b3bd225805fcfc53c81993c22944"
+  },
+  {
+    "slide": 4,
+    "title": "系统地图：交互、决策、执行与证据",
+    "path": "omicsclaw/entry/assembly.py",
+    "sha256": "7de1ff74fd06673efdbf42ba218bd554d5c353a84823f19904339b6981c60c2f"
+  },
+  {
+    "slide": 5,
+    "title": "engine：一个内核维持 ReAct 循环",
+    "path": "omicsclaw/engine/loop.py",
+    "sha256": "8d3cac14c87bc83435cb1458e798157f633a78d4843a56f2f5c9ad57dc6daa19"
+  },
+  {
+    "slide": 6,
+    "title": "schema：先统一组件之间的语言",
+    "path": "omicsclaw/schema/__init__.py",
+    "sha256": "c1896b2f3ec100dc77bf50a9cfc3fbac912bbff2c65a74528df8bfb352401c2d"
+  },
+  {
+    "slide": 7,
+    "title": "provider：把模型差异收在适配层",
+    "path": "omicsclaw/provider/base.py",
+    "sha256": "816c7f0a94338fea91f2da020127279f0d3b9260776359f683a8c3b2e238165a"
+  },
+  {
+    "slide": 8,
+    "title": "ToolRegistry：注册、描述、执行集中在一处",
+    "path": "omicsclaw/tools/registry.py",
+    "sha256": "486fab8313a5576767e1b8b4f701db894c51a1363903607414b30f23158ad749"
+  },
+  {
+    "slide": 9,
+    "title": "PromptAssembler：把规则按职责组装",
+    "path": "omicsclaw/context/prompt.py",
+    "sha256": "bb4616cf3b84d5144e8900b3a86533688e2fd76a39f80d409dcadb72e3b5d0a6"
+  },
+  {
+    "slide": 10,
+    "title": "skills：先看目录，再加载方法",
+    "path": "omicsclaw/skills/index.py",
+    "sha256": "49fae0dacfc396d1d9249c65e1580e9558a94b1bd1393464ab22b7cae7152253"
+  },
+  {
+    "slide": 11,
+    "title": "context：把有限窗口留给当前判断",
+    "path": "omicsclaw/context/progressive.py",
+    "sha256": "fb3406c3abdd4f039400a7355645530d13b7f2fa86244b9799ce82be4522346c"
+  },
+  {
+    "slide": 12,
+    "title": "memory 与 planning 保存不同信息",
+    "path": "omicsclaw/memory/__init__.py",
+    "sha256": "5123f536517b3b6f60bdedf105bf91fbb1b0f2dadb4c279dbb31e499a9c673a8"
+  },
+  {
+    "slide": 13,
+    "title": "entry 把组件接成可管理的会话",
+    "path": "omicsclaw/entry/session.py",
+    "sha256": "240eaf251c2f598494d27ff4af27f9e7ffd7e0cc9348976a4f65ec373e81316f"
+  },
+  {
+    "slide": 14,
+    "title": "失败之后，谁负责恢复？",
+    "path": "omicsclaw/engine/retry.py",
+    "sha256": "6a0f82099afba9eae0ef21633d0eacb24935ffdc9e4d227d55571cd3a50ac6e4"
+  },
+  {
+    "slide": 15,
+    "title": "permission：策略决定，入口负责询问",
+    "path": "omicsclaw/permission/gate.py",
+    "sha256": "0a5501f4182f14fde34da946a85712d30339e4e321eb9439244dd0d066c10290"
+  },
+  {
+    "slide": 16,
+    "title": "sandbox 与 local-first 的边界",
+    "path": "omicsclaw/sandbox/__init__.py",
+    "sha256": "4e1db63b8a71405c00715e174e84e39c59a5bdf3c22ebc1d0ae6d6455b59680d"
+  },
+  {
+    "slide": 17,
+    "title": "skillenv：补依赖时保留基础环境",
+    "path": "omicsclaw/skillenv/overlay.py",
+    "sha256": "c4a458deb5a4247230f222ed01833ffd2accfa6344a014ba90743e5eb2273406"
+  },
+  {
+    "slide": 18,
+    "title": "MCP 与 subagent 扩展两类能力",
+    "path": "omicsclaw/subagent/task_tool.py",
+    "sha256": "1a83f0490fd713e93964b25f4c7004dcac88111aa1ab9261a88b936ae8b656b8"
+  },
+  {
+    "slide": 19,
+    "title": "hooks 与 observability 观察已有执行",
+    "path": "omicsclaw/observability/__init__.py",
+    "sha256": "6b7881ee3729a51951e299213da8498737a121479da352c7fedc56e9d619dd8b"
+  },
+  {
+    "slide": 20,
+    "title": "评估要检查动作与副作用",
+    "path": "omicsclaw/bench/run.py",
+    "sha256": "70b7d001efbbc1e9f341d23ce886bb2cf4656376f745302e9f4f134aeed8c712"
+  },
+  {
+    "slide": 21,
+    "title": "框架与科学代码通过文件契约协作",
+    "path": "tests/sdk/test_boundary.py",
+    "sha256": "32fc295d0748d52bfee4bd3ba5d37925d9160078a79ef2488c046684dba12969"
+  },
+  {
+    "slide": 22,
+    "title": "同一算法，函数库与 CLI 各负其责",
+    "path": "skills/_sdk/notebook/__init__.py",
+    "sha256": "1ef52aa74f9708e9a0ba99c517b6193c0b7fa379c757dfa12319d084242bddc9"
+  },
+  {
+    "slide": 23,
+    "title": "分析模块把代码与输出放在明确位置",
+    "path": "OMICSCLAW.md",
+    "sha256": "8bb1791714abe67673b336486863e0999216b3bd225805fcfc53c81993c22944"
+  },
+  {
+    "slide": 24,
+    "title": "run、status、replay 分别回答不同问题",
+    "path": "skills/_sdk/notebook/run.py",
+    "sha256": "9ec99a8e5c250389c63b01e29d215bac30886f630242421d0f75e0f79282b8aa"
+  },
+  {
+    "slide": 25,
+    "title": "先交付验证结果，审查与接受由用户触发",
+    "path": "omicsclaw/entry/review.py",
+    "sha256": "6664077eb1f3181a400acfe6e923b505f8600b5160c6e65c44c69bdf3b2ad7d8"
+  },
+  {
+    "slide": 26,
+    "title": "四模块案例：检查应落在实际输出上",
+    "path": "docs/plans/0074-singlecell-skill-migration-delivery.md",
+    "sha256": "6f4885fb266b23d42a0fd124331713eb66d1358e7627a5093ffc02c64cf1e47a"
+  },
+  {
+    "slide": 27,
+    "title": "下一阶段优先验证什么？",
+    "path": "README.md",
+    "sha256": "1e922fba57864fc56d7b42c28bceceaac261df0232882f01d4d5d2fa608c2a16"
+  }
+]

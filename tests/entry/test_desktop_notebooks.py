@@ -462,3 +462,147 @@ def test_cell_index_ordering_and_compute_status(tmp_path):
     status = compute_status_payload(type("App", (), {"kernels": None, "config": type("Cfg", (), {"workspace": tmp_path})()})())
     assert status["active_kernels_count"] == 0
     assert status["kernels_rss_bytes"] == 0
+
+
+def test_compute_status_surfaces_handles_object_versions_and_loaded_skills(tmp_path):
+    import json
+    from omicsclaw.entry.desktop.service import compute_status_payload
+    from omicsclaw.kernel.handles import HandleRegistry
+
+    prov_dir = tmp_path / ".omicsclaw" / "provenance"
+    prov_dir.mkdir(parents=True, exist_ok=True)
+    ledger_line = {
+        "session_id": "sess-bio-1",
+        "execution_count": 4,
+        "execution_id": "exec-4",
+        "status": "ok",
+        "timestamp": 1700000100.0,
+        "object_versions": [
+            {
+                "name": "adata",
+                "type": "AnnData",
+                "version": 2,
+                "pointer": "adata@v2",
+                "action": "mutated",
+                "shape": [2700, 1838],
+                "added_obs": ["leiden"],
+                "added_obsm": ["X_umap"],
+            }
+        ],
+        "skills_loaded": [
+            {"skill": "sc-clustering", "module": "sc_clustering_kernel", "functions": ["run_leiden"]}
+        ],
+    }
+    (prov_dir / "kernel_ledger.jsonl").write_text(json.dumps(ledger_line) + "\n", encoding="utf-8")
+
+    from omicsclaw.kernel.handles import KernelHandle
+    handles = HandleRegistry()
+    handles._handles["pbmc3k_processed"] = KernelHandle(
+        adata_id="pbmc3k_processed",
+        session_id="sess-bio-1",
+        revision=(1700000100, 4096),
+        summary="AnnData object with n_obs x n_vars = 2700 x 1838",
+    )
+
+    class FakeMgr:
+        def __init__(self):
+            self.handles = handles
+
+        def snapshot(self):
+            return [
+                {
+                    "session_id": "sess-bio-1",
+                    "language": "python",
+                    "location": "local",
+                    "pid": 43210,
+                    "alive": True,
+                    "executing": True,
+                    "cells": 4,
+                    "age_s": 42.5,
+                    "idle_s": 1.2,
+                    "peak_rss_kb": 512000,
+                    "restart_needed": False,
+                }
+            ]
+
+    app = type(
+        "App",
+        (),
+        {
+            "kernels": type("K", (), {"manager": FakeMgr()})(),
+            "config": type("Cfg", (), {"workspace": tmp_path})(),
+        },
+    )()
+
+    status = compute_status_payload(app)
+    assert status["active_kernels_count"] == 1
+    assert len(status["handles"]) == 1
+    assert status["handles"][0]["adata_id"] == "pbmc3k_processed"
+    assert status["handles"][0]["expression"] == "OV_KERNEL_ADATA['pbmc3k_processed']"
+    assert len(status["object_versions"]) == 1
+    assert status["object_versions"][0]["name"] == "adata"
+    assert status["object_versions"][0]["shape"] == [2700, 1838]
+    assert status["object_versions"][0]["added_obs"] == ["leiden"]
+    assert len(status["skills_loaded"]) == 1
+    assert status["skills_loaded"][0]["skill"] == "sc-clustering"
+
+    k0 = status["kernels"][0]
+    assert k0["executing"] is True
+    assert k0["location"] == "local"
+    assert k0["handles"][0]["adata_id"] == "pbmc3k_processed"
+    assert k0["object_versions"][0]["pointer"] == "adata@v2"
+
+
+def test_harvest_workspace_kernel_ledger_handles_utf8_tail_boundary_and_multiple_ledgers(tmp_path):
+    from omicsclaw.entry.desktop.service import _harvest_workspace_kernel_ledger
+
+    prov_dir = tmp_path / ".omicsclaw" / "provenance"
+    prov_dir.mkdir(parents=True, exist_ok=True)
+    ledger_file = prov_dir / "kernel_ledger.jsonl"
+
+    multibyte_unit = "🧬🔬单细胞空间转录组" * 40
+    old_line = json.dumps({
+        "session_id": "sess-utf8",
+        "execution_count": 1,
+        "timestamp": 1700000001.0,
+        "note": multibyte_unit,
+        "object_versions": [{"name": "adata", "type": "AnnData", "version": 1, "shape": [100, 50]}],
+    }, ensure_ascii=False) + "\n"
+
+    tail_line = json.dumps({
+        "session_id": "sess-utf8",
+        "execution_count": 2,
+        "timestamp": 1700000050.0,
+        "object_versions": [{"name": "adata", "type": "AnnData", "version": 2, "shape": [2500, 1800], "added_obs": ["cluster"]}],
+        "skills_loaded": [{"skill": "spatial-domains", "module": "spatial_domains_kernel"}],
+    }, ensure_ascii=False) + "\n"
+
+    raw_tail_target = 131072
+    filler_record = json.dumps({
+        "session_id": "sess-utf8",
+        "execution_count": 1,
+        "timestamp": 1700000002.0,
+        "padding": "🧬" * 500,
+    }, ensure_ascii=False).encode("utf-8") + b"\n"
+
+    repeats = (raw_tail_target // len(filler_record)) + 3
+    payload_bytes = old_line.encode("utf-8") + (filler_record * repeats) + tail_line.encode("utf-8")
+    assert len(payload_bytes) > 131072
+    ledger_file.write_bytes(payload_bytes)
+
+    nb_prov = tmp_path / "notebook_alpha" / ".omicsclaw" / "provenance"
+    nb_prov.mkdir(parents=True, exist_ok=True)
+    nb_ledger = nb_prov / "kernel_ledger.jsonl"
+    nb_ledger.write_text(json.dumps({
+        "session_id": "sess-utf8",
+        "execution_count": 3,
+        "timestamp": 1700000099.0,
+        "object_versions": [{"name": "adata", "type": "AnnData", "version": 3, "shape": [2500, 1800], "added_obs": ["cluster", "spatial_domain"]}],
+    }) + "\n", encoding="utf-8")
+
+    objs, skills = _harvest_workspace_kernel_ledger(tmp_path)
+    assert "sess-utf8" in objs
+    assert objs["sess-utf8"]["adata"]["version"] == 3
+    assert objs["sess-utf8"]["adata"]["added_obs"] == ["cluster", "spatial_domain"]
+    assert len(skills["sess-utf8"]) == 1
+    assert skills["sess-utf8"][0]["skill"] == "spatial-domains"

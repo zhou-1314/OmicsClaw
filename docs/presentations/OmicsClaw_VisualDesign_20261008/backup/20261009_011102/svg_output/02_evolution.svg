@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" font-family="Microsoft YaHei, Arial" font-size="26" data-pptx-page-role="content">
+<rect id="bg" width="1280" height="720" fill="#F8FAFC" data-pptx-role="background"/>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#007F7A"/></marker></defs>
+<g id="heading" data-pptx-bounds="60 42 1160 116" fill="#17324D"><text x="60" y="66" font-size="20" fill="#007F7A">技术背景 / 从预设流程到运行时决策</text><text x="60" y="123" font-size="40" font-weight="bold">模型能决定下一步，执行更需要支撑</text></g>
+<g id="capability" data-pptx-bounds="60 166 1160 60"><rect x="60" y="166" width="1160" height="60" fill="#D9EEEA"/><text x="82" y="205" fill="#17324D">工具调用、代码生成与多步推理发展 → 根据真实结果调整后续动作</text></g>
+<g id="preset" data-pptx-bounds="60 250 520 298" fill="#20364B">
+<text x="60" y="280" font-size="30" font-weight="bold">Framework 中的预设工作流</text><text x="60" y="320" font-size="20" fill="#526779">开发者事先定义路径与分支条件</text>
+<rect x="60" y="356" width="146" height="62" fill="#E9F1F5"/><text x="81" y="396">输入任务</text>
+<line x1="206" y1="387" x2="240" y2="387" stroke="#007F7A" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="244" y="356" width="132" height="62" fill="#E9F1F5"/><text x="271" y="396">路由</text>
+<path d="M376 387 L402 387 L402 359 L426 359" fill="none" stroke="#007F7A" stroke-width="2" marker-end="url(#arrow)"/><path d="M402 387 L402 442 L426 442" fill="none" stroke="#007F7A" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="432" y="332" width="143" height="58" fill="#E9F1F5"/><text x="451" y="370">步骤 A</text><rect x="432" y="415" width="143" height="58" fill="#E9F1F5"/><text x="451" y="453">步骤 B</text>
+<text x="60" y="529" font-size="20" fill="#526779">适合路径稳定、输入边界清楚的任务</text>
+</g>
+<g id="runtime" data-pptx-bounds="642 250 578 298" fill="#20364B">
+<text x="642" y="280" font-size="30" font-weight="bold">Harness 支撑持续行动循环</text><text x="642" y="320" font-size="20" fill="#526779">模型根据观察选择下一步，运行时约束执行</text>
+<rect x="646" y="354" width="155" height="62" fill="#17324D"/><text x="668" y="394" fill="#FFFFFF">模型判断</text>
+<line x1="801" y1="385" x2="842" y2="385" stroke="#007F7A" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="850" y="354" width="155" height="62" fill="#D9EEEA"/><text x="872" y="394">工具执行</text>
+<line x1="1005" y1="385" x2="1046" y2="385" stroke="#007F7A" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="1054" y="354" width="155" height="62" fill="#D9EEEA"/><text x="1076" y="394">结果观察</text>
+<path d="M1131 416 L1131 456 L724 456 L724 423" fill="none" stroke="#007F7A" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="802" y="447" font-size="20" fill="#007F7A">反馈进入下一轮</text>
+<text x="642" y="529" font-size="20" fill="#526779">运行支撑：权限 · 上下文与状态 · 恢复 · 观测</text>
+</g>
+<g id="meaning" data-pptx-bounds="60 575 1160 80" fill="#17324D"><text x="60" y="605">OmicsClaw：让分析步骤随数据与结果调整，同时保留执行边界和证据。</text><text x="60" y="644" font-size="20" fill="#526779">两种方式可以组合：Framework 可承载行动循环，固定工作流可作为其中的工具。</text></g>
+<g id="footer" data-pptx-role="footer" data-pptx-bounds="60 674 1160 26" fill="#526779" font-size="14"><text x="60" y="691">OmicsClaw · 核心组件与设计思想</text><text x="1174" y="691">02</text></g></svg>

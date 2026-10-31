@@ -1,0 +1,351 @@
+{
+  "schema": "ppt-master.pptx-postflight-report.v1",
+  "status": "passed",
+  "output": {
+    "path": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/presentations/OmicsClaw_CoreDesign_20261008/exports/OmicsClaw_CoreDesign_20261008_112643.pptx",
+    "bytes": 127033
+  },
+  "source": {
+    "svg_slide_count": 27,
+    "layout_definition_count": 0,
+    "fingerprint": {
+      "algorithm": "sha256",
+      "digest": "08d5833b4c1e8a882ea115dfdc4a58a4d9011fa51a7b85d626b94e40b9503f50",
+      "file_count": 27,
+      "files": [
+        {
+          "file": "01_cover.svg",
+          "sha256": "90a012e3a7c381b62af72a66a1f2bb47cb4240aa57b76d65347a52f96df0b3f4"
+        },
+        {
+          "file": "02_evolution.svg",
+          "sha256": "0f2d57fdb902b6ff086167b454ca63fd261cb23e74dca6865a9af286de7e9230"
+        },
+        {
+          "file": "03_problem.svg",
+          "sha256": "0ede87d57f668704c76efc1ca683501d442c4b08d9253879598ca50362928be7"
+        },
+        {
+          "file": "04_map.svg",
+          "sha256": "f619500ac5e99845775b49febde617a1f94d37d74ad7947f74776ed59ae6e557"
+        },
+        {
+          "file": "05_engine.svg",
+          "sha256": "eea9c37c97391469cd7e53df895723bcb23b8668937b438e3066cc9f002aef91"
+        },
+        {
+          "file": "06_schema.svg",
+          "sha256": "d27c96cfaa6b7b1854e46b4331d46be26903639c74fa219af6cb7886eaa40199"
+        },
+        {
+          "file": "07_provider.svg",
+          "sha256": "fed58dcdb28f82e1c451af02e8b867e5a720054168a67ea18cc22aae2e20dab0"
+        },
+        {
+          "file": "08_tools.svg",
+          "sha256": "107cb33c10974d90ce9cae90957935941222cf3088928fb2a67947cba3018f35"
+        },
+        {
+          "file": "09_prompt.svg",
+          "sha256": "1cfb23e9efe9ad4b5b28dd38a939dde873e20da3b550689d651a4f73d162fe9c"
+        },
+        {
+          "file": "10_skills.svg",
+          "sha256": "57d036960214d9616bcf6685f52ffc87860256a8e0248d99a57e2d2209af9161"
+        },
+        {
+          "file": "11_context.svg",
+          "sha256": "501f310f02ef40550171488a7ab0abd6ba85cf087d865b4d6d1122f9f8c8ad7d"
+        },
+        {
+          "file": "12_memory_plan.svg",
+          "sha256": "317dfdf9325878bf55715b175bc2712beebc5a0e1d40b83939ef6b3f902cad52"
+        },
+        {
+          "file": "13_entry.svg",
+          "sha256": "7c8ddf236c845eb81e5a5f17725a0738f0f02dbead64c68968ae3c2c900ac124"
+        },
+        {
+          "file": "14_recovery.svg",
+          "sha256": "da91ce7bb22a976e93cc48010f627113cba2e7a01ef4291d11fd5e9a63f9e121"
+        },
+        {
+          "file": "15_permission.svg",
+          "sha256": "985cefac2eb37a5eaad34f2a0197529c2e96bc5f65b3790746e1cea57c60a907"
+        },
+        {
+          "file": "16_sandbox.svg",
+          "sha256": "2b2c0e090172e5336e6a15f1a38f517a329551b63daf7f0a1b488fd950b1cf44"
+        },
+        {
+          "file": "17_skillenv.svg",
+          "sha256": "521fa7b957a315f4678f16ca20bf851538d5cbb9a5dc41557797ca48e94c732c"
+        },
+        {
+          "file": "18_extensions.svg",
+          "sha256": "f0a39c0aae3fee38acb84cbdd5d51813bcf44936478fdf2e5ecdd994313704fb"
+        },
+        {
+          "file": "19_observe.svg",
+          "sha256": "e521b04d2856c0c89661b0426854fafb99e31dac7ddef8b68ee918db8ba2da88"
+        },
+        {
+          "file": "20_eval.svg",
+          "sha256": "9d69ebc059eb63dc3da06b528efae2138d2c58345757261f209020f20df055e2"
+        },
+        {
+          "file": "21_boundary.svg",
+          "sha256": "0ccd7c654c2b4d68c71815a61ddac9a14b568628721cfb4b885b94ba8a896e55"
+        },
+        {
+          "file": "22_api_cli.svg",
+          "sha256": "e02f2192d8d118ffc773d690ea322ca478e62aa03028feb4eb1c1da9a1f5d872"
+        },
+        {
+          "file": "23_modules.svg",
+          "sha256": "0080f3c5ffa3817065d86307fb73c92ef499ab37752a455ce631e682f8dbf979"
+        },
+        {
+          "file": "24_replay.svg",
+          "sha256": "26d08bc0951453831e7b1f5d368b589590276a582cb412cec5b4192d83b49182"
+        },
+        {
+          "file": "25_review.svg",
+          "sha256": "93725ab3547caee498d190d464d3599fe9bf81544991a789fed1107728ce1a2c"
+        },
+        {
+          "file": "26_case.svg",
+          "sha256": "cb214d4345ea38488883b753cfedc273d7d41cb4db51752b04503815096b452c"
+        },
+        {
+          "file": "27_discussion.svg",
+          "sha256": "91ad55d9e40533a6bc0b3dabdeb3272cfa3dac728dcd4557604c7e82a5abfda0"
+        }
+      ]
+    },
+    "authoring_roundtrip": null
+  },
+  "package": {
+    "zip_integrity": "passed",
+    "corrupt_member": null,
+    "slides": 27,
+    "notes": 27,
+    "masters": 1,
+    "layouts": 1
+  },
+  "checks": {
+    "zip_integrity": "passed",
+    "slide_count": "passed",
+    "internal_relationships": "enforced-at-build",
+    "structured_package": "not-applicable",
+    "transitions": "enforced-at-build",
+    "animations": "enforced-at-build",
+    "project_svg_contract": "enforced-at-build",
+    "compatibility_normalization": "not-applicable",
+    "authoring_roundtrip": "not-applicable",
+    "quality_gate": "passed",
+    "quality_warnings": "passed",
+    "template_tokens": "passed",
+    "external_images": "passed",
+    "font_portability": "passed"
+  },
+  "quality": {
+    "status": "loaded",
+    "path": "docs/presentations/OmicsClaw_CoreDesign_20261008/validation/svg_quality_report.json",
+    "schema": "ppt-master.svg-quality-report.v1",
+    "stage": "final",
+    "source_match": "passed",
+    "source_fingerprint": {
+      "algorithm": "sha256",
+      "digest": "08d5833b4c1e8a882ea115dfdc4a58a4d9011fa51a7b85d626b94e40b9503f50",
+      "file_count": 27,
+      "files": [
+        {
+          "file": "01_cover.svg",
+          "sha256": "90a012e3a7c381b62af72a66a1f2bb47cb4240aa57b76d65347a52f96df0b3f4"
+        },
+        {
+          "file": "02_evolution.svg",
+          "sha256": "0f2d57fdb902b6ff086167b454ca63fd261cb23e74dca6865a9af286de7e9230"
+        },
+        {
+          "file": "03_problem.svg",
+          "sha256": "0ede87d57f668704c76efc1ca683501d442c4b08d9253879598ca50362928be7"
+        },
+        {
+          "file": "04_map.svg",
+          "sha256": "f619500ac5e99845775b49febde617a1f94d37d74ad7947f74776ed59ae6e557"
+        },
+        {
+          "file": "05_engine.svg",
+          "sha256": "eea9c37c97391469cd7e53df895723bcb23b8668937b438e3066cc9f002aef91"
+        },
+        {
+          "file": "06_schema.svg",
+          "sha256": "d27c96cfaa6b7b1854e46b4331d46be26903639c74fa219af6cb7886eaa40199"
+        },
+        {
+          "file": "07_provider.svg",
+          "sha256": "fed58dcdb28f82e1c451af02e8b867e5a720054168a67ea18cc22aae2e20dab0"
+        },
+        {
+          "file": "08_tools.svg",
+          "sha256": "107cb33c10974d90ce9cae90957935941222cf3088928fb2a67947cba3018f35"
+        },
+        {
+          "file": "09_prompt.svg",
+          "sha256": "1cfb23e9efe9ad4b5b28dd38a939dde873e20da3b550689d651a4f73d162fe9c"
+        },
+        {
+          "file": "10_skills.svg",
+          "sha256": "57d036960214d9616bcf6685f52ffc87860256a8e0248d99a57e2d2209af9161"
+        },
+        {
+          "file": "11_context.svg",
+          "sha256": "501f310f02ef40550171488a7ab0abd6ba85cf087d865b4d6d1122f9f8c8ad7d"
+        },
+        {
+          "file": "12_memory_plan.svg",
+          "sha256": "317dfdf9325878bf55715b175bc2712beebc5a0e1d40b83939ef6b3f902cad52"
+        },
+        {
+          "file": "13_entry.svg",
+          "sha256": "7c8ddf236c845eb81e5a5f17725a0738f0f02dbead64c68968ae3c2c900ac124"
+        },
+        {
+          "file": "14_recovery.svg",
+          "sha256": "da91ce7bb22a976e93cc48010f627113cba2e7a01ef4291d11fd5e9a63f9e121"
+        },
+        {
+          "file": "15_permission.svg",
+          "sha256": "985cefac2eb37a5eaad34f2a0197529c2e96bc5f65b3790746e1cea57c60a907"
+        },
+        {
+          "file": "16_sandbox.svg",
+          "sha256": "2b2c0e090172e5336e6a15f1a38f517a329551b63daf7f0a1b488fd950b1cf44"
+        },
+        {
+          "file": "17_skillenv.svg",
+          "sha256": "521fa7b957a315f4678f16ca20bf851538d5cbb9a5dc41557797ca48e94c732c"
+        },
+        {
+          "file": "18_extensions.svg",
+          "sha256": "f0a39c0aae3fee38acb84cbdd5d51813bcf44936478fdf2e5ecdd994313704fb"
+        },
+        {
+          "file": "19_observe.svg",
+          "sha256": "e521b04d2856c0c89661b0426854fafb99e31dac7ddef8b68ee918db8ba2da88"
+        },
+        {
+          "file": "20_eval.svg",
+          "sha256": "9d69ebc059eb63dc3da06b528efae2138d2c58345757261f209020f20df055e2"
+        },
+        {
+          "file": "21_boundary.svg",
+          "sha256": "0ccd7c654c2b4d68c71815a61ddac9a14b568628721cfb4b885b94ba8a896e55"
+        },
+        {
+          "file": "22_api_cli.svg",
+          "sha256": "e02f2192d8d118ffc773d690ea322ca478e62aa03028feb4eb1c1da9a1f5d872"
+        },
+        {
+          "file": "23_modules.svg",
+          "sha256": "0080f3c5ffa3817065d86307fb73c92ef499ab37752a455ce631e682f8dbf979"
+        },
+        {
+          "file": "24_replay.svg",
+          "sha256": "26d08bc0951453831e7b1f5d368b589590276a582cb412cec5b4192d83b49182"
+        },
+        {
+          "file": "25_review.svg",
+          "sha256": "93725ab3547caee498d190d464d3599fe9bf81544991a789fed1107728ce1a2c"
+        },
+        {
+          "file": "26_case.svg",
+          "sha256": "cb214d4345ea38488883b753cfedc273d7d41cb4db51752b04503815096b452c"
+        },
+        {
+          "file": "27_discussion.svg",
+          "sha256": "91ad55d9e40533a6bc0b3dabdeb3272cfa3dac728dcd4557604c7e82a5abfda0"
+        }
+      ]
+    },
+    "summary": {
+      "total": 27,
+      "passed": 27,
+      "warnings": 0,
+      "errors": 0
+    },
+    "categories": {
+      "blocking": {
+        "count": 0,
+        "issues": []
+      },
+      "introduced": {
+        "count": 0,
+        "issues": []
+      },
+      "inherited": {
+        "count": 0,
+        "issues": []
+      },
+      "source-import": {
+        "count": 0,
+        "summary": {
+          "warning_count": 0,
+          "by_code": {}
+        }
+      }
+    }
+  },
+  "resources": {
+    "unresolved_template_tokens": [],
+    "fonts": {
+      "stacks": [
+        "Microsoft YaHei, Arial",
+        "Microsoft YaHei, Consolas"
+      ],
+      "generic_only_stacks": [],
+      "unsafe_exported_faces": []
+    },
+    "images": {
+      "data_uri": 0,
+      "local": 0,
+      "external": 0,
+      "external_references": []
+    }
+  },
+  "export_policy": {
+    "project_svg_contract": "strict",
+    "dangerous_normalization_count": 0
+  },
+  "deck_motion": {
+    "transition": {
+      "effect": "fade",
+      "effect_options": {},
+      "duration": 0.4,
+      "auto_advance": null,
+      "sound": null
+    },
+    "animation": {
+      "effect": "none",
+      "effect_request": null,
+      "duration": 0.4,
+      "stagger": 0.5,
+      "trigger": "after-previous"
+    },
+    "cli_overrides": {
+      "transition": false,
+      "transition_duration": false,
+      "auto_advance": false,
+      "transition_sound": false,
+      "animation": false,
+      "animation_duration": false,
+      "animation_stagger": false,
+      "animation_trigger": false
+    },
+    "narration_timings": false
+  },
+  "backup_path": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/presentations/OmicsClaw_CoreDesign_20261008/backup/20261008_112643/svg_output",
+  "conversion_trace_path": null
+}

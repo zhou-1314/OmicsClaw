@@ -1,0 +1,36 @@
+{
+  "stage": "stage1",
+  "lang": "zh",
+  "primary_language": "zh-CN",
+  "recommend": {
+    "canvas": "ppt169"
+  },
+  "audience": {
+    "value": "课题组 PI、研究生及生信研究人员；了解组学分析，但不预设熟悉 Agent 框架。"
+  },
+  "communication_intent": {
+    "value": "汇报 OmicsClaw 当前架构与进展，详细解释各组件职责、协作关系和设计取舍，并讨论下一阶段验证重点。"
+  },
+  "audience_outcome": {
+    "value": "能沿一次分析请求说明从模型决策到工具执行、模块回放和审核的路径；能区分已实现、已验证与待完成部分。"
+  },
+  "core_message": {
+    "value": "OmicsClaw 通过单向分层的 Agent 框架、可独立调用的组学技能与可回放的分析模块，连接自然语言分析请求和可追溯的科研输出。"
+  },
+  "delivery_context": {
+    "value": "中文组会现场讲解，建议 30 至 40 分钟，正文逐层展开组件，备份页供技术问答。"
+  },
+  "artifact_afterlife": {
+    "value": "组内架构参考材料；附讲稿备注、代码来源和可编辑图示，便于复用与后续更新。"
+  },
+  "content_divergence": {
+    "value": "严格基于当前工作树 43e9c034 的代码和近期交付记录。历史文档与代码冲突时以代码为准；不编造科学性能、节省时间或未运行的实验结果。"
+  },
+  "template_options": {
+    "schema_version": 1,
+    "phase": "template",
+    "lang": "zh",
+    "default_mode": "free_design",
+    "explicit_workspace_roots": []
+  }
+}

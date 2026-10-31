@@ -106,6 +106,10 @@ def build_adapter(arm: Arm) -> Adapter:
         from .omicsclaw import OmicsClawAdapter
 
         factory: Any = OmicsClawAdapter
+    elif arm.adapter in {"omicsclaw-multiturn", "omicsclaw_multiturn"}:
+        from .omicsclaw_multiturn import OmicsClawMultiTurnAdapter
+
+        factory = OmicsClawMultiTurnAdapter
     elif ":" in arm.adapter:
         factory = load_attribute(arm.adapter, "adapter")
     else:

@@ -1,0 +1,127 @@
+{
+  "author": "Tony Bai",
+  "series": "从0开始构建 Agent Harness",
+  "chapters": [
+    {
+      "chapter": 1,
+      "title": "01｜架构演进：从 Framework 到 Harness，Agent 到底需要怎样的底层支撑？",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/01 架构演进 从 Framework 到 Harness，Agent 到底需要怎样的底层支撑【公.众.号 密知圈】.md",
+      "sha256": "78a32c38e1a6854292c82bc83094ff6cf58e15d120180f149c44922cec2207f1"
+    },
+    {
+      "chapter": 2,
+      "title": "02｜核心心脏：手写 Agent 的 Main Loop",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/02 核心心脏 手写 Agent 的 Main Loop.md",
+      "sha256": "64c086482b0e80454c59add2b932d6ffd96f0b3257cae7607d6c14addfe58ec9"
+    },
+    {
+      "chapter": 3,
+      "title": "03｜慢思考与自省：在 ReAct 循环中剥离独立的 Thinking 阶段",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/03 慢思考与自省 在 ReAct 循环中剥离独立的 Thinking 阶段.md",
+      "sha256": "4a1fbdc1d358ca3187226fe03cd3a5222850740b1aaff0f1ac2e25cc6835d03a"
+    },
+    {
+      "chapter": 4,
+      "title": "04｜大脑接入：抽象 Provider 接口，适配 Claude 与 OpenAI 兼容大模型",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/02_第一章 认知与核心引擎/04 大脑接入 抽象 Provider 接口，适配 Claude 与 OpenAI 兼容大模型【公.众.号 密知圈】.md",
+      "sha256": "49d9522bddfd840cd2b7ee4b63c3008bb7130413b856490a3f1a1fec8bfaed1a"
+    },
+    {
+      "chapter": 5,
+      "title": "05｜动作延伸：构建强扩展性的 Tool Registry 与分发机制",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/05 动作延伸 构建强扩展性的 Tool Registry 与分发机制.md",
+      "sha256": "f4bd4483ce92cc78c5539779420e980c592d3c1cc9b8eb7bdab3dde31a07dc6e"
+    },
+    {
+      "chapter": 6,
+      "title": "06｜大道至简：解密 OpenClaw 最简工具集法则与 YOLO 执行哲学",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/06 大道至简 解密 OpenClaw 最简工具集法则与 YOLO 执行哲学【公.众.号 密知圈】.md",
+      "sha256": "431c20a6e37325ebc14425bf30a14313e4b293674239ae18df1cef8543ad333a"
+    },
+    {
+      "chapter": 7,
+      "title": "07｜容错艺术：实现支持多级模糊匹配的稳健 Edit 工具",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/07 容错艺术 实现支持多级模糊匹配的稳健 Edit 工具.md",
+      "sha256": "2570ea674315424ab11142962d1daf2a3b62e93ea62d80e7b3af15eed9e01a1a"
+    },
+    {
+      "chapter": 8,
+      "title": "08｜并发提效：如何让 Agent 在单轮中并行调用多个互相独立的工具？",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/08 并发提效 如何让 Agent 在单轮中并行调用多个互相独立的工具【公.众.号 密知圈】.md",
+      "sha256": "8475aece8abc391ec1701203517c1a28dcf51e5f0bd5dc2ba15efed0786bc7a3"
+    },
+    {
+      "chapter": 9,
+      "title": "09｜飞书集成：打通真实世界，将 go-tiny-claw 接入飞书机器人的事件流",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/03_第二章 极简工具与物理交互【公.众.号 密知圈】/09 飞书集成 打通真实世界，将 go-tiny-claw 接入飞书机器人的事件流.md",
+      "sha256": "a292ff484a064d4f9fc2a38acc4b73fa144f14fb425df84d2a1d978fe4380b95"
+    },
+    {
+      "chapter": 10,
+      "title": "10｜提示词组装：告别面条代码，动态加载 AGENTS.md 与外挂 Skills",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/10 提示词组装 告别面条代码，动态加载 AGENTS.md 与外挂 Skills.md",
+      "sha256": "b2df0d4f7658b69bab12a11629a165d90f8b9e81940c9a60dc097fac159d5663"
+    },
+    {
+      "chapter": 11,
+      "title": "11｜会话管理：Session 物理隔离与 Working Memory 的底层实现",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/11 会话管理 Session 物理隔离与 Working Memory 的底层实现.md",
+      "sha256": "de1e2525c2f1255bc5c09cc28445002d1ad38be370a52088cce2debd5246ba23"
+    },
+    {
+      "chapter": 12,
+      "title": "12｜突破内存：基于阶梯降级的 Context Compaction 策略",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/12 突破内存 基于阶梯降级的 Context Compaction 策略.md",
+      "sha256": "52c2dacc3387f2ad536a0f3ec8fabaf3c819ff6ab5a9ea736d7d2905ef654d0c"
+    },
+    {
+      "chapter": 13,
+      "title": "13｜记忆沉淀：状态外部化，基于文件系统的持久化记忆与待办管理",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/13 记忆沉淀 状态外部化，基于文件系统的持久化记忆与待办管理【公.众.号 密知圈】.md",
+      "sha256": "84c6292a043ab59174571f8dcdc52b0a4c6f22be2762baa9eeb13808230ed90b"
+    },
+    {
+      "chapter": 14,
+      "title": "14｜错误自愈：上下文感知的 Error Recovery 提示模板注入机制",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/04_第三章 上下文工程体系【公.众.号 密知圈】/14 错误自愈 上下文感知的 Error Recovery 提示模板注入机制【公.众.号 密知圈】.md",
+      "sha256": "9b10fcb92d25df69ed56271ee4d6dd4843b020d17d2394d40f4d9f5bec3318cd"
+    },
+    {
+      "chapter": 15,
+      "title": "15｜行为干预：防止 Agent 陷入“死循环”的 System Reminders 机制",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/15 行为干预 防止 Agent 陷入“死循环”的 System Reminders 机制.md",
+      "sha256": "0b0ba48752de1e5bb462b282c8c3ebf87b610767b4ab74b6c1322345159ae7a0"
+    },
+    {
+      "chapter": 16,
+      "title": "16｜防御纵深：利用 Middleware 实现高危命令拦截与飞书人工审批",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/16 防御纵深 利用 Middleware 实现高危命令拦截与飞书人工审批.md",
+      "sha256": "d381733b983904aa42f8f9ed8c6cdca26656cb8197c508f1897d26e7e7f2334d"
+    },
+    {
+      "chapter": 17,
+      "title": "17｜任务委派：引入 Subagent 隔离复杂探索任务的上下文瓶颈",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/05_第四章 稳定性控制与多智能体【公.众.号 密知圈】/17 任务委派 引入 Subagent 隔离复杂探索任务的上下文瓶颈.md",
+      "sha256": "b5457a440aff3abfc9b9b36ee69b3684956216714de885c18c740dc00591ddf1"
+    },
+    {
+      "chapter": 18,
+      "title": "18｜成本与状态追踪：在 Harness 层拦截并记录 Token 消耗与执行耗时",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/18 成本与状态追踪 在 Harness 层拦截并记录 Token 消耗与执行耗时.md",
+      "sha256": "4aa2efcaec16338114854b9db4587c8a3e57685019be0c810d6a911595a39985"
+    },
+    {
+      "chapter": 19,
+      "title": "19｜洞察黑盒：为 Agent 引入 Tracing 机制复盘失败决策路径",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/19 洞察黑盒 为 Agent 引入 Tracing 机制复盘失败决策路径.md",
+      "sha256": "73a12ad99d164dac18ef83645ea0e490aeb9199853c52d8e8966791c82b66485"
+    },
+    {
+      "chapter": 20,
+      "title": "20｜科学度量：如何构建 Benchmark 自动化评估脚本，科学量化 Harness 引擎性能？",
+      "path": "/workspace/dataset/private/zhouwg_data/Agent Harness搭建教程/06_第五章 可观测性与科学度量/20 科学度量 如何构建 Benchmark 自动化评估脚本，科学量化 Harness 引擎性能【公.众.号 密知圈】.md",
+      "sha256": "a595bbccc20ad2fa2a26a2509a32e6d37db1f207a73ad44632314be29249ca56"
+    }
+  ],
+  "usage": "参考讲解结构与机制，全部项目结论由当前源码核对；不复制教程全文和图片。"
+}

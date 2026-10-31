@@ -1,0 +1,120 @@
+{
+  "roles": {
+    "body": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 26.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 3.6,
+      "latin_chars_per_100px": 7.5,
+      "caps_chars_per_100px": 6.9,
+      "digits_chars_per_100px": 6.6,
+      "citation_chars_per_100px": 6.9,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": {
+        "px": 795.1,
+        "slide": "P33",
+        "text": "remote/routing/surfaces/ensemble/runtim…"
+      }
+    },
+    "title": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 40.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 2.4,
+      "latin_chars_per_100px": 4.9,
+      "caps_chars_per_100px": 4.5,
+      "digits_chars_per_100px": 4.3,
+      "citation_chars_per_100px": 4.5,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": {
+        "px": 775.9,
+        "slide": "P16",
+        "text": "run、status、replay 分别回答不同问题"
+      }
+    },
+    "subtitle": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 30.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 3.1,
+      "latin_chars_per_100px": 6.5,
+      "caps_chars_per_100px": 6.0,
+      "digits_chars_per_100px": 5.7,
+      "citation_chars_per_100px": 6.0,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": {
+        "px": 922.2,
+        "slide": "P32",
+        "text": "系统已经能保留执行证据，下一阶段需测量它对研究结果的帮助。"
+      }
+    },
+    "annotation": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 20.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 4.7,
+      "latin_chars_per_100px": 9.7,
+      "caps_chars_per_100px": 9.0,
+      "digits_chars_per_100px": 8.6,
+      "citation_chars_per_100px": 9.0,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": null
+    },
+    "code": {
+      "family": "Microsoft YaHei, Consolas",
+      "size": 20.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 4.7,
+      "latin_chars_per_100px": 9.7,
+      "caps_chars_per_100px": 9.0,
+      "digits_chars_per_100px": 8.6,
+      "citation_chars_per_100px": 9.0,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": null
+    },
+    "cover": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 64.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 1.5,
+      "latin_chars_per_100px": 3.0,
+      "caps_chars_per_100px": 2.8,
+      "digits_chars_per_100px": 2.7,
+      "citation_chars_per_100px": 2.8,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": null
+    },
+    "display": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 88.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 1.1,
+      "latin_chars_per_100px": 2.2,
+      "caps_chars_per_100px": 2.0,
+      "digits_chars_per_100px": 1.9,
+      "citation_chars_per_100px": 2.0,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": null
+    },
+    "footnote": {
+      "family": "Microsoft YaHei, Arial",
+      "size": 14.0,
+      "weight": "normal",
+      "cjk_chars_per_100px": 6.7,
+      "latin_chars_per_100px": 13.9,
+      "caps_chars_per_100px": 12.8,
+      "digits_chars_per_100px": 12.3,
+      "citation_chars_per_100px": 12.9,
+      "script_clusters_per_100px": {},
+      "longest_planned_line": null
+    }
+  },
+  "script_samples": {},
+  "source": "spec_lock.md",
+  "generated_at": "2026-10-07T09:20:00Z",
+  "notes": [
+    "role cover (64px, at least twice body) has no cover_family and uses body_family; declare cover_family if it is display type",
+    "role display (88px, at least twice body) has no display_family and uses body_family; declare display_family if it is display type",
+    "every role is measured at normal weight; recalibrate a role realized as bold deck-wide with --role NAME:FAMILY:SIZE:bold: bold widens Latin and digits about 7%, while the bundled advance table gives CJK one width for both weights"
+  ]
+}

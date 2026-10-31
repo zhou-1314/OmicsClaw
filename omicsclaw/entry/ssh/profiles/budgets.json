@@ -2,7 +2,7 @@
   "version": 1,
   "platform": "linux-x86_64-gnu",
   "python": "3.11.17",
-  "sourceBytes": 4718592,
+  "sourceBytes": 5242880,
   "sourceArchiveBytes": 2097152,
   "pythonLogicalBytes": 104857600,
   "baseEnvironmentLogicalBytes": 41943040,

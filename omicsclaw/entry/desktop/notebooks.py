@@ -18,6 +18,7 @@ NOTEBOOK_PATHS = (
     "/notebooks/{notebook_id}/executions/{execution_id}/cancel",
     "/notebooks/{notebook_id}/import",
     "/notebooks/{notebook_id}/export",
+    "/notebooks/{notebook_id}/slice",
     "/notebooks/{notebook_id}/feedback",
     "/notebooks/{notebook_id}/binding",
     "/notebooks/{notebook_id}/live-state",
@@ -173,6 +174,26 @@ def mount_notebook_routes(
                 f'attachment; filename="{notebook_id}.ipynb"'
             )
         return response
+
+    @api.get("/notebooks/{notebook_id}/slice")
+    async def slice_get(request: Request, notebook_id: str):
+        async def run(_):
+            target_path = request.query_params.get("target_path", "")
+            return {
+                "slice": await analysis.slice_for_artifact(notebook_id, target_path)
+            }
+
+        return await dispatch(request, notebook_id, run)
+
+    @api.post("/notebooks/{notebook_id}/slice")
+    async def slice_post(request: Request, notebook_id: str):
+        async def run(d):
+            target_path = (d or {}).get("target_path", "")
+            return {
+                "slice": await analysis.slice_for_artifact(notebook_id, target_path)
+            }
+
+        return await dispatch(request, notebook_id, run, write=True)
 
     @api.post("/notebooks/{notebook_id}/binding")
     async def binding(request: Request, notebook_id: str):

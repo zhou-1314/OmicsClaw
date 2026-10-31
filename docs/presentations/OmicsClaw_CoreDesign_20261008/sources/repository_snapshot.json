@@ -1,0 +1,7 @@
+{
+  "head_at_authoring": "68970e06f70bff63a7a47e11cdf558609ea9eb6b",
+  "head_at_delivery": "68970e06f70bff63a7a47e11cdf558609ea9eb6b",
+  "basis": "本地工作树；其他会话可并发更新；逐页来源哈希见 code_references.json",
+  "slides": 27,
+  "revision": "新增 Harness 演进背景页，项目源码事实沿用上一版"
+}

@@ -508,9 +508,20 @@ class OpenAIProvider:
             payload["stream_options"] = {"include_usage": True}
         if wants_include_reasoning(config.base_url):
             payload["include_reasoning"] = True
+        env_effort = (
+            os.environ.get("OMICSCLAW_REASONING_EFFORT")
+            or os.environ.get("LLM_REASONING_EFFORT")
+            or ""
+        ).strip()
+        if env_effort and "reasoning_effort" not in config.extra:
+            payload["reasoning_effort"] = env_effort
         # Last, so an operator can override any of the above — including
         # turning include_reasoning back off for a gateway that rejects it.
         payload.update(config.extra)
+        model_lower = str(config.model or "").strip().lower().rsplit("/", 1)[-1]
+        is_o_series = model_lower.startswith(("o1", "o3", "o4"))
+        if (payload.get("reasoning_effort") or is_o_series) and "temperature" not in config.extra:
+            payload.pop("temperature", None)
         return payload
 
     # ---- the interface ---------------------------------------------------

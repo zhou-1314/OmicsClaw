@@ -188,8 +188,9 @@ not use it, the step says why.
 2. The validate step checks the outputs the REPORT relies on.
 3. The REPORT (M<NN>_<slug>_REPORT.md): every number matches a table or log \
 in results/<NN_slug>/; every figure it cites exists and is not listed under \
-orphan_outputs; claims stay within what the steps computed; it carries the \ndisclaimer.
-4. The replay in the manifest succeeded and covers the current step files.
+orphan_outputs; claims stay within what the steps computed.
+4. The replay in the manifest succeeded and covers the current step files. (For notebook workflows, provenance/replay_receipt.json and provenance/review_brief.md confirm status='ok' with zero stale_inputs, unregistered_reads, changed_outputs, or orphan_outputs).
+5. Domain Statistical Audit Checklist (Trace, don't recompute): (a) multi-donor or multi-slide condition DE aggregates to sample/donor/slide pseudobulk (donor_id, orig.ident, slide_id) rather than cell- or spot-level Wilcoxon pseudoreplication; (b) count models (DESeq2, edgeR, NB-GLM) receive raw integer counts rather than log1p floats (verified via sidecar `assumptions`); (c) marker discovery on clustered data checks against single-cluster over-clustering (double dipping); (d) pathway enrichment uses detected/expressed genes as background universe; (e) all quantitative claims, {{{{artifact:<id>}}}} markers (with no unescaped {{{{!artifact:<id>}}}} in prose), and named methods in the REPORT match the executed code, `object_versions` (`@v1 -> @v2` lineage), and CSV tables.
 
 Your first line is the verdict, exactly `VERDICT: APPROVE` or \
 `VERDICT: REVISE`. Then list the findings, most serious first. Choose REVISE \

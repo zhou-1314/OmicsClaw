@@ -11,6 +11,12 @@ import time
 from omicsclaw.memory.artifacts import ARTIFACT_KINDS
 
 from .catalog import mcp_servers, skill_catalog, skill_detail
+from .connectors_service import (
+    check_connector,
+    connector_listing,
+    permission_rules_payload,
+    set_connector_enabled,
+)
 from .chat_service import change_workspace, workspace_payload
 from .doctor import _sandbox_snapshot, doctor_report
 from .files import (
@@ -107,10 +113,11 @@ class DesktopService:
             payload = await execute_git(app.config.workspace, document)
         elif method in {"GET", "HEAD"} and path == "/health":
             payload = health_payload(app)
+            has_kernel = getattr(app, "kernels", None) is not None
             payload["capabilities"].update(
                 {
-                    "kernel": False,
-                    "kernel_r": False,
+                    "kernel": has_kernel,
+                    "kernel_r": bool(has_kernel and payload["capabilities"].get("kernel_r", False)),
                     "mcp": False,
                     "attachments": False,
                     "science_runner": "skill_run" in jobs.runner_kinds(),
@@ -429,7 +436,10 @@ class DesktopService:
         elif method == "GET" and path in {"/sandbox/status", "/api/sandbox/status"}:
             payload = _sandbox_snapshot(app)
         elif method == "GET" and path in {"/compute/status", "/api/compute/status"}:
-            payload = compute_status_payload(app)
+            req_sid = (query or {}).get("session_id") if isinstance(query, dict) else None
+            if isinstance(req_sid, list):
+                req_sid = req_sid[0] if req_sid else None
+            payload = compute_status_payload(app, session_id=str(req_sid) if req_sid else None)
         elif method == "POST" and path in {
             "/sandbox/allow-domain",
             "/api/sandbox/allow-domain",
@@ -440,6 +450,18 @@ class DesktopService:
             "/api/sandbox/allow-domain",
         }:
             return revoke_sandbox_domain(app, query, document)
+        elif method == "GET" and path == "/connectors":
+            payload = await asyncio.to_thread(connector_listing, app)
+        elif method == "PUT" and re.fullmatch(r"/connectors/[A-Za-z0-9_.-]+", path):
+            payload = await asyncio.to_thread(
+                set_connector_enabled, app, path.split("/")[2], document
+            )
+        elif method == "POST" and re.fullmatch(
+            r"/connectors/[A-Za-z0-9_.-]+/check", path
+        ):
+            payload = await check_connector(app, path.split("/")[2])
+        elif method == "GET" and path == "/permissions/rules":
+            payload = await asyncio.to_thread(permission_rules_payload, app)
         elif path.startswith("/memory/"):
             payload = await dispatch_memory_request(
                 app, method, path, query, document
@@ -585,13 +607,186 @@ async def rewind_chat_session(app, document: dict) -> dict:
     return {"rewound": True, "session_id": session_id}
 
 
-def compute_status_payload(app, *, environments=None) -> dict:
+def _harvest_workspace_kernel_ledger(
+    ws, *, max_files: int = 24, tail_bytes: int = 131072
+) -> tuple[dict[str, dict[str, dict]], dict[str, list[dict]]]:
+    import json
+    from pathlib import Path
+
+    by_session_objects: dict[str, dict[str, dict]] = {}
+    by_session_skills: dict[str, list[dict]] = {}
+    if ws is None:
+        return by_session_objects, by_session_skills
+    ws_path = Path(ws)
+    if not ws_path.is_dir():
+        return by_session_objects, by_session_skills
+
+    found_files: list[tuple[float, Path]] = []
+    seen_resolved: set[Path] = set()
+    direct_candidates = (
+        ws_path / ".omicsclaw" / "provenance" / "kernel_ledger.jsonl",
+        ws_path / "provenance" / "kernel_ledger.jsonl",
+        ws_path / ".omicsclaw" / "provenance" / "session_ledger.jsonl",
+        ws_path / "provenance" / "session_ledger.jsonl",
+    )
+    for cand in direct_candidates:
+        try:
+            if cand.is_file():
+                rp = cand.resolve()
+                if rp not in seen_resolved:
+                    seen_resolved.add(rp)
+                    found_files.append((cand.stat().st_mtime, cand))
+        except OSError:
+            continue
+
+    kernels_dir = ws_path / ".omicsclaw" / "kernels"
+    if kernels_dir.is_dir():
+        try:
+            for kchild in kernels_dir.iterdir():
+                if not kchild.is_dir():
+                    continue
+                kcand = kchild / "ledger.jsonl"
+                if kcand.is_file():
+                    rp = kcand.resolve()
+                    if rp not in seen_resolved:
+                        seen_resolved.add(rp)
+                        found_files.append((kcand.stat().st_mtime, kcand))
+        except OSError:
+            pass
+
+    try:
+        for child in ws_path.iterdir():
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            for sub_rel in (
+                Path(".omicsclaw") / "provenance" / "kernel_ledger.jsonl",
+                Path("provenance") / "kernel_ledger.jsonl",
+                Path(".omicsclaw") / "provenance" / "session_ledger.jsonl",
+                Path("kernel_ledger.jsonl"),
+            ):
+                sub_cand = child / sub_rel
+                try:
+                    if sub_cand.is_file():
+                        rp = sub_cand.resolve()
+                        if rp not in seen_resolved:
+                            seen_resolved.add(rp)
+                            found_files.append((sub_cand.stat().st_mtime, sub_cand))
+                except OSError:
+                    continue
+    except OSError:
+        pass
+
+    if not found_files:
+        return by_session_objects, by_session_skills
+
+    # Take up to max_files newest ledgers, then process oldest-to-newest so newer revisions win
+    selected = sorted(found_files, key=lambda item: item[0], reverse=True)[:max_files]
+    selected.sort(key=lambda item: item[0])
+
+    for _mtime, ledger_file in selected:
+        try:
+            size = ledger_file.stat().st_size
+            if size <= 0:
+                continue
+            with ledger_file.open("rb") as fh:
+                if size > tail_bytes:
+                    fh.seek(size - tail_bytes)
+                    raw_bytes = fh.read()
+                    nl_idx = raw_bytes.find(b"\n")
+                    if nl_idx != -1:
+                        raw_bytes = raw_bytes[nl_idx + 1 :]
+                else:
+                    raw_bytes = fh.read()
+            lines = raw_bytes.decode("utf-8", errors="replace").splitlines()[-500:]
+            for raw in lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                inferred_sid = ledger_file.parent.name if ledger_file.parent.parent.name == "kernels" else ""
+                sid = str(rec.get("session_id") or inferred_sid).strip()
+                ts = rec.get("timestamp")
+                exec_count = rec.get("execution_count")
+                exec_id = str(rec.get("execution_id") or "")
+                for obj in rec.get("object_versions") or ():
+                    if not isinstance(obj, dict):
+                        continue
+                    name = str(obj.get("name") or obj.get("var_name") or "").strip()
+                    if not name:
+                        continue
+                    merged = dict(obj)
+                    merged["name"] = name
+                    merged["session_id"] = sid
+                    if ts is not None:
+                        merged["timestamp"] = ts
+                    if exec_count is not None:
+                        merged["execution_count"] = exec_count
+                    if exec_id and not merged.get("execution_id"):
+                        merged["execution_id"] = exec_id
+                    prev_obj = by_session_objects.setdefault(sid, {}).get(name)
+                    if prev_obj is not None:
+                        prev_ts = float(prev_obj.get("timestamp") or 0.0)
+                        curr_ts = float(merged.get("timestamp") or 0.0)
+                        if curr_ts < prev_ts:
+                            continue
+                    by_session_objects.setdefault(sid, {})[name] = merged
+                for sk in rec.get("skills_loaded") or ():
+                    if isinstance(sk, str) and sk.strip():
+                        sk_copy = {"skill": sk.strip(), "session_id": sid}
+                    elif isinstance(sk, dict):
+                        sk_copy = dict(sk)
+                        sk_copy["session_id"] = sid
+                    else:
+                        continue
+                    bucket = by_session_skills.setdefault(sid, [])
+                    if not any(
+                        x.get("skill") == sk_copy.get("skill")
+                        and x.get("module") == sk_copy.get("module")
+                        for x in bucket
+                    ):
+                        bucket.append(sk_copy)
+        except Exception:
+            continue
+    return by_session_objects, by_session_skills
+
+
+def compute_status_payload(app, *, environments=None, session_id: str | None = None) -> dict:
     from pathlib import Path
     import json
 
+    ws = Path(app.config.workspace) if getattr(app, "config", None) else None
+    by_session_objects, by_session_skills = _harvest_workspace_kernel_ledger(ws)
+
     kernels = []
+    all_handles = []
+    seen_handle_ids = set()
     seen_pids = set()
     mgr = getattr(getattr(app, "kernels", None), "manager", None)
+    if mgr is not None and hasattr(mgr, "handles") and mgr.handles is not None:
+        try:
+            raw_map = getattr(mgr.handles, "_handles", None)
+            if raw_map is None:
+                raw_map = getattr(mgr.handles, "_by_id", {})
+            for h in list(raw_map.values()):
+                rev = list(h.revision) if isinstance(h.revision, (list, tuple)) else h.revision
+                h_dict = {
+                    "adata_id": h.adata_id,
+                    "session_id": h.session_id,
+                    "revision": rev,
+                    "summary": h.summary,
+                    "synced_at": h.synced_at,
+                    "expression": f"OV_KERNEL_ADATA[{h.adata_id!r}]",
+                }
+                all_handles.append(h_dict)
+                seen_handle_ids.add(h.adata_id)
+        except Exception:
+            pass
+
     if mgr is not None and hasattr(mgr, "snapshot"):
         try:
             for item in mgr.snapshot():
@@ -601,16 +796,29 @@ def compute_status_payload(app, *, environments=None) -> dict:
                 if pid:
                     seen_pids.add(int(pid))
                 rss_kb = item.get("peak_rss_kb") or 0
+                sid = str(item.get("session_id") or "")
+                session_handles = [h for h in all_handles if h.get("session_id") == sid]
+                session_objects = list(by_session_objects.get(sid, {}).values())
+                session_skills = list(by_session_skills.get(sid, []))
                 kernels.append({
-                    "session_id": item.get("session_id", ""),
+                    "session_id": sid,
                     "language": item.get("language", "python"),
+                    "location": item.get("location", "local"),
                     "pid": pid,
                     "rss_bytes": int(rss_kb) * 1024,
                     "cells": item.get("cells", 0),
+                    "status": "busy" if item.get("executing", False) else "idle",
+                    "state": "busy" if item.get("executing", False) else "ready",
+                    "executing": bool(item.get("executing", False)),
+                    "age_s": item.get("age_s"),
+                    "idle_s": item.get("idle_s"),
+                    "restart_needed": bool(item.get("restart_needed", False)),
+                    "handles": session_handles,
+                    "object_versions": session_objects,
+                    "skills_loaded": session_skills,
                 })
         except Exception:
             pass
-    ws = Path(app.config.workspace) if getattr(app, "config", None) else None
     if ws is not None:
         mem_db = ws / ".omicsclaw" / "memory.db"
         if mem_db.is_file():
@@ -637,13 +845,19 @@ def compute_status_payload(app, *, environments=None) -> dict:
                                         break
                             except Exception:
                                 pass
+                        nb_sid = str(r["notebook_id"] or "")
                         kernels.append({
-                            "session_id": r["notebook_id"],
+                            "session_id": nb_sid,
                             "kernel_instance_id": r["instance_id"],
                             "language": r["language"],
                             "state": r["state"],
+                            "status": "busy" if r["state"] == "busy" else "idle",
+                            "executing": r["state"] == "busy",
                             "pid": pid,
                             "rss_bytes": rss_bytes,
+                            "handles": [h for h in all_handles if h.get("session_id") == nb_sid],
+                            "object_versions": list(by_session_objects.get(nb_sid, {}).values()),
+                            "skills_loaded": list(by_session_skills.get(nb_sid, [])),
                         })
             except Exception:
                 pass
@@ -653,9 +867,31 @@ def compute_status_payload(app, *, environments=None) -> dict:
             env_count = len(environments.page(limit=50).get("environments", []))
         except Exception:
             pass
+    target_sid = (session_id or "").strip()
+    flat_objects = []
+    for sid_key, obj_map in by_session_objects.items():
+        if target_sid and sid_key and sid_key != target_sid:
+            continue
+        flat_objects.extend(obj_map.values())
+    flat_objects.sort(key=lambda x: float(x.get("timestamp") or 0.0), reverse=True)
+    flat_skills = []
+    for sid_key, sk_list in by_session_skills.items():
+        if target_sid and sid_key and sid_key != target_sid:
+            continue
+        for sk in sk_list:
+            if not any(x.get("skill") == sk.get("skill") and x.get("module") == sk.get("module") for x in flat_skills):
+                flat_skills.append(sk)
+    if target_sid:
+        kernels = [k for k in kernels if not k.get("session_id") or k.get("session_id") == target_sid]
+        all_handles = [h for h in all_handles if not h.get("session_id") or h.get("session_id") == target_sid]
+        flat_objects = [o for o in flat_objects if not o.get("session_id") or o.get("session_id") == target_sid]
+        flat_skills = [s for s in flat_skills if not s.get("session_id") or s.get("session_id") == target_sid]
     return {
         "active_kernels_count": len(kernels),
         "kernels_rss_bytes": sum(int(k.get("rss_bytes") or 0) for k in kernels),
         "kernels": kernels,
         "environments_count": env_count,
+        "handles": all_handles,
+        "object_versions": flat_objects,
+        "skills_loaded": flat_skills,
     }

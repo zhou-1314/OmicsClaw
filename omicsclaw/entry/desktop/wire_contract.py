@@ -99,7 +99,12 @@ SERVED_PATHS: Final[tuple[str, ...]] = (
     "/notebooks/{notebook_id}/live-state",
     "/notebooks/{notebook_id}/live-app",
     "/notebooks/{notebook_id}/live-app/state",
+    "/notebooks/{notebook_id}/slice",
     "/compute/status",
+    "/connectors",
+    "/connectors/{name}",
+    "/connectors/{name}/check",
+    "/permissions/rules",
 )
 """The routes :func:`~omicsclaw.entry.desktop.server.create_desktop_app`
 mounts, templated paths spelled as FastAPI spells them. ``/workspace``
@@ -109,7 +114,8 @@ and ``/providers`` answer ``GET`` and ``PUT``; ``/env/doctor``,
 ``GET`` and ``HEAD``; ``/remote/hosts/{alias}`` answers ``DELETE``;
 ``/remote/hosts/aliases`` and the two ``/remote/hosts/{alias}/files/*``
 routes answer ``GET``; ``/chat/session/{session_id}`` also answers ``GET``;
-the rest answer ``POST``."""
+``/connectors`` and ``/permissions/rules`` answer ``GET``;
+``/connectors/{name}`` answers ``PUT``; the rest answer ``POST``."""
 
 
 def desktop_chat_contract(

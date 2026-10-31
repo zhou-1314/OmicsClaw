@@ -1,0 +1,117 @@
+{
+  "gate1_contract_coverage": {
+    "script": "/workspace/dataset/private/zhouwg_data/OmicsClaw/scripts/verify_desktop_contract_coverage.py",
+    "report": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/phase3_contract_coverage_report.json",
+    "total_checks": 19,
+    "passed_checks": 19,
+    "turn_event_type_enum_total": 18,
+    "turn_event_type_enum_covered": 18,
+    "all_passed": true
+  },
+  "gate2_automated_test_suites": {
+    "backend_pytest": {
+      "command": "/opt/conda/envs/OmicsClaw/bin/pytest tests/entry/test_desktop_stream.py tests/entry/test_desktop_notebooks.py tests/entry/test_desktop_wire_contract.py tests/entry/test_controller*.py tests/kernel/ -q",
+      "passed": 208,
+      "skipped": 35,
+      "failed": 0
+    },
+    "frontend_typecheck": {
+      "command": "npm run typecheck",
+      "web_errors": 0,
+      "electron_errors": 0
+    },
+    "frontend_unit_tests": {
+      "command": "npm run test:unit",
+      "total": 2822,
+      "passed": 2797,
+      "skipped": 25,
+      "failed": 0,
+      "protocol_closed_loops_suite": "6/6 passed (src/__tests__/unit/protocol-closed-loops.test.tsx)",
+      "controller_route_inventory_suite": "4/4 passed (src/__tests__/unit/controller-route-inventory.test.ts)",
+      "claude_science_and_artifact_suites": "26/26 passed (notebook-claude-science-ui.test.tsx + artifact-preview-and-ui-stack.test.tsx)"
+    },
+    "playwright_contract_e2e": {
+      "command": "npx playwright test --config=playwright.contract.config.ts",
+      "passed": 8,
+      "failed": 0
+    },
+    "playwright_ui_e2e": {
+      "commands": [
+        "npx playwright test --config=playwright.ui.config.ts src/__tests__/e2e/ui-design-baseline.spec.ts src/__tests__/e2e/ui-design-media.spec.ts",
+        "OMICSCLAW_UI_SUITE=approval-related npx playwright test --config=playwright.ui.config.ts"
+      ],
+      "ui_design_baseline_passed": "10/10",
+      "ui_design_media_passed": "7/7",
+      "ui_design_approval_related_passed": "13/13",
+      "failed": 0
+    }
+  },
+  "gate3_visual_and_dom_evidence": {
+    "screenshots": [
+      {
+        "file": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/evidence/phase2-intraturn-fsm-and-subagent-approval.png",
+        "bytes": 106744,
+        "assertions_verified": [
+          "permission-subagent-badge ([omics-researcher]) visible in PermissionPrompt",
+          "PermissionPrompt displays v3 request details (mcp__omics__run_clustering)",
+          "Allow Once action resolves approval rendezvous and resumes turn execution"
+        ]
+      },
+      {
+        "file": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/evidence/phase2-shadow-review-verdict-card.png",
+        "bytes": 98260,
+        "assertions_verified": [
+          "context-pressure-capsule (warning, 95% used, reserve shortfall 2,048 tok) visible",
+          "subagent-execution-tree ([omics-researcher], 2 steps) visible",
+          "shadow-review-verdict-card (verdict=warn, Verify batch effect correction before finalizing Leiden resolution=0.8) visible with Address in Chat button"
+        ]
+      },
+      {
+        "file": "/workspace/dataset/private/zhouwg_data/OmicsClaw/docs/evidence/phase2-kernel-variable-inspector-popover.png",
+        "bytes": 118292,
+        "assertions_verified": [
+          "kernel-inspector-popover visible with 1 active kernel (512.0 MB RSS, py-session-1 · idle)",
+          "OV_KERNEL_ADATA[\"pbmc3k_filtered\"] handle visible with Reference in Chat action",
+          "adata@v2 (AnnData 2638×1838, +obs: leiden, n_genes, +obsm: X_pca, X_umap, +layers: counts) visible with Cite in Chat action",
+          "skills_loaded dict entries normalized to skill:spatial-domains and skill:sc-preprocessing badges"
+        ]
+      }
+    ]
+  },
+  "verification_timestamp_utc": "2026-10-31T08:13:00Z",
+  "gate1_contract_verifier": {
+    "script": "scripts/verify_desktop_contract_coverage.py",
+    "passed": 19,
+    "total": 19,
+    "turn_event_type_coverage": "18/18 (SSE forwarded: 13, lifecycle/side-channel: 5)",
+    "exists_only_checks": 0,
+    "all_passed": true
+  },
+  "backend_pytest": {
+    "command": "/opt/conda/envs/OmicsClaw/bin/pytest tests/entry/test_claude_science_optimizations.py tests/entry/test_assembly.py tests/entry/test_desktop_http.py -q",
+    "passed": 215,
+    "xfailed": 1,
+    "failed": 0
+  },
+  "frontend_unit_tests": {
+    "command": "node --import tsx --test src/__tests__/unit/chat-stream-transcript.test.ts src/__tests__/unit/protocol-closed-loops.test.tsx",
+    "passed": 33,
+    "failed": 0
+  },
+  "playwright_contract_e2e": {
+    "command": "npx playwright test --config=playwright.contract.config.ts",
+    "passed": 8,
+    "failed": 0
+  },
+  "playwright_ui_design_e2e": {
+    "command": "npx playwright test --config=playwright.ui.config.ts",
+    "specs_verified": 10,
+    "passed": 83,
+    "failed": 0
+  },
+  "visual_evidence": [
+    "docs/evidence/phase2-intraturn-fsm-and-subagent-approval.png",
+    "docs/evidence/phase2-shadow-review-verdict-card.png",
+    "docs/evidence/phase2-kernel-variable-inspector-popover.png"
+  ]
+}

@@ -1,0 +1,167 @@
+[
+  {
+    "number": 1,
+    "stem": "01_cover",
+    "title": "OmicsClaw"
+  },
+  {
+    "number": 2,
+    "stem": "02_evolution",
+    "title": "模型能决定下一步，执行更需要支撑"
+  },
+  {
+    "number": 3,
+    "stem": "03_problem",
+    "title": "OmicsClaw 需要把每一步判断接稳"
+  },
+  {
+    "number": 4,
+    "stem": "04_map",
+    "title": "系统地图：交互、决策、执行与证据"
+  },
+  {
+    "number": 5,
+    "stem": "05_engine",
+    "title": "engine：一个内核维持 ReAct 循环"
+  },
+  {
+    "number": 6,
+    "stem": "06_schema",
+    "title": "schema：先统一组件之间的语言"
+  },
+  {
+    "number": 7,
+    "stem": "07_provider",
+    "title": "provider：把接口差异收在适配层"
+  },
+  {
+    "number": 8,
+    "stem": "08_tools",
+    "title": "通用工具连接模型与科学方法"
+  },
+  {
+    "number": 9,
+    "stem": "09_prompt",
+    "title": "PromptAssembler：把信息汇到一次请求"
+  },
+  {
+    "number": 10,
+    "stem": "10_skills",
+    "title": "skills：先看目录，再加载方法"
+  },
+  {
+    "number": 11,
+    "stem": "11_context",
+    "title": "压缩历史时，保留下一步需要的依据"
+  },
+  {
+    "number": 12,
+    "stem": "12_memory_plan",
+    "title": "memory 记事实，planning 记进度"
+  },
+  {
+    "number": 13,
+    "stem": "13_entry",
+    "title": "entry 把组件接成可管理的会话"
+  },
+  {
+    "number": 14,
+    "stem": "14_recovery",
+    "title": "让错误进入判断，而不是重复同一动作"
+  },
+  {
+    "number": 15,
+    "stem": "15_permission",
+    "title": "permission：先决定能否执行"
+  },
+  {
+    "number": 16,
+    "stem": "16_sandbox",
+    "title": "sandbox 与 local-first 的边界"
+  },
+  {
+    "number": 17,
+    "stem": "17_skillenv",
+    "title": "skillenv：补依赖时保留基础环境"
+  },
+  {
+    "number": 18,
+    "stem": "18_extensions",
+    "title": "MCP 扩展工具，subagent 分担子任务"
+  },
+  {
+    "number": 19,
+    "stem": "19_observe",
+    "title": "observability：让过程可以定位"
+  },
+  {
+    "number": 20,
+    "stem": "20_eval",
+    "title": "用任务结果判断是否完成"
+  },
+  {
+    "number": 21,
+    "stem": "21_boundary",
+    "title": "框架与科学代码通过文件契约协作"
+  },
+  {
+    "number": 22,
+    "stem": "22_api_cli",
+    "title": "同一算法，函数库与 CLI 各负其责"
+  },
+  {
+    "number": 23,
+    "stem": "23_modules",
+    "title": "分析模块把代码与输出放在明确位置"
+  },
+  {
+    "number": 24,
+    "stem": "24_replay",
+    "title": "run、status、replay 分别回答不同问题"
+  },
+  {
+    "number": 25,
+    "stem": "25_review",
+    "title": "先交付验证结果，审查与接受由用户触发"
+  },
+  {
+    "number": 26,
+    "stem": "26_case",
+    "title": "四模块案例：检查应落在实际输出上"
+  },
+  {
+    "number": 27,
+    "stem": "27_paper_background",
+    "title": "科学分析需要连续判断，而现有评测常只看局部"
+  },
+  {
+    "number": 28,
+    "stem": "28_paper_design",
+    "title": "GeneBench-Pro：把连续判断变成可检验任务"
+  },
+  {
+    "number": 29,
+    "stem": "29_paper_finding",
+    "title": "发现异常之后，分析决策是否随之改变？"
+  },
+  {
+    "number": 30,
+    "stem": "30_project_question",
+    "title": "OmicsClaw：让诊断证据进入后续决策"
+  },
+  {
+    "number": 31,
+    "stem": "31_research_mechanisms",
+    "title": "沿着一次分析，研究三类决策机制"
+  },
+  {
+    "number": 32,
+    "stem": "32_research_benchmark",
+    "title": "改变实验设计，Agent 会改变决策吗？"
+  },
+  {
+    "number": 33,
+    "stem": "33_research_pilot",
+    "title": "先证明任务有效，再验证方法增益"
+  }
+]

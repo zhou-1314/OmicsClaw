@@ -1,0 +1,190 @@
+[
+  {
+    "number": 1,
+    "stem": "01_cover",
+    "previous": "01_cover.svg",
+    "title": "OmicsClaw",
+    "question": "从请求到结果"
+  },
+  {
+    "number": 2,
+    "stem": "02_evolution",
+    "title": "模型能决定下一步，执行更需要支撑",
+    "question": "技术发展为什么需要 Harness"
+  },
+  {
+    "number": 3,
+    "stem": "03_problem",
+    "previous": "02_problem.svg",
+    "title": "分析助手为什么需要运行时支撑",
+    "question": "分析任务为什么需要持续管理"
+  },
+  {
+    "number": 4,
+    "stem": "04_map",
+    "previous": "04_map.svg",
+    "title": "系统地图：交互、决策、执行与证据",
+    "question": "先建立组件之间的关系"
+  },
+  {
+    "number": 5,
+    "stem": "05_engine",
+    "previous": "08_engine.svg",
+    "title": "engine：一个内核维持 ReAct 循环",
+    "question": "每一步都根据结果再决定"
+  },
+  {
+    "number": 6,
+    "stem": "06_schema",
+    "previous": "06_schema.svg",
+    "title": "schema：先统一组件之间的语言",
+    "question": "让组件交换同一种消息"
+  },
+  {
+    "number": 7,
+    "stem": "07_provider",
+    "previous": "07_provider.svg",
+    "title": "provider：把模型差异收在适配层",
+    "question": "更换模型时保留分析流程"
+  },
+  {
+    "number": 8,
+    "stem": "08_tools",
+    "previous": "10_tools.svg",
+    "title": "ToolRegistry：注册、描述、执行集中在一处",
+    "question": "把模型选择变成真实动作"
+  },
+  {
+    "number": 9,
+    "stem": "09_prompt",
+    "previous": "14_prompt.svg",
+    "title": "PromptAssembler：把规则按职责组装",
+    "question": "每次判断都能读到当前规则"
+  },
+  {
+    "number": 10,
+    "stem": "10_skills",
+    "previous": "15_skills.svg",
+    "title": "skills：先看目录，再加载方法",
+    "question": "需要哪种方法，再读取哪份说明"
+  },
+  {
+    "number": 11,
+    "stem": "11_context",
+    "previous": "16_context.svg",
+    "title": "context：把有限窗口留给当前判断",
+    "question": "分析越长，越要保留关键依据"
+  },
+  {
+    "number": 12,
+    "stem": "12_memory_plan",
+    "previous": "17_memory_plan.svg",
+    "title": "memory 与 planning 保存不同信息",
+    "question": "分开保存事实与进度"
+  },
+  {
+    "number": 13,
+    "stem": "13_entry",
+    "previous": "20_entry.svg",
+    "title": "entry 把组件接成可管理的会话",
+    "question": "多种界面共享同一套运行逻辑"
+  },
+  {
+    "number": 14,
+    "stem": "14_recovery",
+    "previous": "19_recovery.svg",
+    "title": "失败之后，谁负责恢复？",
+    "question": "区分可以修正与必须停止的错误"
+  },
+  {
+    "number": 15,
+    "stem": "15_permission",
+    "previous": "22_permission.svg",
+    "title": "permission：策略决定，入口负责询问",
+    "question": "高风险动作需要明确授权"
+  },
+  {
+    "number": 16,
+    "stem": "16_sandbox",
+    "previous": "23_sandbox.svg",
+    "title": "sandbox 与 local-first 的边界",
+    "question": "限定分析命令可以接触的资源"
+  },
+  {
+    "number": 17,
+    "stem": "17_skillenv",
+    "previous": "24_skillenv.svg",
+    "title": "skillenv：补依赖时保留基础环境",
+    "question": "为当前分析补齐缺失的能力"
+  },
+  {
+    "number": 18,
+    "stem": "18_extensions",
+    "previous": "25_extensions.svg",
+    "title": "MCP 与 subagent 扩展两类能力",
+    "question": "接入工具与分解子任务"
+  },
+  {
+    "number": 19,
+    "stem": "19_observe",
+    "previous": "26_observe.svg",
+    "title": "hooks 与 observability 观察已有执行",
+    "question": "知道时间与调用花在哪里"
+  },
+  {
+    "number": 20,
+    "stem": "20_eval",
+    "previous": "27_eval.svg",
+    "title": "评估要检查动作与副作用",
+    "question": "用实际行为检验任务完成情况"
+  },
+  {
+    "number": 21,
+    "stem": "21_boundary",
+    "previous": "28_boundary.svg",
+    "title": "框架与科学代码通过文件契约协作",
+    "question": "方法可以脱离 Agent 独立使用"
+  },
+  {
+    "number": 22,
+    "stem": "22_api_cli",
+    "previous": "29_api_cli.svg",
+    "title": "同一算法，函数库与 CLI 各负其责",
+    "question": "让计算结果直接进入下一步"
+  },
+  {
+    "number": 23,
+    "stem": "23_modules",
+    "previous": "30_modules.svg",
+    "title": "分析模块把代码与输出放在明确位置",
+    "question": "让每个阶段都能独立解释"
+  },
+  {
+    "number": 24,
+    "stem": "24_replay",
+    "previous": "31_replay.svg",
+    "title": "run、status、replay 分别回答不同问题",
+    "question": "修改后知道该重跑什么"
+  },
+  {
+    "number": 25,
+    "stem": "25_review",
+    "previous": "32_review.svg",
+    "title": "先交付验证结果，审查与接受由用户触发",
+    "question": "让审查与接受有明确依据"
+  },
+  {
+    "number": 26,
+    "stem": "26_case",
+    "previous": "35_case.svg",
+    "title": "四模块案例：检查应落在实际输出上",
+    "question": "从单细胞分析到可检查的交付"
+  },
+  {
+    "number": 27,
+    "stem": "27_discussion",
+    "previous": "40_discussion.svg",
+    "title": "下一阶段优先验证什么？",
+    "question": "下一步验证这些设计是否有效"
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "slides": 36,
+  "notes": 36,
+  "visible_text_matches": 36,
+  "speaker_note_matches": 36,
+  "pdf_pages": 36,
+  "pptx_editable_text_runs": 631,
+  "pptx_raster_picture_shapes": 0,
+  "powerpoint_runtime_rendered": false,
+  "source_preview_renderer": "CairoSVG + WenQuanYi Zen Hei",
+  "source_snapshot": "43e9c034b1f04773aa2121d9aab0944beec3ec57",
+  "artifacts": {
+    "exports/OmicsClaw_GroupMeeting_20261007_094341.pptx": "a005e7b148c5319210829df7787dfafc3bf1e9835e2758542e90d3db92d7ff63",
+    "exports/OmicsClaw_GroupMeeting_20261007_preview.pdf": "3fc3a2fe0e840cd9a3cedc24eac45f031c4616156c54041777776126eb369b38",
+    "notes/total.md": "23cb9e06ba936b29f717ee747cfd0c724dad311c462d55e3d1c82d6e7ffd0028"
+  }
+}

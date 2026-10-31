@@ -9,7 +9,7 @@ all: there is one source for the agent's instructions, and the safety rules
 are the ``SAFETY_RULES`` constant, stated once.
 
 The last three tests read the checkout's real files. They are the guards on
-the split itself: the disclaimer must not be copied back into the contract,
+the split itself: reports must not require a boilerplate disclaimer,
 the product persona must stay out of ``CLAUDE.md`` (which Claude Code loads
 into development sessions), and developer instructions must stay out of the
 contract (which the analysis agent reads every turn).
@@ -120,12 +120,8 @@ def test_a_relative_skills_dir_is_read_from_the_process_directory(
     assert "RELATIVE-CONTRACT" in _render(config)
 
 
-def test_the_real_prompt_states_the_disclaimer_once(tmp_path):
-    """The checkout's contract rendered with ``SAFETY_RULES``: one disclaimer.
-
-    A contract that copied the safety rules back in would state it twice,
-    in two wordings that can drift apart.
-    """
+def test_the_real_prompt_does_not_require_a_report_disclaimer(tmp_path):
+    """Analysis summaries do not require a boilerplate disclaimer."""
     config = AppConfig(
         workspace=tmp_path,
         skills_dir=_REPO_ROOT / "skills",
@@ -133,7 +129,8 @@ def test_the_real_prompt_states_the_disclaimer_once(tmp_path):
     )
 
     assert _rendered_keys(config)[0] == "contract"
-    assert _render(config).count(DISCLAIMER) == 1
+    assert DISCLAIMER not in _render(config)
+    assert "disclaimer" not in _render(config).lower()
 
 
 def test_the_real_contract_names_the_agent_and_claude_md_does_not():

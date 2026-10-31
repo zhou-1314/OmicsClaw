@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "slides": 45,
+  "notes": 45,
+  "visible_text_matches": 45,
+  "speaker_note_matches": 45,
+  "editable_text_runs": 801,
+  "picture_shapes": 0,
+  "pdf_pages": 45,
+  "tutorial_chapters": 20,
+  "source_commit": "90a3bec3e6549bc33dddbf67e4b23869736c49d1",
+  "powerpoint_runtime_rendered": false,
+  "preview_renderer": "CairoSVG / WenQuanYi Zen Hei",
+  "artifact_sha256": {
+    "exports/OmicsClaw_GroupMeeting_20261008_Harness_20261008_030831.pptx": "283d1ac6566eb706c1cd24ca2a6bf62f885de6cf3e5428cb0ed7accca32b3106",
+    "exports/OmicsClaw_GroupMeeting_20261008_Harness_preview.pdf": "93e33e817dbe8cc8cd112ac92f31b115512416d2451dac99a3982d5fa7ed661a",
+    "notes/total.md": "19482dfbeddcfd36d6fdbf881e6c9c5dc3ced9347917024a80785264190cc3f2"
+  }
+}

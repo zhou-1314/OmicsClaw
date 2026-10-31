@@ -387,6 +387,7 @@ markers = [
     "skill_example: historical skill examples (retired with the SDK step runner)",
     "skill_example_extended: runs the real CPU pertpy example in its pinned extended CI environment",
     "skill_example_spatial: runs spatial examples and fresh-kernel replay in the spatial CPU CI environment",
+    "network: calls public scientific web APIs; runs only with OMICSCLAW_RUN_NETWORK_TESTS=1",
 ]
 filterwarnings = [
     "ignore::FutureWarning",

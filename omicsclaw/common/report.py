@@ -19,12 +19,6 @@ from omicsclaw.common.output_claim import (
 
 logger = logging.getLogger(__name__)
 
-DISCLAIMER = (
-    "OmicsClaw is a research and educational tool for multi-omics "
-    "analysis. It is not a medical device and does not provide clinical diagnoses. "
-    "Consult a domain expert before making decisions based on these results."
-)
-
 
 def load_result_json(output_dir: str | Path) -> dict[str, Any] | None:
     """Load ``result.json`` from an output directory if present."""
@@ -207,7 +201,6 @@ def write_output_readme(
         for entry in entries:
             lines.append(f"- {entry}")
 
-    lines.extend(["", "## Notes", "", f"- {DISCLAIMER}"])
     atomic_write_owned_output_text(
         readme_path,
         output_root=output_dir,
@@ -303,17 +296,6 @@ def generate_report_header(
     lines.extend(["", "---", ""])
 
     return "\n".join(lines)
-
-
-def generate_report_footer() -> str:
-    """Generate the standard markdown report footer with disclaimer."""
-    return f"""
----
-
-## Disclaimer
-
-*{DISCLAIMER}*
-"""
 
 
 def write_result_json(

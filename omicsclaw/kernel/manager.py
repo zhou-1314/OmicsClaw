@@ -164,6 +164,7 @@ class SessionState:
             "language": self.language,
             "location": self.location,
             "target_workdir": self.target_workdir or None,
+            "pid": getattr(self.kernel, "pid", None) if self.kernel is not None else None,
             "alive": bool(self.kernel is not None and self.kernel.is_alive()),
             "executing": self.executing,
             "protected": sorted(self.protected),
@@ -447,11 +448,13 @@ class PersistentKernelManager:
                                 and state.location == "local"
                             ):
                                 self._environment_guard.before_cell(state)
-                            options = (
+                            options: dict[str, Any] = (
                                 {"preserve_on_timeout": True}
                                 if preserve_on_timeout
                                 else {}
                             )
+                            if execution_token and isinstance(state.kernel, SessionKernel):
+                                options["execution_id"] = execution_token
                             return state.kernel.execute(
                                 source,
                                 timeout_s=float(timeout_s or self.cell_timeout_s),
@@ -462,6 +465,8 @@ class PersistentKernelManager:
                         if cancelled is not None and cancelled():
                             return CellResult(status="interrupted")
                         result = await asyncio.to_thread(execute_cell)
+                        if execution_token and not getattr(result, "execution_id", ""):
+                            result.execution_id = execution_token
                         if (
                             result.status == "dead"
                             and retry_on_death
@@ -920,6 +925,18 @@ def format_cell_summary(result: CellResult) -> str:
         if usage
         else ""
     )
+    appendix = {}
+    if getattr(result, "object_versions", None):
+        appendix["object_versions"] = list(result.object_versions)
+    if getattr(result, "skill_calls", None):
+        appendix["skill_calls"] = list(result.skill_calls)
+    if getattr(result, "skills_loaded", None):
+        appendix["skills_loaded"] = list(result.skills_loaded)
+    if getattr(result, "files_written", None):
+        appendix["files_written"] = list(result.files_written)
+    if appendix:
+        import json as _json
+        parts.append("[code_run_appendix]\n" + _json.dumps(appendix, ensure_ascii=False))
     return "\n".join(p for p in parts if p)
 
 
