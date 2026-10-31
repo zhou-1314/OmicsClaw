@@ -991,3 +991,27 @@ def test_a_missing_sdk_is_a_provider_error_not_an_import_error():
         monkeypatch.setitem(sys.modules, "openai", None)
         with pytest.raises(ProviderError, match="openai"):
             OpenAIProvider(_config())._create_client()
+
+
+def test_socks_proxy_import_error_falls_back_by_stripping_socks_env():
+    """Ambient ALL_PROXY=socks5://... without socksio must not crash client construction."""
+    import os
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("all_proxy", "socks5://127.0.0.1:10808/")
+        monkeypatch.setenv("https_proxy", "http://127.0.0.1:10808")
+        module = types.ModuleType("openai")
+
+        class AsyncOpenAI:
+            def __init__(self, **kwargs):
+                if os.environ.get("all_proxy", "").startswith("socks"):
+                    raise ImportError("Using SOCKS proxy, but the 'socksio' package is not installed.")
+                self.kwargs = kwargs
+                self.https_proxy = os.environ.get("https_proxy")
+
+        module.AsyncOpenAI = AsyncOpenAI
+        module.Timeout = lambda total, **kw: ("timeout", total, kw)
+        monkeypatch.setitem(sys.modules, "openai", module)
+
+        client = OpenAIProvider(_config())._create_client()
+        assert client.https_proxy == "http://127.0.0.1:10808"
+        assert os.environ.get("all_proxy") == "socks5://127.0.0.1:10808/"

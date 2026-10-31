@@ -6,6 +6,7 @@ Historical design notes: docs/engineering/runtime-additional-design-notes.md.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
@@ -555,7 +556,27 @@ def _build_async_client(config: ProviderConfig) -> Any:
         kwargs["api_key"] = config.api_key
     if config.base_url:
         kwargs["base_url"] = config.base_url
-    return sdk.AsyncAnthropic(**kwargs)
+    try:
+        return sdk.AsyncAnthropic(**kwargs)
+    except ImportError as exc:
+        if "socks" not in str(exc).lower():
+            raise
+        saved = {
+            key: os.environ.pop(key)
+            for key in (
+                "ALL_PROXY",
+                "all_proxy",
+                "HTTPS_PROXY",
+                "https_proxy",
+                "HTTP_PROXY",
+                "http_proxy",
+            )
+            if os.environ.get(key, "").strip().lower().startswith("socks")
+        }
+        try:
+            return sdk.AsyncAnthropic(**kwargs)
+        finally:
+            os.environ.update(saved)
 
 
 class AnthropicProvider:

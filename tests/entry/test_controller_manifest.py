@@ -123,10 +123,13 @@ def test_registered_probe_runs_from_the_archive_without_the_checkout(tmp_path):
             "omicsclaw/entry/notebook/runtime.py", "omicsclaw/entry/notebook/policy.py"} <= packaged
     extracted = tmp_path / "extracted"
     with zipfile.ZipFile(artifact / "controller.zip") as archive:
-        archive.extract(source, extracted)
+        archive.extractall(extracted)
         sidecar = "skills/singlecell/scrna/sc-filter/kernel.py"
         assert sidecar in packaged
-        archive.extract(sidecar, extracted)
+    (extracted / "controller-manifest.json").write_bytes((artifact / "controller-manifest.json").read_bytes())
+    from omicsclaw.entry.ssh.manifest import verified_source_metadata
+    verified_meta = verified_source_metadata(extracted)
+    assert verified_meta["manifestVerified"] is True
     # Helper definitions load from the payload without importing any scientific package.
     helper_source = (extracted / sidecar).read_text()
     from omicsclaw.skills.sidecar import extract_kernel_exports, validate_kernel_ast

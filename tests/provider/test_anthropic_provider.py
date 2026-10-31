@@ -1402,3 +1402,29 @@ def test_closing_a_stream_that_cannot_be_closed_is_not_an_error():
 
     asyncio.run(ap._close_stream(Hostile()))
     asyncio.run(ap._close_stream(object()))
+
+
+def test_anthropic_socks_proxy_import_error_falls_back_by_stripping_socks_env():
+    """Ambient ALL_PROXY=socks5://... without socksio must not crash client construction."""
+    import os
+    import sys
+    import types
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("all_proxy", "socks5://127.0.0.1:10808/")
+        monkeypatch.setenv("https_proxy", "http://127.0.0.1:10808")
+        module = types.ModuleType("anthropic")
+
+        class AsyncAnthropic:
+            def __init__(self, **kwargs):
+                if os.environ.get("all_proxy", "").startswith("socks"):
+                    raise ImportError("Using SOCKS proxy, but the 'socksio' package is not installed.")
+                self.kwargs = kwargs
+                self.https_proxy = os.environ.get("https_proxy")
+
+        module.AsyncAnthropic = AsyncAnthropic
+        module.Timeout = lambda total, **kw: ("timeout", total, kw)
+        monkeypatch.setitem(sys.modules, "anthropic", module)
+
+        client = ap._build_async_client(ProviderConfig(provider="anthropic", model="claude-sonnet-4-6", api_key="k"))
+        assert client.https_proxy == "http://127.0.0.1:10808"
+        assert os.environ.get("all_proxy") == "socks5://127.0.0.1:10808/"

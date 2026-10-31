@@ -55,13 +55,13 @@ def verified_source_metadata(root: Path) -> dict:
             if part != root.parent
         ):
             raise ValueError("component source symlink refused")
-        data = _read_regular(source, 4718592)
+        data = _read_regular(source, 5242880)
         if len(data) != row.get("bytes") or hashlib.sha256(data).hexdigest() != row.get(
             "sha256"
         ):
             raise ValueError("component source file mismatch")
         size += len(data)
-        if size > 4718592:
+        if size > 5242880:
             raise ValueError("component source exceeds budget")
     digest = hashlib.sha256(
         json.dumps(records, sort_keys=True, separators=(",", ":")).encode()

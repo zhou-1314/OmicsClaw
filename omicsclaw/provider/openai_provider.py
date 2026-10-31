@@ -451,7 +451,29 @@ class OpenAIProvider:
             # An empty base URL means "the SDK's own default". Passing
             # None instead would override that default with nothing.
             kwargs["base_url"] = self._config.base_url
-        return openai.AsyncOpenAI(**kwargs)
+        try:
+            return openai.AsyncOpenAI(**kwargs)
+        except ImportError as exc:
+            if "socks" not in str(exc).lower():
+                raise self._wrap(exc, "client initialization failed") from exc
+            saved = {
+                key: os.environ.pop(key)
+                for key in (
+                    "ALL_PROXY",
+                    "all_proxy",
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "HTTP_PROXY",
+                    "http_proxy",
+                )
+                if os.environ.get(key, "").strip().lower().startswith("socks")
+            }
+            try:
+                return openai.AsyncOpenAI(**kwargs)
+            except Exception as retry_exc:
+                raise self._wrap(retry_exc, "client initialization failed") from retry_exc
+            finally:
+                os.environ.update(saved)
 
     def _client_or_create(self) -> Any:
         if self._client is None:
@@ -532,8 +554,8 @@ class OpenAIProvider:
         tools: Sequence[ToolDefinition] | None = None,
     ) -> Completion:
         payload = self._request_payload(messages, tools, stream=False)
-        client = self._client_or_create()
         try:
+            client = self._client_or_create()
             async with RequestDeadline(self._config.timeout_seconds, self.name).wait():
                 response = await client.chat.completions.create(**payload)
         except Exception as exc:
@@ -565,9 +587,9 @@ class OpenAIProvider:
         tools: Sequence[ToolDefinition] | None,
     ) -> AsyncIterator[StreamChunk]:
         payload = self._request_payload(messages, tools, stream=True)
-        client = self._client_or_create()
         deadline = RequestDeadline(self._config.timeout_seconds, self.name)
         try:
+            client = self._client_or_create()
             async with deadline.wait():
                 stream = await client.chat.completions.create(stream=True, **payload)
         except Exception as exc:
